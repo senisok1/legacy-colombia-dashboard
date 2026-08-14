@@ -3,6 +3,9 @@ import { sendGuestReplyApprovalTemplate } from "@/lib/whatsapp";
 import { draftEscalationAnswerForApproval } from "@/lib/chatWidget";
 import { createChatEscalation, linkChatEscalationWamid } from "@/lib/chatEscalations";
 
+// Mark this route as public (bypass auth middleware)
+export const config = { runtime: "nodejs" };
+
 /**
  * TEST ENDPOINT — simulates a guest inquiry WITHOUT needing another WhatsApp number.
  * This directly triggers the approval workflow, bypassing the webhook.
