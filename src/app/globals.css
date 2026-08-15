@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  /* Brand accent introduced in the 2026-08-05 visual refresh — a neutral
+     professional indigo, deliberately NOT Legacy Colombia's own gold
+     (legacycolombia.com's brand color), since this dashboard is meant to
+     become a white-labelable product other property managers subscribe
+     to, not a Legacy-Colombia-specific tool. Used for active nav state,
+     PageHeader's eyebrow/section tabs, and links — see NavBar.tsx and
+     components/PageHeader.tsx. This is the "indigo" entry in
+     lib/themes.ts's THEMES list; every other value below is what a given
+     org's Settings > Appearance choice overrides it to, keyed off the
+     data-theme attribute layout.tsx sets on <html>. */
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+/* Default ("indigo") theme's dark-mode palette — still keyed to the
+   visitor's OS preference, same as before per-org themes existed. Scoped
+   to :not([data-theme]) / [data-theme="indigo"] so a forced-dark theme
+   below (red-black) doesn't get double-applied or fought over. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]),
+  :root[data-theme="indigo"] {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ---- Named accent-only themes ----
+   These just retint --accent/--accent-hover and otherwise leave the
+   light/dark background swap above alone — a lighter-touch option for
+   orgs that just want "my brand color" without a forced dark look. */
+:root[data-theme="ocean"] {
+  --accent: #0284c7;
+  --accent-hover: #0369a1;
+}
+:root[data-theme="emerald"] {
+  --accent: #059669;
+  --accent-hover: #047857;
+}
+:root[data-theme="sunset"] {
+  --accent: #ea580c;
+  --accent-hover: #c2410c;
+}
+:root[data-theme="slate"] {
+  --accent: #475569;
+  --accent-hover: #334155;
+}
+
+/* ---- Red & Black — Seni's own scheme ----
+   Deliberately forces the near-black surface palette regardless of the
+   visitor's OS light/dark preference (that's the "black" half of the
+   ask), paired with a bold red accent (the "red" half), rather than just
+   tinting the existing light theme's accent color like the presets above.
+   color-scheme: dark also nudges native form controls/scrollbars to match. */
+:root[data-theme="red-black"] {
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #f5f5f5;
+  --accent: #dc2626;
+  --accent-hover: #ef4444;
+}
+
+/* The app reuses a small, consistent set of Tailwind utility classes for
+   "card surface" / "divider" / "muted text" everywhere (NavBar, every
+   page's cards, etc.), each with its own dark: sibling already tuned for
+   a dark backdrop (e.g. `border-black/10 dark:border-white/10`). Those
+   dark: siblings only activate when the OS itself is in dark mode — so
+   when an org is forced dark via data-theme but the visitor's OS is in
+   light mode, the light-mode class would otherwise leak through against
+   our black page background. These overrides alias each light-mode class
+   to the same value its own dark: sibling already uses elsewhere in this
+   app, so Red & Black looks fully black regardless of OS preference. Bare
+   bg-black (no slash) is this app's "primary button" convention (paired
+   with dark:bg-white dark:text-black) — aliased to the accent color so
+   primary buttons render red instead of invisible black-on-black. */
+:root[data-theme="red-black"] .bg-white {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="red-black"] .bg-white\/80 {
+  background-color: rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="red-black"] .bg-black {
+  background-color: var(--accent);
+}
+:root[data-theme="red-black"] .bg-black\/5,
+:root[data-theme="red-black"] .hover\:bg-black\/5:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="red-black"] .bg-black\/10 {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="red-black"] .bg-black\/20 {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+:root[data-theme="red-black"] .border-black\/5 {
+  border-color: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="red-black"] .border-black\/10 {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="red-black"] .border-black\/15 {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+:root[data-theme="red-black"] .border-black\/30 {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+:root[data-theme="red-black"] .text-black\/70 {
+  color: rgba(255, 255, 255, 0.7);
+}
+:root[data-theme="red-black"] .text-black\/60 {
+  color: rgba(255, 255, 255, 0.6);
+}
+:root[data-theme="red-black"] .text-black\/50 {
+  color: rgba(255, 255, 255, 0.5);
+}
+:root[data-theme="red-black"] .text-black\/40 {
+  color: rgba(255, 255, 255, 0.4);
+}
+:root[data-theme="red-black"] .text-black\/30 {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* Bug found 2026-08-05: NavBar's CRM/Bill Pay dropdown panel is the one
+   place in the app that pairs bg-white with an OPAQUE dark sibling
+   (dark:bg-neutral-900) instead of this app's usual translucent
+   "card surface" pattern (bg-white/80, bg-black/5, etc. — all already
+   aliased above). The .bg-white override two rules up is a class selector
+   on an attribute-scoped root (specificity 0,2,0), which beats the plain
+   dark:bg-neutral-900 utility (specificity 0,1,0) whenever dark mode's
+   media query is active — so under Red & Black the dropdown panel
+   silently rendered as a near-invisible 5% white overlay with no visible
+   fill or text, even though the DOM/links were present and clickable.
+   Confirmed live: clicking "Bill Pay" in the nav appeared to do nothing.
+   Restoring a real solid surface just for this one combination fixes it
+   without touching the general (non-themed) dark:bg-neutral-900 behavior
+   used correctly everywhere else. */
+:root[data-theme="red-black"] .dark\:bg-neutral-900 {
+  background-color: #171717;
+}

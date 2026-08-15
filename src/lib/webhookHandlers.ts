@@ -3,7 +3,6 @@ import { sendBookingNotificationTemplate } from "@/lib/whatsapp";
 import { config } from "@/lib/config";
 import { draftEscalationAnswerForApproval } from "@/lib/chatWidget";
 import { createPendingDraft, getPendingDraftByThreadId } from "@/lib/pendingDrafts";
-import { createChatEscalation } from "@/lib/chatEscalations";
 import { sendMessage } from "@/lib/ownerrez";
 import { logAiActivity } from "@/lib/aiActivity";
 import type { ThreadMessage, Booking } from "@/lib/types";
@@ -104,17 +103,6 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       }
       if (!approvalWamid) {
         approvalWamid = await sendWhatsAppText(approvalText).catch(() => undefined);
-      }
-
-      // Link the WhatsApp message ID to the draft for context-aware replies
-      if (approvalWamid) {
-        await createChatEscalation({
-          question,
-          visitorName: guestName,
-          visitorPhone: ownerPhone,
-          aiDraftAnswer: aiDraftReply,
-          source: "ownerrez_webhook",
-        }).catch(() => null);
       }
 
       await logAiActivity({
