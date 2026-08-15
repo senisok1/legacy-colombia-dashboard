@@ -40,3 +40,61 @@ export async function GET(req: NextRequest) {
     });
   }
 }
+
+const WEBHOOK_URL = "https://legacy-colombia-dashboard.vercel.app/api/webhook";
+
+// POST { create: ["message", "booking", ...] } — subscribes THIS dashboard's
+// /api/webhook to the given OwnerRez entity types. Found 2026-08-15 that the
+// account's existing "message"/"booking" subscriptions point at an unknown
+// AWS API Gateway URL (qcaopmsu2a.execute-api...), i.e. OwnerRez was firing
+// guest-message webhooks all along — just never at this app. Deliberately
+// ADDS subscriptions for our URL rather than touching the AWS ones, in case
+// that endpoint belongs to some other tool still in use.
+export async function POST(req: NextRequest) {
+  const secret = req.nextUrl.searchParams.get("secret");
+  if (!config.adminSecret || secret !== config.adminSecret) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+  if (!config.ownerRezOAuthToken) {
+    return NextResponse.json({ ok: false, error: "OWNERREZ_OAUTH_TOKEN isn't set server-side." });
+  }
+
+  const body = (await req.json().catch(() => ({}))) as { create?: string[] };
+  const types = Array.isArray(body.create) && body.create.length > 0 ? body.create : ["message", "booking"];
+
+  const headers = {
+    Authorization: `Bearer ${config.ownerRezOAuthToken}`,
+    "User-Agent": config.userAgent,
+    "Content-Type": "application/json",
+  };
+
+  const results: Record<string, unknown> = {};
+  for (const type of types) {
+    // Try the fuller shape first (matches what the existing subscriptions
+    // show), fall back to the minimal one if OwnerRez rejects it.
+    let res = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ type, action: "entity_create", webhook_url: WEBHOOK_URL }),
+    });
+    if (!res.ok) {
+      res = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ type, webhook_url: WEBHOOK_URL }),
+      });
+    }
+    results[type] = { status: res.status, body: await res.json().catch(() => null) };
+  }
+
+  // Re-list so the response shows the final state in one shot.
+  const listRes = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
+    headers: { Authorization: headers.Authorization, "User-Agent": headers["User-Agent"] },
+    cache: "no-store",
+  });
+  return NextResponse.json({
+    ok: true,
+    created: results,
+    subscriptionsAfter: await listRes.json().catch(() => null),
+  });
+}
