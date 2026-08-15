@@ -8,6 +8,7 @@ import { config } from "@/lib/config";
 import { draftEscalationAnswerForApproval } from "@/lib/chatWidget";
 import { createPendingDraft, getPendingDraftByThreadId, linkWhatsAppMessageId } from "@/lib/pendingDrafts";
 import { logAiActivity } from "@/lib/aiActivity";
+import { getBookings, getTargetProperties } from "@/lib/ownerrez";
 
 // Handlers for the public /api/webhook endpoint (OwnerRez-style events).
 // Payload shapes are deliberately parsed defensively: OwnerRez's webhook
@@ -67,6 +68,40 @@ function fmtDate(iso: string | undefined): string {
   return Number.isNaN(d.getTime()) ? "TBD" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// --- Property scoping (Seni's explicit requirement, 2026-08-15) ---
+// This OwnerRez account manages 8 properties, but WhatsApp pings must fire
+// ONLY for the two that belong to this dashboard: "Legacy Colombia: Luxury
+// Waterfront Wellness Retreat" (413494) and "Nukak - Casa #19" (492014).
+// The account-wide webhook subscription fires for every property, so each
+// handler filters here. getTargetProperties() is already scoped to exactly
+// those two (and Redis-fallback-protected); getBookings() likewise, so
+// "threadId appears in an allowed booking's threadIds" is the thread-level
+// membership test. When scope can't be verified (OwnerRez hiccup, unknown
+// thread), we SKIP the ping — the 1-minute property-scoped cron is the
+// backstop, and a missed webhook ping beats paging Seni for someone else's
+// property.
+async function allowedPropertyIds(): Promise<Set<number> | null> {
+  try {
+    const props = await getTargetProperties();
+    const ids = props.map((p) => p.id).filter((n): n is number => Number.isFinite(n));
+    return ids.length > 0 ? new Set(ids) : null;
+  } catch (err) {
+    console.error("[webhookHandlers] getTargetProperties failed — can't verify property scope:", err);
+    return null;
+  }
+}
+
+/** true = allowed, false = another property's thread, null = unverifiable */
+async function isThreadForAllowedProperty(threadId: number): Promise<boolean | null> {
+  try {
+    const bookings = await getBookings();
+    return bookings.some((b) => Array.isArray(b.threadIds) && b.threadIds.includes(threadId));
+  } catch (err) {
+    console.error("[webhookHandlers] getBookings failed — can't verify thread scope:", err);
+    return null;
+  }
+}
+
 /** "created"-ish actions across OwnerRez's possible verb spellings. */
 function isCreateAction(event: OwnerRezWebhookEvent): boolean {
   const action = (str(event.eventType) ?? str(event.action) ?? "").toLowerCase();
@@ -92,6 +127,24 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
         entityId: event.entityId ?? event.entity_id,
       });
       return;
+    }
+
+    // Property scope check FIRST — before any branch that could ping Seni.
+    const messagePropId = num(m.property_id ?? m.propertyId);
+    if (messagePropId !== undefined) {
+      const allowed = await allowedPropertyIds();
+      if (!allowed || !allowed.has(messagePropId)) {
+        console.log(`[webhookHandlers] Message on thread ${threadId} is for property ${messagePropId} — outside this dashboard's scope, skipping`);
+        return;
+      }
+    } else {
+      const inScope = await isThreadForAllowedProperty(threadId);
+      if (inScope !== true) {
+        console.log(
+          `[webhookHandlers] Thread ${threadId} ${inScope === false ? "belongs to another property" : "can't be property-verified"} — skipping (cron is the backstop)`
+        );
+        return;
+      }
     }
 
     const guestName = str(m.guestName ?? m.guest_name) ?? "Guest";
@@ -199,6 +252,18 @@ export async function handleOwnerRezBookingEvent(event: OwnerRezWebhookEvent) {
     const b = (event.entity ?? event.booking ?? event.data ?? {}) as Record<string, unknown>;
     // Calendar blocks / channel-sync holds aren't real bookings — no ping.
     if (b.is_block === true || b.isBlock === true || String(b.type ?? "") === "block") return;
+
+    // Property scope: only Legacy Colombia + Nukak Casa #19 may ping.
+    const bookingPropId = num(b.property_id ?? b.propertyId) ?? num((b.property as Record<string, unknown> | undefined)?.id);
+    if (bookingPropId === undefined) {
+      console.warn("[webhookHandlers] Booking event has no property id — skipping ping (strict 2-property scope)");
+      return;
+    }
+    const allowed = await allowedPropertyIds();
+    if (!allowed || !allowed.has(bookingPropId)) {
+      console.log(`[webhookHandlers] Booking for property ${bookingPropId} — outside this dashboard's scope, skipping`);
+      return;
+    }
     const guestName = str(b.guestName ?? b.guest_name ?? b.fullName ?? b.full_name) ?? "Guest";
     const arrival = str(b.arrival ?? b.checkIn ?? b.check_in ?? b.arrival_date);
     const departure = str(b.departure ?? b.checkOut ?? b.check_out ?? b.departure_date);
@@ -233,6 +298,19 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
     if (!isCreateAction(event)) return;
 
     const inq = (event.entity ?? event.inquiry ?? event.data ?? {}) as Record<string, unknown>;
+
+    // Property scope: only Legacy Colombia + Nukak Casa #19 may ping.
+    const inqPropId = num(inq.property_id ?? inq.propertyId) ?? num((inq.property as Record<string, unknown> | undefined)?.id);
+    if (inqPropId === undefined) {
+      console.warn("[webhookHandlers] Inquiry event has no property id — skipping ping (strict 2-property scope)");
+      return;
+    }
+    const allowed = await allowedPropertyIds();
+    if (!allowed || !allowed.has(inqPropId)) {
+      console.log(`[webhookHandlers] Inquiry for property ${inqPropId} — outside this dashboard's scope, skipping`);
+      return;
+    }
+
     const guestName = str(inq.guestName ?? inq.guest_name ?? inq.name) ?? "Guest";
     const question = str(inq.message ?? inq.question ?? inq.body) ?? "(no message provided)";
 
