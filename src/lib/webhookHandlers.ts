@@ -269,13 +269,25 @@ export async function handleOwnerRezBookingEvent(event: OwnerRezWebhookEvent) {
     const departure = str(b.departure ?? b.checkOut ?? b.check_out ?? b.departure_date);
     const nights = num(b.nights);
     const propertyName = str(b.propertyName ?? b.property_name) ?? config.propertyName ?? "Legacy Colombia";
-    const dates = `${fmtDate(arrival)} → ${fmtDate(departure)}${nights ? ` (${nights} night${nights === 1 ? "" : "s"})` : ""}`;
+    // Total the guest paid (Seni's ask, 2026-08-15). OwnerRez booking
+    // entities carry total_amount; folded into the template's dates param
+    // (free text, so no Meta re-review needed) and the fallback text alike.
+    const totalAmount = num(b.total_amount ?? b.totalAmount);
+    const totalPart =
+      totalAmount !== undefined && totalAmount > 0
+        ? ` • $${totalAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })} total`
+        : "";
+    const dates = `${fmtDate(arrival)} → ${fmtDate(departure)}${nights ? ` (${nights} night${nights === 1 ? "" : "s"})` : ""}${totalPart}`;
 
     try {
       await sendBookingNotificationTemplate({ guestName, propertyName, dates });
     } catch {
       await sendWhatsAppText(
-        `🎉 *New booking!*\n\nGuest: ${guestName}\nProperty: ${propertyName}\nDates: ${dates}\n\nSee OwnerRez for full details.`
+        `🎉 *New booking!*\n\nGuest: ${guestName}\nProperty: ${propertyName}\nDates: ${dates}${
+          totalAmount !== undefined && totalAmount > 0
+            ? `\nTotal paid: $${totalAmount.toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+            : ""
+        }\n\nSee OwnerRez for full details.`
       ).catch(() => {});
     }
     console.log(`[webhookHandlers] Booking notification sent for ${guestName}`);
