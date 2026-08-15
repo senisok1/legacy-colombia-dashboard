@@ -1,6 +1,11 @@
-import { sendAdminReplyNotificationTemplate, sendWhatsAppTextTo } from "@/lib/whatsapp";
+import { sendAdminReplyNotificationTemplate, sendWhatsAppTextTo, sendGuestReplyApprovalTemplate, sendWhatsAppText } from "@/lib/whatsapp";
 import { sendBookingNotificationTemplate } from "@/lib/whatsapp";
 import { config } from "@/lib/config";
+import { draftEscalationAnswerForApproval } from "@/lib/chatWidget";
+import { createPendingDraft, getPendingDraftByThreadId } from "@/lib/pendingDrafts";
+import { createChatEscalation } from "@/lib/chatEscalations";
+import { sendMessage } from "@/lib/ownerrez";
+import { logAiActivity } from "@/lib/aiActivity";
 import type { ThreadMessage, Booking } from "@/lib/types";
 
 interface OwnerRezWebhookEvent {
@@ -10,7 +15,7 @@ interface OwnerRezWebhookEvent {
   entityId: string;
   timestamp: string;
   data?: Record<string, unknown>;
-  message?: ThreadMessage & { guestName?: string; subject?: string; body?: string };
+  message?: ThreadMessage & { guestName?: string; subject?: string; body?: string; threadId?: number; bookingId?: number; guestId?: number; language?: string };
   booking?: Booking & { guestName?: string };
   guest?: Record<string, unknown>;
   inquiry?: Record<string, unknown>;
@@ -19,9 +24,7 @@ interface OwnerRezWebhookEvent {
 
 /**
  * Handles incoming message events from OwnerRez.
- * Triggers WhatsApp notification when:
- * - A guest replies to a thread (new message in conversation)
- * - An admin sends a reply (guest reply approval is complete)
+ * For guest messages: Generates AI draft reply, sends to owner for approval via WhatsApp with YES/NO/EDIT: format
  */
 export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
   try {
@@ -31,41 +34,103 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       timestamp: event.timestamp,
     });
 
-    // The message event should contain message details
-    const message = event.message as ThreadMessage & { guestName?: string; subject?: string; body?: string } | undefined;
+    const message = event.message as ThreadMessage & { guestName?: string; subject?: string; body?: string; threadId?: number; bookingId?: number; guestId?: number; language?: string } | undefined;
     if (!message) {
       console.warn("[webhookHandlers] Message event has no message data");
       return;
     }
 
     const ownerPhone = config.ownerPhone || "732-689-5070";
-
-    // Determine if this is a guest reply or admin reply
     const isGuestReply = message.senderType === "guest";
     const isAdminReply = message.senderType === "admin" || message.senderType === "owner";
 
-    if (isGuestReply) {
+    if (isGuestReply && message.threadId && message.bookingId && message.guestId) {
       console.log(`[webhookHandlers] Guest ${message.guestName} replied to thread ${message.threadId}`);
-      // Send WhatsApp notification to owner about guest reply
-      const guestName = message.guestName || "Guest";
-      const subject = message.subject || "New Message";
-      const messageBody = message.body || "(No message content)";
 
-      try {
-        await sendWhatsAppTextTo(
-          ownerPhone,
-          `📨 *New Guest Message*\n\nFrom: ${guestName}\nSubject: ${subject}\n\nMessage: ${messageBody}\n\nCheck OwnerRez for full details.`
-        );
-        console.log(`[webhookHandlers] WhatsApp notification sent for guest message from ${guestName}`);
-      } catch (whatsappError) {
-        console.error("[webhookHandlers] Failed to send WhatsApp notification:", whatsappError);
+      const guestName = message.guestName || "Guest";
+      const question = message.body || "(No message content)";
+
+      // Check if there's already a pending draft for this thread
+      const existing = await getPendingDraftByThreadId(message.threadId).catch(() => null);
+      if (existing && existing.status === "pending") {
+        console.log(`[webhookHandlers] Already awaiting approval for ${guestName} on thread ${message.threadId}`);
+        return; // Don't create a new draft — let them resolve the existing one first
       }
+
+      // Generate AI draft reply
+      let aiDraftReply: string | undefined;
+      let draftReplyEnglish: string | undefined;
+      try {
+        aiDraftReply = await draftEscalationAnswerForApproval(question);
+        draftReplyEnglish = aiDraftReply;
+        console.log(`[webhookHandlers] AI draft generated for ${guestName}`);
+      } catch (draftError) {
+        console.error(`[webhookHandlers] Failed to generate AI draft: ${draftError}`);
+        // Non-fatal — owner can write their own reply with EDIT: ...
+      }
+
+      // Create pending draft record (this will automatically supersede any old draft on this thread)
+      const pending = await createPendingDraft({
+        threadId: message.threadId,
+        bookingId: message.bookingId,
+        guestId: message.guestId,
+        guestName,
+        draftReply: aiDraftReply || "",
+        replyEnglish: draftReplyEnglish,
+        language: message.language || "en",
+      });
+
+      console.log(`[webhookHandlers] Created pending draft ${pending.id} for approval`);
+
+      // Send approval request to owner via WhatsApp
+      const draftLine = aiDraftReply
+        ? `Suggested reply:\n"${aiDraftReply}"\n\nReply YES to send it, NO to skip, or "EDIT: <your text>" to send your own wording.`
+        : `No suggested reply could be drafted — reply "EDIT: <your text>" to send an answer, or NO to skip.`;
+
+      const approvalText = `New message from ${guestName} on thread #${message.threadId}:\n\n"${question}"\n\n${draftLine}`;
+
+      let approvalWamid: string | undefined;
+      try {
+        // Try template first (more reliable for 24-hour window)
+        approvalWamid = await sendGuestReplyApprovalTemplate({
+          guestName,
+          propertyName: config.propertyName || "Your Property",
+          guestMessage: question,
+          suggestedReply: aiDraftReply ?? "N/A",
+        }).catch(() => undefined);
+      } catch {
+        // Fallback to plain text
+        approvalWamid = await sendWhatsAppText(approvalText).catch(() => undefined);
+      }
+      if (!approvalWamid) {
+        approvalWamid = await sendWhatsAppText(approvalText).catch(() => undefined);
+      }
+
+      // Link the WhatsApp message ID to the draft for context-aware replies
+      if (approvalWamid) {
+        await createChatEscalation({
+          question,
+          visitorName: guestName,
+          visitorPhone: ownerPhone,
+          aiDraftAnswer: aiDraftReply,
+          source: "ownerrez_webhook",
+        }).catch(() => null);
+      }
+
+      await logAiActivity({
+        agentKey: "guest_experience",
+        agentDisplayName: "AI Guest Experience Manager",
+        task: "Draft reply to guest message (webhook)",
+        trigger: `Guest message from ${guestName} on thread #${message.threadId}: "${question.slice(0, 200)}"`,
+        decision: aiDraftReply ? "drafted reply, awaiting owner approval" : "no draft — awaiting owner's own wording",
+        actionTaken: "Sent approval request to owner via WhatsApp; awaiting YES/NO/EDIT response",
+        result: "pending",
+      });
     }
 
     if (isAdminReply) {
       console.log(`[webhookHandlers] Admin replied to thread ${message.threadId}`);
       // Admin replies are handled by the main message send workflow
-      // No need to send duplicate notification here
     }
   } catch (error) {
     console.error("[webhookHandlers] Error processing message event:", error);
