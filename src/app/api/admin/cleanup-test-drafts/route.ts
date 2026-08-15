@@ -23,7 +23,12 @@ export const dynamic = "force-dynamic";
 // api/cron/detect-reviews).
 async function cleanupTestDraftsForOrg(orgId: string) {
   const drafts = await getAllPendingDrafts(orgId);
-  const testDrafts = drafts.filter((d) => d.guestName === "Test Guest" || d.bookingId === 999999999);
+  // "E2E Pipeline Test" / thread 99999999 added 2026-08-15 — the synthetic
+  // webhook end-to-end tests create drafts under those markers.
+  const TEST_GUEST_NAMES = new Set(["Test Guest", "E2E Pipeline Test", "Delivery Diagnostic"]);
+  const testDrafts = drafts.filter(
+    (d) => TEST_GUEST_NAMES.has(d.guestName ?? "") || d.bookingId === 999999999 || d.threadId === 99999999
+  );
 
   for (const draft of testDrafts) {
     await deletePendingDraft(draft.id, orgId);
