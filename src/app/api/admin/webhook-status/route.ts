@@ -98,3 +98,52 @@ export async function POST(req: NextRequest) {
     subscriptionsAfter: await listRes.json().catch(() => null),
   });
 }
+
+// DELETE ?secret=...&ids=26703,26704 — removes OwnerRez webhook
+// subscriptions by id. Built to clean up the two stale subscriptions
+// pointing at the unknown AWS API Gateway URL (see POST comment above) once
+// Seni confirmed he doesn't recognize that endpoint. Note: if a subscription
+// belongs to a different OAuth connection than this token's, OwnerRez may
+// refuse — in that case removal has to happen from OwnerRez's own UI
+// (Settings → API Access → the authorized app's webhooks section).
+export async function DELETE(req: NextRequest) {
+  const secret = req.nextUrl.searchParams.get("secret");
+  if (!config.adminSecret || secret !== config.adminSecret) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+  if (!config.ownerRezOAuthToken) {
+    return NextResponse.json({ ok: false, error: "OWNERREZ_OAUTH_TOKEN isn't set server-side." });
+  }
+
+  const ids = (req.nextUrl.searchParams.get("ids") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^\d+$/.test(s));
+  if (ids.length === 0) {
+    return NextResponse.json({ ok: false, error: "Pass ?ids=<id>,<id> (numeric)." }, { status: 400 });
+  }
+
+  const authHeaders = {
+    Authorization: `Bearer ${config.ownerRezOAuthToken}`,
+    "User-Agent": config.userAgent,
+  };
+
+  const results: Record<string, unknown> = {};
+  for (const id of ids) {
+    const res = await fetch(`https://api.ownerrez.com/v2/webhooksubscriptions/${id}`, {
+      method: "DELETE",
+      headers: authHeaders,
+    });
+    results[id] = { status: res.status, body: await res.text().then((t) => t.slice(0, 300)).catch(() => null) };
+  }
+
+  const listRes = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
+    headers: authHeaders,
+    cache: "no-store",
+  });
+  return NextResponse.json({
+    ok: true,
+    deleted: results,
+    subscriptionsAfter: await listRes.json().catch(() => null),
+  });
+}
