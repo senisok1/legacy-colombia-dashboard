@@ -104,6 +104,48 @@ async function postWhatsAppMessage(payload: Record<string, unknown>, creds: What
   return wamid;
 }
 
+/** ROOT CAUSE of "Meta returns 200 + wamid but nothing arrives" for
+ * template sends, found 2026-08-15 via the delivery diagnostic route: most
+ * of this account's templates were created as plain "English" (language
+ * code "en") while config.whatsappTemplateLanguage defaults to "en_US" —
+ * Meta rejects that send with error 132001 "Template name does not exist in
+ * the translation", every caller's catch falls back to free text, and free
+ * text silently never delivers outside the 24h customer-service window.
+ * Net effect: weeks of missing approval pings. The account has a MIX of
+ * language codes ("en" for guest_reply_approval_alert/daily_summary_alert/
+ * admin_reply/booking_notification/chat_widget_reply, "en_US" for
+ * service_request_alert and hello_world), so no single global language
+ * setting can be right for all of them. This wrapper tries the configured
+ * code first, then the other common English codes — retrying ONLY on the
+ * template-language error, so real failures still surface immediately. */
+function isTemplateLanguageError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("132001") || msg.includes("does not exist in");
+}
+
+async function postTemplateWithLanguageFallback(
+  payload: Record<string, unknown>,
+  creds: WhatsAppCredentials
+): Promise<string> {
+  const template = payload.template as { language?: { code?: string } } | undefined;
+  const configured = template?.language?.code || config.whatsappTemplateLanguage || "en_US";
+  const candidates = [...new Set([configured, "en", "en_US"])];
+  let lastErr: unknown = new WhatsAppError("Template send failed in every language code tried.");
+  for (const code of candidates) {
+    try {
+      return await postWhatsAppMessage(
+        { ...payload, template: { ...(payload.template as Record<string, unknown>), language: { code } } },
+        creds
+      );
+    } catch (err) {
+      lastErr = err;
+      if (!isTemplateLanguageError(err)) throw err;
+      console.warn(`[whatsapp] template not available in "${code}" — trying next language code`);
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Sends the zero-parameter WHATSAPP_SESSION_OPENER_TEMPLATE to Seni's own
  * number ahead of a free-text push — see the 2026-08-07 comment on
@@ -120,7 +162,7 @@ async function postWhatsAppMessage(payload: Record<string, unknown>, creds: What
 async function sendSessionOpener(creds: WhatsAppCredentials): Promise<void> {
   if (!isSessionOpenerConfigured(creds)) return;
   try {
-    await postWhatsAppMessage(
+    await postTemplateWithLanguageFallback(
       {
         messaging_product: "whatsapp",
         to: creds.recipientNumber,
@@ -195,7 +237,7 @@ export async function sendGuestReplyApprovalTemplate(
     throw new WhatsAppError("Guest-reply approval template isn't configured/approved yet.");
   }
 
-  return postWhatsAppMessage(
+  return postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: creds.recipientNumber,
@@ -240,7 +282,7 @@ export async function sendDailySummaryTemplate(
     throw new WhatsAppError("Daily summary template isn't configured/approved yet.");
   }
 
-  return postWhatsAppMessage(
+  return postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: creds.recipientNumber,
@@ -278,7 +320,7 @@ export async function sendBookingNotificationTemplate(
     throw new WhatsAppError("Booking notification template isn't configured/approved yet.");
   }
 
-  return postWhatsAppMessage(
+  return postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: creds.recipientNumber,
@@ -317,7 +359,7 @@ export async function sendAdminReplyNotificationTemplate(
     throw new WhatsAppError("Admin reply notification template isn't configured/approved yet.");
   }
 
-  return postWhatsAppMessage(
+  return postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: creds.recipientNumber,
@@ -397,7 +439,7 @@ export async function notifyGabrielOfServiceRequest(
     );
   }
 
-  return postWhatsAppMessage(
+  return postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: creds.gabrielNumber,
@@ -456,7 +498,7 @@ export async function sendChatWidgetAnswerViaWhatsApp(
     );
   }
 
-  return postWhatsAppMessage(
+  return postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: params.visitorPhone,
@@ -510,7 +552,7 @@ export async function notifyVendorOfWorkOrder(
     throw new WhatsAppError("Vendor auto-notify isn't configured — missing WHATSAPP_VENDOR_NOTIFY_TEMPLATE.");
   }
 
-  return postWhatsAppMessage(
+  return postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: params.vendorPhone,
