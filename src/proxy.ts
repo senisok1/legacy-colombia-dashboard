@@ -45,6 +45,11 @@ export function proxy(req: NextRequest) {
     // independent auth instead (a shared secret query param, checked inside
     // the route itself).
     pathname.startsWith("/api/webhooks/") ||
+    // OwnerRez webhook events (see api/webhook/route.ts) — OwnerRez's
+    // servers POST here with no login cookie. Without this entry those
+    // POSTs get 307-redirected to /login and silently dropped, which was
+    // the root cause of guest messages never reaching Seni's WhatsApp.
+    pathname === "/api/webhook" ||
     // The chat widget embedded on legacycolombia.com calls these from a
     // browser with no dashboard session/cookies at all — each route already
     // enforces its own CORS allowlist (legacycolombia.com only) and rate

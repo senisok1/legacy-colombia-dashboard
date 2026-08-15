@@ -38,7 +38,10 @@ export async function POST(req: NextRequest) {
       visitorName,
       visitorPhone,
       aiDraftAnswer,
-      source: "test_endpoint",
+      // "website" (not a fake source value): approving this test escalation
+      // just marks it answered for the widget-poll path — it never texts the
+      // fake visitor number, which the "whatsapp" source would attempt.
+      source: "website",
     });
     console.log(`[test-inquiry] Created escalation: ${escalation.id}`);
 
