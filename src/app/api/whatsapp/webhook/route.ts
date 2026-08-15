@@ -185,8 +185,58 @@ async function handlePublicWhatsAppInquiry(msg: Extract<IncomingWhatsAppMessage,
   });
 }
 
+// Rolling log of Meta's delivery-status callbacks (sent/delivered/read/
+// failed + error details). Meta reports exactly why an outbound message
+// wasn't delivered via these callbacks — before 2026-08-15 they were
+// silently discarded, which is why "API returned 200 + wamid but nothing
+// arrived on Seni's phone" was so hard to diagnose. Read back via
+// /api/admin/whatsapp-delivery.
+const WA_STATUS_LOG_KEY = "wa:status-log";
+
+async function recordStatusCallbacks(body: unknown): Promise<void> {
+  try {
+    const entries = (body as { entry?: unknown[] } | null)?.entry;
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries) {
+      const changes = (entry as { changes?: unknown[] })?.changes;
+      if (!Array.isArray(changes)) continue;
+      for (const change of changes) {
+        const statuses = (change as { value?: { statuses?: unknown[] } })?.value?.statuses;
+        if (!Array.isArray(statuses)) continue;
+        for (const raw of statuses) {
+          const st = raw as Record<string, unknown>;
+          const errors = Array.isArray(st.errors)
+            ? (st.errors as Record<string, unknown>[]).map((e) => ({
+                code: e.code,
+                title: e.title,
+                message: e.message,
+                details: (e.error_data as Record<string, unknown> | undefined)?.details,
+              }))
+            : [];
+          const rec = {
+            at: new Date().toISOString(),
+            wamid: st.id,
+            status: st.status,
+            recipient: st.recipient_id,
+            errors,
+          };
+          console.log("[whatsapp webhook] delivery status:", JSON.stringify(rec));
+          const { redisGet, redisSet } = await import("@/lib/redis");
+          const prev = await redisGet(WA_STATUS_LOG_KEY).catch(() => null);
+          const log = prev ? (JSON.parse(prev) as unknown[]) : [];
+          log.unshift(rec);
+          await redisSet(WA_STATUS_LOG_KEY, JSON.stringify(log.slice(0, 30))).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[whatsapp webhook] status-callback logging failed", err);
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
+  await recordStatusCallbacks(body);
   const incoming = parseIncomingWhatsAppMessages(body);
 
   for (const msg of incoming) {
