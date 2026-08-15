@@ -23,9 +23,19 @@ export async function POST(req: NextRequest) {
       entityId: event.entityId ?? event.entity_id,
     });
 
+    // OwnerRez's "Send a Test Webhook" button posts action:"webhook_test"
+    // with entity_type:"api_application" — acknowledge it loudly so it's
+    // easy to spot in Vercel logs when verifying the connection.
+    const action = String(event.eventType ?? event.action ?? "").toLowerCase();
+    if (action === "webhook_test") {
+      console.log("[ownerrez-webhook] ✅ webhook_test received — OwnerRez → this endpoint is connected");
+      return NextResponse.json({ ok: true, test: true });
+    }
+
     // Dynamic imports keep this route's cold start minimal and avoid any
     // circular-dependency surprises.
     switch (entityType) {
+      case "thread_message": // OwnerRez's official entity_type for messages
       case "message": {
         const { handleOwnerRezMessageEvent } = await import("@/lib/webhookHandlers");
         await handleOwnerRezMessageEvent(event);

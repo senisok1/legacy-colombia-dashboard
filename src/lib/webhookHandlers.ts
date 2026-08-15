@@ -23,14 +23,26 @@ import { logAiActivity } from "@/lib/aiActivity";
 // approval. This webhook path is an additional, faster trigger for the same
 // flow — both share lib/pendingDrafts.ts's per-thread dedupe/supersede logic,
 // so whichever fires first wins and the other skips.
+// Official OwnerRez webhook payload (per their api-webhooks doc, confirmed
+// 2026-08-15): { id, user_id, action: "entity_create"|"entity_update"|
+// "entity_delete"|"webhook_test"|"application_authorization_revoked",
+// entity_type: "booking"|"guest"|"inquiry"|"property"|"quote"|
+// "thread_message"|"api_application", entity_id, categories: string[],
+// entity: {...the record as the API would return it...} }.
+// The extra message/booking/inquiry/data fields are tolerated for manual
+// test POSTs that use a looser shape.
 export interface OwnerRezWebhookEvent {
+  id?: string | number;
+  user_id?: number;
   eventType?: string;
   action?: string;
   entityType?: string;
   entity_type?: string;
   entityId?: string | number;
   entity_id?: string | number;
+  categories?: string[];
   timestamp?: string;
+  entity?: Record<string, unknown>;
   data?: Record<string, unknown>;
   message?: Record<string, unknown>;
   booking?: Record<string, unknown>;
@@ -69,7 +81,9 @@ function isCreateAction(event: OwnerRezWebhookEvent): boolean {
  */
 export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
   try {
-    const m = (event.message ?? event.data ?? {}) as Record<string, unknown>;
+    // Official payloads carry the record in `entity`; older/manual test
+    // POSTs may use `message`/`data`.
+    const m = (event.entity ?? event.message ?? event.data ?? {}) as Record<string, unknown>;
 
     const threadId = num(m.threadId ?? m.thread_id);
     const body = str(m.body ?? m.text ?? m.message);
@@ -182,7 +196,9 @@ export async function handleOwnerRezBookingEvent(event: OwnerRezWebhookEvent) {
   try {
     if (!isCreateAction(event)) return; // updates/cancellations would be noisy
 
-    const b = (event.booking ?? event.data ?? {}) as Record<string, unknown>;
+    const b = (event.entity ?? event.booking ?? event.data ?? {}) as Record<string, unknown>;
+    // Calendar blocks / channel-sync holds aren't real bookings — no ping.
+    if (b.is_block === true || b.isBlock === true || String(b.type ?? "") === "block") return;
     const guestName = str(b.guestName ?? b.guest_name ?? b.fullName ?? b.full_name) ?? "Guest";
     const arrival = str(b.arrival ?? b.checkIn ?? b.check_in ?? b.arrival_date);
     const departure = str(b.departure ?? b.checkOut ?? b.check_out ?? b.departure_date);
@@ -216,7 +232,7 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
   try {
     if (!isCreateAction(event)) return;
 
-    const inq = (event.inquiry ?? event.data ?? {}) as Record<string, unknown>;
+    const inq = (event.entity ?? event.inquiry ?? event.data ?? {}) as Record<string, unknown>;
     const guestName = str(inq.guestName ?? inq.guest_name ?? inq.name) ?? "Guest";
     const question = str(inq.message ?? inq.question ?? inq.body) ?? "(no message provided)";
 
