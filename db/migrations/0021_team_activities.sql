@@ -6,7 +6,8 @@
 -- src/proxy.ts's role gate.
 create table if not exists team_activities (
   id uuid primary key default gen_random_uuid(),
-  organization_id uuid not null references organizations(id),
+  -- organizations.id is TEXT (uuid-shaped strings) — see 0015.
+  organization_id text not null references organizations(id) on delete cascade,
   -- Optional link to an OwnerRez booking id: entries with a booking_id are
   -- per-stay ops notes (shown on that stay's card); entries without one are
   -- general team-activity log entries.
