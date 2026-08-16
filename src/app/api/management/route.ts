@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBookings, getGuests } from "@/lib/ownerrez";
 import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getAllPendingDrafts } from "@/lib/pendingDrafts";
-import { listTeamActivities } from "@/lib/teamActivities";
+import { listBookingOps, listTeamActivities } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -53,6 +53,7 @@ export async function GET(req: NextRequest) {
       listTeamActivities(orgId).catch(() => []),
     ]);
     const guestsById = buildGuestsById(guests);
+    const opsByBookingId = await listBookingOps(orgId).catch(() => new Map<number, never>());
 
     // Stays the team actually works from: real bookings (no calendar
     // blocks) that haven't checked out yet (checkout today still shows —
@@ -95,6 +96,8 @@ export async function GET(req: NextRequest) {
         source: b.source,
         totalAmount: b.totalAmount,
         extrasRequested: extrasByBookingId.has(b.id),
+        eventScheduled: opsByBookingId.get(b.id)?.eventScheduled ?? false,
+        eventDate: opsByBookingId.get(b.id)?.eventDate ?? null,
         notes: notes
           .filter((n) => n.bookingId === b.id)
           .map((n) => ({ id: n.id, body: n.body, author: n.authorName || n.authorEmail, at: n.createdAt })),

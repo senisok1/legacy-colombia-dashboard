@@ -24,8 +24,23 @@ type Stay = {
   source?: string;
   totalAmount?: number;
   extrasRequested: boolean;
+  eventScheduled?: boolean;
+  eventDate?: string | null;
   notes: StayNote[];
 };
+
+/** Every date of the stay (arrival..departure inclusive) as YYYY-MM-DD. */
+function stayDates(arrival?: string, departure?: string): string[] {
+  if (!arrival) return [];
+  const start = new Date(`${arrival.slice(0, 10)}T00:00:00Z`);
+  const end = departure ? new Date(`${departure.slice(0, 10)}T00:00:00Z`) : start;
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+  const out: string[] = [];
+  for (let d = new Date(start); d <= end && out.length < 60; d.setUTCDate(d.getUTCDate() + 1)) {
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
 type LogEntry = { id: string; body: string; author: string; at: string };
 type BoardData = { stays: Stay[]; activityLog: LogEntry[]; viewerRole?: string };
 
@@ -66,6 +81,26 @@ export function ManagementBoard() {
     const t = setInterval(() => void load(), 120_000);
     return () => clearInterval(t);
   }, [load]);
+
+  async function setEvent(s: Stay, eventScheduled: boolean, eventDate: string | null) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/management/booking-ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: s.bookingId, eventScheduled, eventDate }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setError(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save event flag.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function post(kind: "note" | "activity", body: string, bookingId?: number) {
     if (!body.trim() || busy) return;
@@ -149,6 +184,48 @@ export function ManagementBoard() {
                   )}
                 </div>
               )}
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-red-500 px-3 py-2">
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(s.eventScheduled)}
+                    disabled={busy}
+                    onChange={(e) => void setEvent(s, e.target.checked, e.target.checked ? (s.eventDate ?? null) : null)}
+                    className="h-6 w-6 cursor-pointer accent-red-600"
+                  />
+                  Event paid &amp; scheduled during stay
+                </label>
+                {s.eventScheduled && (
+                  <select
+                    value={s.eventDate ?? ""}
+                    disabled={busy}
+                    onChange={(e) => void setEvent(s, true, e.target.value || null)}
+                    className="rounded-md border border-red-500/60 bg-transparent px-2 py-1 text-sm"
+                  >
+                    <option value="">Pick the event date…</option>
+                    {stayDates(s.arrival, s.departure).map((d) => (
+                      <option key={d} value={d}>
+                        {new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                          timeZone: "UTC",
+                        })}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {s.eventScheduled && s.eventDate && (
+                  <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">
+                    EVENT{" "}
+                    {new Date(`${s.eventDate}T00:00:00Z`).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      timeZone: "UTC",
+                    })}
+                  </span>
+                )}
+              </div>
               {s.notes.length > 0 && (
                 <ul className="space-y-1">
                   {s.notes.map((n) => (

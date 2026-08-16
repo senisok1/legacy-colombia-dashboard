@@ -113,6 +113,9 @@ export function proxy(req: NextRequest) {
         // The Management tab's own activity/notes endpoint — the one thing
         // the team is supposed to write (see api/management/activities).
         pathname === "/api/management/activities" ||
+        // Per-stay event flag + date (see api/management/booking-ops) —
+        // same on-site coordination scope as activities/notes.
+        pathname === "/api/management/booking-ops" ||
         // Translation is a POST but modifies nothing — the team needs it to
         // read Spanish guest threads.
         pathname === "/api/translate";

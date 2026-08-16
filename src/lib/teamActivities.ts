@@ -49,6 +49,49 @@ export async function listTeamActivities(organizationId: string, limit = 200): P
   return rows.map(fromRow);
 }
 
+// ---- Per-stay ops flags (migration 0022): paid event scheduled + date ----
+
+export type BookingOps = {
+  bookingId: number;
+  eventScheduled: boolean;
+  eventDate: string | null; // YYYY-MM-DD
+};
+
+type OpsRow = { booking_id: string; event_scheduled: boolean; event_date: string | null };
+
+export async function listBookingOps(organizationId: string): Promise<Map<number, BookingOps>> {
+  const rows = await query<OpsRow>(
+    `select booking_id, event_scheduled, event_date::text as event_date
+     from booking_ops where organization_id = $1`,
+    [organizationId]
+  );
+  return new Map(
+    rows.map((r) => [
+      Number(r.booking_id),
+      { bookingId: Number(r.booking_id), eventScheduled: r.event_scheduled, eventDate: r.event_date },
+    ])
+  );
+}
+
+export async function upsertBookingOps(input: {
+  organizationId: string;
+  bookingId: number;
+  eventScheduled: boolean;
+  eventDate: string | null;
+  updatedBy: string;
+}): Promise<void> {
+  await query(
+    `insert into booking_ops (organization_id, booking_id, event_scheduled, event_date, updated_by, updated_at)
+     values ($1, $2, $3, $4, $5, now())
+     on conflict (organization_id, booking_id) do update set
+       event_scheduled = excluded.event_scheduled,
+       event_date = excluded.event_date,
+       updated_by = excluded.updated_by,
+       updated_at = now()`,
+    [input.organizationId, input.bookingId, input.eventScheduled, input.eventDate, input.updatedBy]
+  );
+}
+
 export async function createTeamActivity(input: {
   organizationId: string;
   bookingId?: number | null;
