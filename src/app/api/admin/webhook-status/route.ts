@@ -35,6 +35,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: res.ok, status: res.status, message: await res.json().catch(() => null) });
   }
 
+  // ?guest_id=X — raw guest entity (contact-info debugging: what does
+  // OwnerRez actually have on file for this guest).
+  const guestId = req.nextUrl.searchParams.get("guest_id");
+  if (guestId && /^\d+$/.test(guestId)) {
+    const res = await fetch(`https://api.ownerrez.com/v2/guests/${guestId}`, {
+      headers: authHeaders,
+      cache: "no-store",
+    });
+    return NextResponse.json({ ok: res.ok, status: res.status, guest: await res.json().catch(() => null) });
+  }
+
   // ?booking_id=X — same idea for booking entities (used to replay missed
   // booking-created webhooks).
   const bookingId = req.nextUrl.searchParams.get("booking_id");
