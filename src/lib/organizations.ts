@@ -106,16 +106,37 @@ export async function listActiveOrganizations(): Promise<Organization[]> {
  * pre-existing organization (the current customer). Once every route is
  * tenant-aware (Phase 3), calls to this function should disappear. */
 let cachedDefaultOrgId: string | null = null;
+// Last-resort constant fallback (2026-08-16): during the Neon "data transfer
+// quota exceeded" outage, every cold-started lambda's first call here threw,
+// which took down BOTH guest-message pipelines (the cron couldn't even list
+// orgs; the webhook's createPendingDraft died resolving the org id) — guest
+// approvals went silent even though Redis/OwnerRez/WhatsApp were all fine.
+// The default org's id is effectively a constant (it's Seni's own org row,
+// created once by migration 0015 and confirmed live 2026-08-15), so serving
+// it when the DB is unreachable is always correct for this single-operator
+// deployment. Overridable via DEFAULT_ORG_ID env var if the row is ever
+// recreated.
+const DEFAULT_ORG_ID_FALLBACK =
+  (process.env.DEFAULT_ORG_ID || "").trim() || "12bddc76-c01d-4f7c-8fed-635aba3f7323";
+
 export async function getDefaultOrganizationId(): Promise<string> {
   if (cachedDefaultOrgId) return cachedDefaultOrgId;
-  const org = await getOrganizationBySlug("legacy-estate-rentals");
-  if (!org) {
-    throw new Error(
-      "No default organization found — run the db migrations (db/migrations/0015_organizations.sql) first."
+  try {
+    const org = await getOrganizationBySlug("legacy-estate-rentals");
+    if (!org) {
+      throw new Error(
+        "No default organization found — run the db migrations (db/migrations/0015_organizations.sql) first."
+      );
+    }
+    cachedDefaultOrgId = org.id;
+    return org.id;
+  } catch (err) {
+    console.error(
+      "[organizations] getDefaultOrganizationId DB lookup failed — serving constant fallback:",
+      err instanceof Error ? err.message : err
     );
+    return DEFAULT_ORG_ID_FALLBACK;
   }
-  cachedDefaultOrgId = org.id;
-  return org.id;
 }
 
 export async function createOrganization(input: { name: string; slug: string }): Promise<Organization> {

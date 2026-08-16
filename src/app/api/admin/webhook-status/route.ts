@@ -18,19 +18,36 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "OWNERREZ_OAUTH_TOKEN isn't set server-side." });
   }
 
+  const authHeaders = {
+    Authorization: `Bearer ${config.ownerRezOAuthToken}`,
+    "User-Agent": config.userAgent,
+  };
+
+  // ?message_id=X — fetch the raw OwnerRez message entity, since the
+  // webhook's `entity` field is documented to be exactly this object.
+  // The fastest way to learn the REAL field names of a payload we mishandled.
+  const messageId = req.nextUrl.searchParams.get("message_id");
+  if (messageId && /^\d+$/.test(messageId)) {
+    const res = await fetch(`https://api.ownerrez.com/v2/messages/${messageId}`, {
+      headers: authHeaders,
+      cache: "no-store",
+    });
+    return NextResponse.json({ ok: res.ok, status: res.status, message: await res.json().catch(() => null) });
+  }
+
   try {
     const res = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
-      headers: {
-        Authorization: `Bearer ${config.ownerRezOAuthToken}`,
-        "User-Agent": config.userAgent,
-      },
+      headers: authHeaders,
       cache: "no-store",
     });
     const body = await res.json().catch(() => null);
+    const { redisGet } = await import("@/lib/redis");
+    const samplesRaw = await redisGet("webhook:raw-samples").catch(() => null);
     return NextResponse.json({
       ok: res.ok,
       status: res.status,
       subscriptions: body,
+      rawSamples: samplesRaw ? JSON.parse(samplesRaw) : [],
       expectedUrl: "https://legacy-colombia-dashboard.vercel.app/api/webhook",
     });
   } catch (err) {

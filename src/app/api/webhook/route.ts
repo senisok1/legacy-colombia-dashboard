@@ -23,6 +23,22 @@ export async function POST(req: NextRequest) {
       entityId: event.entityId ?? event.entity_id,
     });
 
+    // Keep the last few raw payloads in Redis so real field names can be
+    // inspected via /api/admin/webhook-status (found 2026-08-16 that real
+    // thread_message payloads were being skipped as "missing threadId/body"
+    // — the docs' claimed shape didn't match what actually arrives, and
+    // Vercel Hobby has no retrievable runtime-log history to check).
+    try {
+      const { redisGet, redisSet } = await import("@/lib/redis");
+      const prev = await redisGet("webhook:raw-samples").catch(() => null);
+      const samples = prev ? (JSON.parse(prev) as unknown[]) : [];
+      // Stored as a (possibly truncated) string — never re-parsed server-side.
+      samples.unshift({ at: new Date().toISOString(), payload: JSON.stringify(event).slice(0, 4000) });
+      await redisSet("webhook:raw-samples", JSON.stringify(samples.slice(0, 8))).catch(() => {});
+    } catch {
+      /* best-effort only */
+    }
+
     // OwnerRez's "Send a Test Webhook" button posts action:"webhook_test"
     // with entity_type:"api_application" — acknowledge it loudly so it's
     // easy to spot in Vercel logs when verifying the connection.
