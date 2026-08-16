@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBookings } from "@/lib/ownerrez";
+import { getBookings, getGuests } from "@/lib/ownerrez";
+import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { listTeamActivities } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
@@ -18,11 +19,15 @@ export async function GET(req: NextRequest) {
 
   try {
     const orgId = session.organizationId;
-    const [bookings, drafts, activities] = await Promise.all([
+    const [bookings, guests, drafts, activities] = await Promise.all([
       getBookings(orgId),
+      // Guest contact info (phone/email when the channel shares it — Airbnb/
+      // Vrbo often withhold real email/phone; direct bookings have both).
+      getGuests(orgId).catch(() => []),
       getAllPendingDrafts(orgId).catch(() => []),
       listTeamActivities(orgId).catch(() => []),
     ]);
+    const guestsById = buildGuestsById(guests);
 
     // Stays the team actually works from: real bookings (no calendar
     // blocks) that haven't checked out yet (checkout today still shows —
@@ -44,7 +49,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       stays: upcoming.map((b) => ({
         bookingId: b.id,
-        guestName: b.guestName || "Guest",
+        guestName: resolveGuestName(b, guestsById) || "Guest",
+        guestPhone: (b.guestId != null && guestsById.get(b.guestId)?.phone) || null,
+        guestEmail: (b.guestId != null && guestsById.get(b.guestId)?.email) || null,
         propertyName: b.propertyName,
         arrival: b.arrival,
         departure: b.departure,

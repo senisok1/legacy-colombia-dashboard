@@ -11,6 +11,8 @@ type StayNote = { id: string; body: string; author: string; at: string };
 type Stay = {
   bookingId: number;
   guestName: string;
+  guestPhone?: string | null;
+  guestEmail?: string | null;
   propertyName?: string;
   arrival?: string;
   departure?: string;
@@ -125,6 +127,20 @@ export function ManagementBoard() {
                 {s.propertyName}
                 {s.source ? ` · ${s.source}` : ""}
               </div>
+              {(s.guestPhone || s.guestEmail) && (
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-sm">
+                  {s.guestPhone && (
+                    <a href={`tel:${s.guestPhone}`} className="text-[var(--accent)] hover:underline">
+                      📞 {s.guestPhone}
+                    </a>
+                  )}
+                  {s.guestEmail && (
+                    <a href={`mailto:${s.guestEmail}`} className="text-[var(--accent)] hover:underline break-all">
+                      ✉️ {s.guestEmail}
+                    </a>
+                  )}
+                </div>
+              )}
               {s.notes.length > 0 && (
                 <ul className="space-y-1">
                   {s.notes.map((n) => (
