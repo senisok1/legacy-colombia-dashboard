@@ -12,7 +12,9 @@ type Stay = {
   bookingId: number;
   guestName: string;
   guestPhone?: string | null;
+  guestPhoneProxy?: boolean;
   guestEmail?: string | null;
+  guestEmailProxy?: boolean;
   propertyName?: string;
   arrival?: string;
   departure?: string;
@@ -127,17 +129,23 @@ export function ManagementBoard() {
                 {s.propertyName}
                 {s.source ? ` · ${s.source}` : ""}
               </div>
-              {(s.guestPhone || s.guestEmail) && (
+              {(s.guestPhone || s.guestEmail || s.guestPhoneProxy || s.guestEmailProxy) && (
                 <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-sm">
                   {s.guestPhone && (
                     <a href={`tel:${s.guestPhone}`} className="text-[var(--accent)] hover:underline">
                       📞 {s.guestPhone}
                     </a>
                   )}
+                  {s.guestPhoneProxy && (
+                    <span className="text-black/50 dark:text-white/50">📞 Proxy (via platform)</span>
+                  )}
                   {s.guestEmail && (
                     <a href={`mailto:${s.guestEmail}`} className="text-[var(--accent)] hover:underline break-all">
                       ✉️ {s.guestEmail}
                     </a>
+                  )}
+                  {s.guestEmailProxy && (
+                    <span className="text-black/50 dark:text-white/50">✉️ Proxy (via platform)</span>
                   )}
                 </div>
               )}

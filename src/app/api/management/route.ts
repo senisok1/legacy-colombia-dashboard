@@ -8,6 +8,31 @@ import { getSessionFromRequest } from "@/lib/session";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+// Proxy-contact detection (2026-08-16, Seni's ask). No OwnerRez field flags
+// a channel relay/proxy, so only the reliably-detectable cases are labeled:
+// relay EMAIL domains the OTAs use, and phone numbers carrying an extension
+// (Vrbo/HomeAway's proxy style — real personal numbers don't have "ext").
+// Anything unlabeled is, as far as the data can show, the guest's real
+// contact info.
+const PROXY_EMAIL_DOMAINS = [
+  "guest.airbnb.com",
+  "guests.airbnb.com",
+  "reply.airbnb.com",
+  "messages.homeaway.com",
+  "messages.vrbo.com",
+  "guest.booking.com",
+  "mchat.booking.com",
+];
+
+function isProxyEmail(email: string): boolean {
+  const domain = email.split("@")[1]?.toLowerCase() ?? "";
+  return PROXY_EMAIL_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`));
+}
+
+function isProxyPhone(phone: string): boolean {
+  return /ext|,|;|#\d/i.test(phone);
+}
+
 // Management-tab board data (2026-08-16): upcoming & in-house stays for the
 // on-site team (cleaners, property manager, ...), each stay's ops notes,
 // pending paid-extras signals, and the general team activity log. Read side
@@ -50,8 +75,17 @@ export async function GET(req: NextRequest) {
       stays: upcoming.map((b) => ({
         bookingId: b.id,
         guestName: resolveGuestName(b, guestsById) || "Guest",
-        guestPhone: (b.guestId != null && guestsById.get(b.guestId)?.phone) || null,
-        guestEmail: (b.guestId != null && guestsById.get(b.guestId)?.email) || null,
+        ...(() => {
+          const g = b.guestId != null ? guestsById.get(b.guestId) : undefined;
+          const phone = g?.phone || null;
+          const email = g?.email || null;
+          return {
+            guestPhone: phone && isProxyPhone(phone) ? null : phone,
+            guestPhoneProxy: Boolean(phone && isProxyPhone(phone)),
+            guestEmail: email && isProxyEmail(email) ? null : email,
+            guestEmailProxy: Boolean(email && isProxyEmail(email)),
+          };
+        })(),
         propertyName: b.propertyName,
         arrival: b.arrival,
         departure: b.departure,
