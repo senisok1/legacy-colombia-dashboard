@@ -229,9 +229,12 @@ export function ManagementBoard() {
               {s.notes.length > 0 && (
                 <ul className="space-y-1">
                   {s.notes.map((n) => (
-                    <li key={n.id} className="rounded bg-black/5 dark:bg-white/5 px-2 py-1 text-sm">
+                    <li
+                      key={n.id}
+                      className="rounded bg-red-500/10 px-2 py-1 text-sm font-medium text-red-600 dark:text-red-400"
+                    >
                       {n.body}
-                      <span className="ml-2 text-xs text-black/40 dark:text-white/40">
+                      <span className="ml-2 text-xs font-normal text-red-500/70">
                         — {n.author}, {fmtWhen(n.at)}
                       </span>
                     </li>
