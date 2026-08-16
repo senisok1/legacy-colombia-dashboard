@@ -188,7 +188,12 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
     // pending draft means Seni hasn't decided yet — don't re-page him.
     // (createPendingDraft below auto-supersedes if we do proceed.)
     const existing = await getPendingDraftByThreadId(threadId).catch(() => null);
-    if (existing && existing.status === "pending" && existing.guestMessage === body) {
+    // Only dedupe when the existing draft was actually TEXTED to Seni
+    // (wamid present). A pending draft with no wamid means the WhatsApp
+    // send failed after creation (seen 2026-08-16: stale env phone-number
+    // id during the DB outage) — fall through so the supersede path
+    // recreates it and retries the send.
+    if (existing && existing.status === "pending" && existing.guestMessage === body && existing.wamid) {
       console.log(`[webhookHandlers] Draft ${existing.id} already pending for this exact message — skipping`);
       return;
     }
