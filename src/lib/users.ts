@@ -98,6 +98,29 @@ export async function upsertUser(input: {
   return fromRow(row);
 }
 
+/** All logins belonging to one organization — for the Settings tab's
+ * "Team logins" manager (2026-08-16). Password hashes stay in the return
+ * type (AppUser) but callers exposing this over HTTP must strip them. */
+export async function listUsers(organizationId: string): Promise<AppUser[]> {
+  const rows = await query<UserRow>(
+    `select id, email, password_hash, name, role, active, organization_id
+     from users where organization_id = $1
+     order by role, lower(coalesce(name, email))`,
+    [organizationId]
+  );
+  return rows.map(fromRow);
+}
+
+/** Deactivate/reactivate a login. Org-scoped so one tenant's admin can
+ * never touch another tenant's users. Returns false if no matching row. */
+export async function setUserActive(userId: string, active: boolean, organizationId: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `update users set active = $2 where id = $1 and organization_id = $3 returning id`,
+    [userId, active, organizationId]
+  );
+  return rows.length > 0;
+}
+
 /** Signup-safe user creation (Phase 2, api/signup/route.ts) — deliberately
  * NOT upsertUser() above, which does `on conflict (email) do update` and
  * would silently hijack an existing account (overwriting its password and
