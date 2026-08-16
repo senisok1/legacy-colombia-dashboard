@@ -28,6 +28,10 @@ type NavEntry = { type: "link"; href: string; label: string } | { type: "group";
 
 const navEntries: NavEntry[] = [
   { type: "link", href: "/dashboard", label: "Dashboard" },
+  // Management (2026-08-16): the on-site team's central tab — upcoming
+  // stays, paid-extras/event notes, team activity log. Also the home base
+  // for the READ_ONLY team login (see src/proxy.ts's role gate).
+  { type: "link", href: "/management", label: "Management" },
   { type: "group", label: "CRM", tabs: CRM_GROUP_TABS },
   { type: "group", label: "Messaging", tabs: MESSAGING_GROUP_TABS },
   { type: "group", label: "Bill Pay", tabs: BILL_PAY_GROUP_TABS },

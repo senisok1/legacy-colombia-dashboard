@@ -17,7 +17,8 @@ export function proxy(req: NextRequest) {
   // page's default mode) instead of his real per-user login. See
   // api/debug/whoami's header for how this was diagnosed.
   const sessionCookie = req.cookies.get(SESSION_COOKIE_NAME)?.value;
-  const validUserSession = Boolean(verifySessionToken(sessionCookie));
+  const session = verifySessionToken(sessionCookie);
+  const validUserSession = Boolean(session);
 
   // No per-user auth configured at all — only relevant for local/demo use
   // that was never set up with AUTH_SECRET; a real deployment always has it.
@@ -96,6 +97,32 @@ export function proxy(req: NextRequest) {
   }
 
   if (validUserSession) {
+    // READ_ONLY role gate (2026-08-16, Seni's ask: a team login for
+    // cleaners/property managers that "can view all tabs only but without
+    // the ability to reply to guests or modify anything"). Enforced HERE,
+    // at the single choke point every API request passes through, instead
+    // of sprinkling role checks across ~40 mutating routes. GET/HEAD flow
+    // freely (view everything); any write to /api/* is refused except the
+    // handful a team member legitimately needs. The session's role can't
+    // be forged: it lives inside the HMAC-signed session token verified
+    // above (a tampered payload fails signature verification and never
+    // reaches this branch).
+    if (session!.role === "READ_ONLY" && !["GET", "HEAD", "OPTIONS"].includes(req.method) && pathname.startsWith("/api/")) {
+      const readOnlyWriteAllowlist =
+        pathname === "/api/logout" ||
+        // The Management tab's own activity/notes endpoint — the one thing
+        // the team is supposed to write (see api/management/activities).
+        pathname === "/api/management/activities" ||
+        // Translation is a POST but modifies nothing — the team needs it to
+        // read Spanish guest threads.
+        pathname === "/api/translate";
+      if (!readOnlyWriteAllowlist) {
+        return NextResponse.json(
+          { error: "This is a view-only team account — ask the owner to make changes." },
+          { status: 403 }
+        );
+      }
+    }
     return NextResponse.next();
   }
 

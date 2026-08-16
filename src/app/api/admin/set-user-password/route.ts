@@ -92,7 +92,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as
-    | { secret?: string; email?: string; password?: string; name?: string }
+    | { secret?: string; email?: string; password?: string; name?: string; role?: string }
     | null;
 
   if (!body || !config.adminSecret || body.secret !== config.adminSecret) {
@@ -105,12 +105,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Email and an 8+ character password are required." }, { status: 400 });
   }
 
+  // Optional role (2026-08-16, for the READ_ONLY team login) — restricted
+  // to the two roles this app actually gates on so a typo can't create an
+  // account with an unrecognized role string.
+  const role = body.role === "READ_ONLY" ? ("READ_ONLY" as const) : ("CEO" as const);
+
   try {
     const user = await upsertUser({
       email: body.email.trim(),
       password: body.password,
       name: body.name?.trim() || undefined,
-      role: "CEO",
+      role,
     });
     return NextResponse.json({ ok: true, user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
