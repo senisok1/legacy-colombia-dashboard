@@ -184,7 +184,7 @@ export function ManagementBoard() {
                   )}
                 </div>
               )}
-              <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-red-500 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-3">
                 <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold">
                   <input
                     type="checkbox"
@@ -200,7 +200,7 @@ export function ManagementBoard() {
                     value={s.eventDate ?? ""}
                     disabled={busy}
                     onChange={(e) => void setEvent(s, true, e.target.value || null)}
-                    className="rounded-md border border-red-500/60 bg-transparent px-2 py-1 text-sm"
+                    className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
                     <option value="">Pick the event date…</option>
                     {stayDates(s.arrival, s.departure).map((d) => (
