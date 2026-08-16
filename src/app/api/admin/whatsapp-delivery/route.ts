@@ -17,6 +17,32 @@ export async function GET(req: NextRequest) {
   if (!config.adminSecret || secret !== config.adminSecret) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
+  // ?discover=1 — enumerate phone numbers visible to the env access token
+  // across candidate WABA ids. Built 2026-08-16: during the Neon DB outage
+  // the env-var credential fallback kicked in, and its WHATSAPP_PHONE_NUMBER_ID
+  // turned out to be stale (Graph 400 "Object does not exist") — the current
+  // id lives only in the org's DB credential row. This reveals the right
+  // ids so the env fallback can be corrected. Returns ids/display names
+  // only, never tokens.
+  if (req.nextUrl.searchParams.get("discover") === "1") {
+    const candidates = [config.whatsappBusinessAccountId, "1551368173208827", "2990427064635202"]
+      .filter(Boolean)
+      .filter((v, i, a) => a.indexOf(v) === i);
+    const results: Record<string, unknown> = { envPhoneNumberId: config.whatsappPhoneNumberId };
+    for (const waba of candidates) {
+      try {
+        const res = await fetch(`https://graph.facebook.com/v21.0/${waba}/phone_numbers`, {
+          headers: { Authorization: `Bearer ${config.whatsappAccessToken}` },
+          cache: "no-store",
+        });
+        results[waba] = { status: res.status, body: await res.json().catch(() => null) };
+      } catch (err) {
+        results[waba] = { error: err instanceof Error ? err.message : "unknown" };
+      }
+    }
+    return NextResponse.json({ ok: true, discovery: results });
+  }
+
   const raw = await redisGet("wa:status-log").catch(() => null);
   return NextResponse.json({
     ok: true,
