@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createTeamActivity } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
 
 export const dynamic = "force-dynamic";
 
@@ -27,11 +28,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Attribution (2026-08-16, Seni's ask: "show who added the note so
+    // everyone can stay on the same page") — each team member now has their
+    // own login with a display name on the user row; resolve it here so
+    // entries read "Gabriel" instead of an email address.
+    const user = await getUserByEmail(session.email).catch(() => null);
     const activity = await createTeamActivity({
       organizationId: session.organizationId,
       bookingId,
       authorEmail: session.email,
-      authorName: null,
+      authorName: user?.name ?? null,
       kind,
       body: text,
     });
