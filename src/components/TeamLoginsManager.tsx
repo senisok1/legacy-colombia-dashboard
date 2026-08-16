@@ -45,7 +45,15 @@ export function TeamLoginsManager() {
     void load();
   }, [load]);
 
-  if (hidden) return null;
+  // Now that this lives on its own page (/settings/team), a non-admin
+  // shouldn't see a blank page — say why instead.
+  if (hidden) {
+    return (
+      <p className="text-sm text-black/50 dark:text-white/50">
+        Only admin logins can add or manage team members.
+      </p>
+    );
+  }
 
   async function createLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -122,12 +130,10 @@ export function TeamLoginsManager() {
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="text-sm font-medium text-black/70 dark:text-white/70">Team logins</h2>
-        <p className="text-xs text-black/50 dark:text-white/50 mt-0.5">
-          Create logins for your team. <strong>Admin</strong> logins can do everything.{" "}
-          <strong>Team member</strong> logins can view every tab but only add notes and activities on the
-          Management tab — they can&apos;t message guests or change anything. Submitting an existing email
-          resets that person&apos;s password.
+        <p className="text-xs text-black/50 dark:text-white/50">
+          <strong>Admin</strong> logins can do everything. <strong>Team member</strong> logins can view every
+          tab but only add notes and activities on the Management tab — they can&apos;t message guests or
+          change anything. Submitting an existing email resets that person&apos;s password.
         </p>
       </div>
 

@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Theme } from "@/lib/themes";
-import { TeamLoginsManager } from "@/components/TeamLoginsManager";
 
 // Phase 2 onboarding/settings screen: lets a signed-in user store their own
 // organization's OwnerRez/WhatsApp/PriceLabs credentials (encrypted — see
@@ -246,8 +245,6 @@ export default function SettingsPage() {
           })}
         </div>
       </div>
-
-      <TeamLoginsManager />
 
       {SECTIONS.map((section) => (
         <div key={section.title} className="space-y-3">

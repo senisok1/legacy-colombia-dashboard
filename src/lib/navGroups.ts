@@ -42,5 +42,8 @@ export const REPORTS_GROUP_TABS: NavTab[] = [
 // configuration, not day-to-day operating tabs.
 export const SETTINGS_GROUP_TABS: NavTab[] = [
   { href: "/settings", label: "Settings" },
+  // Team-member login management, moved out of the inline /settings section
+  // to its own dropdown entry 2026-08-16 (Seni's ask).
+  { href: "/settings/team", label: "Add a Team Member" },
   { href: "/billing", label: "Billing" },
 ];
