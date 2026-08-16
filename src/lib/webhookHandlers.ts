@@ -117,10 +117,20 @@ function isCreateAction(event: OwnerRezWebhookEvent): boolean {
 export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
   try {
     // Official payloads carry the record in `entity`; older/manual test
-    // POSTs may use `message`/`data`.
+    // POSTs may use `message`/`data`. REAL field shape confirmed 2026-08-16
+    // by fetching a live message entity (GET /v2/messages/{id}): body,
+    // date_utc, from_contact_id, from_role, id, is_draft, and a NESTED
+    // thread object { id, booking_id, property_id, quote_id, channel, type }
+    // — there is NO top-level thread_id, which is why real events were
+    // skipped as "missing threadId/body" until this fix.
     const m = (event.entity ?? event.message ?? event.data ?? {}) as Record<string, unknown>;
+    const thread = (m.thread ?? {}) as Record<string, unknown>;
 
-    const threadId = num(m.threadId ?? m.thread_id);
+    // OwnerRez fires webhooks for UNSENT drafts too (is_draft: true — e.g.
+    // a reply Seni is still composing in OwnerRez's UI). Never act on those.
+    if (m.is_draft === true) return;
+
+    const threadId = num(m.threadId ?? m.thread_id) ?? num(thread.id);
     const body = str(m.body ?? m.text ?? m.message);
     if (!threadId || !body) {
       console.warn("[webhookHandlers] Message event missing threadId/body — skipping", {
@@ -130,7 +140,8 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
     }
 
     // Property scope check FIRST — before any branch that could ping Seni.
-    const messagePropId = num(m.property_id ?? m.propertyId);
+    // Real payloads carry it at thread.property_id (confirmed 2026-08-16).
+    const messagePropId = num(m.property_id ?? m.propertyId) ?? num(thread.property_id);
     if (messagePropId !== undefined) {
       const allowed = await allowedPropertyIds();
       if (!allowed || !allowed.has(messagePropId)) {
@@ -193,7 +204,7 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
 
     const pending = await createPendingDraft({
       threadId,
-      bookingId: num(m.bookingId ?? m.booking_id) ?? 0,
+      bookingId: num(m.bookingId ?? m.booking_id) ?? num(thread.booking_id) ?? 0,
       guestId: num(m.guestId ?? m.guest_id) ?? null,
       guestName,
       guestMessage: body,
