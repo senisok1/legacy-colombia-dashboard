@@ -121,6 +121,18 @@ export async function setUserActive(userId: string, active: boolean, organizatio
   return rows.length > 0;
 }
 
+/** Permanently deletes a login (Settings → Team logins' Delete button).
+ * Org-scoped like setUserActive. Nothing else references users(id) — team
+ * activity attribution is stored denormalized as author_email/author_name,
+ * so past notes keep their author label after deletion. */
+export async function deleteUser(userId: string, organizationId: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `delete from users where id = $1 and organization_id = $2 returning id`,
+    [userId, organizationId]
+  );
+  return rows.length > 0;
+}
+
 /** Signup-safe user creation (Phase 2, api/signup/route.ts) — deliberately
  * NOT upsertUser() above, which does `on conflict (email) do update` and
  * would silently hijack an existing account (overwriting its password and

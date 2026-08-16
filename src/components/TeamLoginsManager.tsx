@@ -96,6 +96,29 @@ export function TeamLoginsManager() {
     }
   }
 
+  async function remove(u: ManagedUser) {
+    if (busy) return;
+    if (!window.confirm(`Permanently delete the login for ${u.name || u.email}? This can't be undone.`)) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/settings/users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: u.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setNotice(`Deleted ${json.deleted}.`);
+      setError(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete login.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-3">
       <div>
@@ -129,13 +152,22 @@ export function TeamLoginsManager() {
               {u.isYou && <span className="text-xs text-black/40 dark:text-white/40">(you)</span>}
               {!u.active && <span className="text-xs text-red-500">deactivated</span>}
               {!u.isYou && (
-                <button
-                  onClick={() => void toggleActive(u)}
-                  disabled={busy}
-                  className="ml-auto rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"
-                >
-                  {u.active ? "Deactivate" : "Reactivate"}
-                </button>
+                <span className="ml-auto flex gap-1.5">
+                  <button
+                    onClick={() => void toggleActive(u)}
+                    disabled={busy}
+                    className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"
+                  >
+                    {u.active ? "Deactivate" : "Reactivate"}
+                  </button>
+                  <button
+                    onClick={() => void remove(u)}
+                    disabled={busy}
+                    className="rounded-md border border-red-500/40 px-2 py-0.5 text-xs text-red-500 hover:bg-red-500/10 disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
+                </span>
               )}
             </div>
           ))}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
-import { getUserByEmail, listUsers, setUserActive, upsertUser } from "@/lib/users";
+import { deleteUser, getUserByEmail, listUsers, setUserActive, upsertUser } from "@/lib/users";
 
 export const dynamic = "force-dynamic";
 
@@ -109,6 +109,31 @@ export async function PATCH(req: NextRequest) {
     const ok = await setUserActive(body.userId, body.active, session.organizationId);
     return ok
       ? NextResponse.json({ ok: true })
+      : NextResponse.json({ error: "No such login." }, { status: 404 });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  const { session, error } = requireCeo(req);
+  if (error) return error;
+
+  const body = (await req.json().catch(() => null)) as { userId?: string } | null;
+  if (!body?.userId) return NextResponse.json({ error: "userId is required." }, { status: 400 });
+
+  try {
+    // Lockout guard: can't delete your own login.
+    const users = await listUsers(session.organizationId);
+    const target = users.find((u) => u.id === body.userId);
+    if (!target) return NextResponse.json({ error: "No such login." }, { status: 404 });
+    if (target.email.toLowerCase() === session.email.toLowerCase()) {
+      return NextResponse.json({ error: "You can't delete your own login." }, { status: 400 });
+    }
+
+    const ok = await deleteUser(body.userId, session.organizationId);
+    return ok
+      ? NextResponse.json({ ok: true, deleted: target.email })
       : NextResponse.json({ error: "No such login." }, { status: 404 });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
