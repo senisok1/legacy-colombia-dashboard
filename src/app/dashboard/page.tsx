@@ -1,5 +1,7 @@
 import { parseISO } from "date-fns";
-import { getBookings } from "@/lib/ownerrez";
+import { getBookings, getGuests } from "@/lib/ownerrez";
+import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
+import { UpcomingArrivals } from "@/components/UpcomingArrivals";
 import { summaryStats, revenueBySource, isRevenueCounting } from "@/lib/finance";
 import { getServerSession } from "@/lib/session";
 import { enforceBillingLock } from "@/lib/billingGate";
@@ -14,14 +16,26 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
-  const bookings = await getBookings(session?.organizationId);
+  const [bookings, guests] = await Promise.all([
+    getBookings(session?.organizationId),
+    // Guest records — many channel bookings carry no name on the booking
+    // itself; resolveGuestName fills it from the guest profile (2026-08-16,
+    // Seni's ask: names were showing as "—" under Upcoming arrivals).
+    getGuests(session?.organizationId).catch(() => []),
+  ]);
+  const guestsById = buildGuestsById(guests);
+  const withNames = (list: typeof bookings) =>
+    list.map((b) => ({ ...b, raw: undefined, guestName: resolveGuestName(b, guestsById) || b.guestName }));
   const stats = summaryStats(bookings);
 
-  const sortedByArrival = [...bookings]
-    // Exclude cancellations and calendar blocks (iCal "not available" holds
-    // with no real guest) — this table is about actual guest reservations.
-    .filter((b) => b.status !== "Cancelled" && !b.isBlock)
-    .sort((a, b) => b.arrival.localeCompare(a.arrival));
+  // Every future arrival (not just the old top-5) — the UpcomingArrivals
+  // client component pages through these with its Load-more button.
+  const today = new Date().toISOString().slice(0, 10);
+  const allUpcoming = withNames(
+    bookings
+      .filter((b) => b.status !== "Cancelled" && !b.isBlock && b.arrival && b.arrival.slice(0, 10) >= today)
+      .sort((a, b) => a.arrival.localeCompare(b.arrival))
+  );
 
   // Same year-to-date window as the "Revenue (YTD)" stat card above, so the
   // pie chart's total lines up with the number Seni already sees there.
@@ -62,10 +76,10 @@ export default async function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
           <h2 className="text-sm font-semibold mb-3">Currently checked in ({stats.currentGuests.length})</h2>
-          <BookingsTable bookings={stats.currentGuests} emptyLabel="No guests on-property right now." />
+          <BookingsTable bookings={withNames(stats.currentGuests)} emptyLabel="No guests on-property right now." />
 
           <h2 className="text-sm font-semibold mt-6 mb-3">Upcoming arrivals</h2>
-          <BookingsTable bookings={stats.upcomingArrivals} emptyLabel="No upcoming arrivals." />
+          <UpcomingArrivals bookings={allUpcoming} />
         </div>
 
         <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
@@ -80,10 +94,6 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-        <h2 className="text-sm font-semibold mb-3">All bookings</h2>
-        <BookingsTable bookings={sortedByArrival} />
-      </div>
     </div>
   );
 }
