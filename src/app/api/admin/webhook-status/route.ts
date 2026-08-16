@@ -35,6 +35,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: res.ok, status: res.status, message: await res.json().catch(() => null) });
   }
 
+  // ?booking_id=X — same idea for booking entities (used to replay missed
+  // booking-created webhooks).
+  const bookingId = req.nextUrl.searchParams.get("booking_id");
+  if (bookingId && /^\d+$/.test(bookingId)) {
+    const res = await fetch(`https://api.ownerrez.com/v2/bookings/${bookingId}`, {
+      headers: authHeaders,
+      cache: "no-store",
+    });
+    return NextResponse.json({ ok: res.ok, status: res.status, booking: await res.json().catch(() => null) });
+  }
+
   try {
     const res = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
       headers: authHeaders,
