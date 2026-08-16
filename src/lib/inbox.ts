@@ -100,8 +100,33 @@ const THREAD_MESSAGES_CACHE_SECONDS = 120;
 
 // Fallback snapshot for the full sorted summaries list — see the "BUG FOUND
 // 2026-08-10" comment inside fetchAllThreadSummaries for why this exists.
+// TTL bumped 24h -> 7 days (2026-08-16): this snapshot is now ALSO the
+// instant-first-paint source for the Inbox (see getSnapshotThreadSummaries
+// below) — a week-old list that paints instantly and is refreshed by the
+// client within seconds beats an empty "No conversations found" every time.
 const THREAD_SUMMARIES_FALLBACK_KEY_PREFIX = "ownerrez:thread-summaries-fallback:";
-const THREAD_SUMMARIES_FALLBACK_TTL_SECONDS = 24 * 60 * 60;
+const THREAD_SUMMARIES_FALLBACK_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/** INSTANT-LOAD PATH (2026-08-16, Seni: "conversations took too long to
+ * initially load"). The inbox route used to race the real computation
+ * against a 1s timeout and return EMPTY on a cold cache — so after every
+ * deploy (and every 30-min cache expiry) the tab painted "No conversations
+ * found" and sat there until a 20-30s paced OwnerRez scan finished. This
+ * reads the last known-good sorted snapshot straight from Redis (single
+ * O(1) GET, ~tens of ms, survives deploys) so the first paint always has
+ * real conversations; ThreadInbox's existing after-paint ?fresh=1 call and
+ * 45s polling keep it current, and every healthy recompute rewrites the
+ * snapshot. */
+export async function getSnapshotThreadSummaries(organizationId?: string): Promise<ThreadSummary[] | null> {
+  if (!isRedisConfigured()) return null;
+  try {
+    const raw = await redisGet(threadSummariesFallbackKey(organizationId));
+    if (!raw) return null;
+    return JSON.parse(raw) as ThreadSummary[];
+  } catch {
+    return null; // cache hiccup must never break the inbox
+  }
+}
 
 function threadSummariesFallbackKey(organizationId?: string): string {
   return `${THREAD_SUMMARIES_FALLBACK_KEY_PREFIX}${organizationId ?? "default"}`;

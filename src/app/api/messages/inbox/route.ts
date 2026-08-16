@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { getAllThreadSummaries, fetchAllThreadSummaries } from "@/lib/inbox";
+import { getAllThreadSummaries, fetchAllThreadSummaries, getSnapshotThreadSummaries } from "@/lib/inbox";
 import type { ThreadSummary } from "@/lib/inbox";
 import { isMessagingConfigured } from "@/lib/config";
 import { getSessionFromRequest } from "@/lib/session";
@@ -67,8 +67,15 @@ export async function GET(req: NextRequest) {
     // forever.
     const summariesPromise = getAllThreadSummaries(session?.organizationId);
     after(summariesPromise.then(() => {}).catch(() => {}));
-    const timeoutPromise = new Promise<ThreadSummary[]>(resolve =>
-      setTimeout(() => resolve([]), 1000)
+
+    // INSTANT-LOAD FIX (2026-08-16): the race used to resolve to [] on a
+    // cold cache, painting "No conversations found" until a 20-30s scan
+    // finished. Now the timeout path resolves to the last known-good Redis
+    // snapshot (started in parallel, ~tens of ms) so the first paint always
+    // has real conversations; the client's ?fresh=1 follow-up updates it.
+    const snapshotPromise = getSnapshotThreadSummaries(session?.organizationId).catch(() => null);
+    const timeoutPromise = new Promise<ThreadSummary[]>((resolve) =>
+      setTimeout(async () => resolve(((await snapshotPromise) ?? []).slice(0, limit)), 900)
     );
 
     let summaries = await Promise.race([summariesPromise, timeoutPromise]);
