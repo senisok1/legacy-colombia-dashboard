@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // Client half of the Management tab (see app/management/page.tsx). One
 // fetch renders everything; posting a note/activity optimistically
@@ -57,6 +57,103 @@ function fmtWhen(iso: string): string {
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+const DOW = ["S", "M", "T", "W", "T", "F", "S"];
+
+/** Stay & event calendar (2026-08-16, Seni's ask): month grid to the right
+ * of the stays list. Occupied nights are filled, event days get a red ring,
+ * and hovering any day shows the guest name(s) via the native tooltip. */
+function StayCalendar({ stays }: { stays: Stay[] }) {
+  const [monthOffset, setMonthOffset] = useState(0);
+  const now = new Date();
+  const view = new Date(Date.UTC(now.getFullYear(), now.getMonth() + monthOffset, 1));
+  const year = view.getUTCFullYear();
+  const month = view.getUTCMonth();
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const firstDow = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const byDay = new Map<string, { guests: string[]; events: string[] }>();
+  for (const s of stays) {
+    for (const d of stayDates(s.arrival, s.departure)) {
+      if (!byDay.has(d)) byDay.set(d, { guests: [], events: [] });
+      byDay.get(d)!.guests.push(s.guestName);
+    }
+    if (s.eventScheduled && s.eventDate) {
+      if (!byDay.has(s.eventDate)) byDay.set(s.eventDate, { guests: [], events: [] });
+      byDay.get(s.eventDate)!.events.push(s.guestName);
+    }
+  }
+
+  const monthLabel = view.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+
+  return (
+    <aside className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 lg:sticky lg:top-20">
+      <div className="mb-2 flex items-center justify-between">
+        <button
+          onClick={() => setMonthOffset((o) => o - 1)}
+          className="rounded px-2 py-0.5 text-sm hover:bg-black/5 dark:hover:bg-white/10"
+          aria-label="Previous month"
+        >
+          ‹
+        </button>
+        <h3 className="text-sm font-semibold">{monthLabel}</h3>
+        <button
+          onClick={() => setMonthOffset((o) => o + 1)}
+          className="rounded px-2 py-0.5 text-sm hover:bg-black/5 dark:hover:bg-white/10"
+          aria-label="Next month"
+        >
+          ›
+        </button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-black/40 dark:text-white/40">
+        {DOW.map((d, i) => (
+          <div key={i}>{d}</div>
+        ))}
+      </div>
+      <div className="mt-1 grid grid-cols-7 gap-1">
+        {Array.from({ length: firstDow }).map((_, i) => (
+          <div key={`pad-${i}`} />
+        ))}
+        {Array.from({ length: daysInMonth }).map((_, i) => {
+          const day = i + 1;
+          const iso = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          const info = byDay.get(iso);
+          const occupied = Boolean(info && info.guests.length > 0);
+          const hasEvent = Boolean(info && info.events.length > 0);
+          const tooltip = info
+            ? [
+                ...info.guests.map((g) => `Guest: ${g}`),
+                ...info.events.map((g) => `🎉 EVENT — ${g}`),
+              ].join("\n")
+            : "Available";
+          return (
+            <div
+              key={iso}
+              title={tooltip}
+              className={`flex h-8 cursor-default items-center justify-center rounded-md text-xs transition-colors ${
+                occupied
+                  ? "bg-[var(--accent)]/80 font-medium text-white"
+                  : "bg-black/[0.04] dark:bg-white/[0.06] text-black/60 dark:text-white/60"
+              } ${hasEvent ? "ring-2 ring-red-500" : ""} ${iso === todayIso ? "outline outline-2 outline-offset-1 outline-black/30 dark:outline-white/40" : ""}`}
+            >
+              {day}
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-black/50 dark:text-white/50">
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-3 w-3 rounded-sm bg-[var(--accent)]/80" /> Guest staying
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-3 w-3 rounded-sm ring-2 ring-red-500" /> Event day
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] text-black/40 dark:text-white/40">Hover a day to see who&apos;s at the house.</p>
+    </aside>
+  );
+}
+
 export function ManagementBoard() {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,15 +161,26 @@ export function ManagementBoard() {
   const [logDraft, setLogDraft] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const hasDataRef = useRef(false);
   const load = useCallback(async (fresh = false) => {
     try {
       const res = await fetch(fresh ? "/api/management?fresh=1" : "/api/management");
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setData(json as BoardData);
+      hasDataRef.current = true;
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load.");
+      // BUG FIX (2026-08-16, Seni: "failed to fetch upcoming & in-house
+      // stays"): a background/fresh refresh failing (e.g. a cold rebuild
+      // right after a deploy exceeding the function timeout) used to slam
+      // an error banner over a perfectly good, already-rendered board.
+      // Errors now only surface when there's nothing on screen yet.
+      if (!hasDataRef.current) {
+        setError(err instanceof Error ? err.message : "Failed to load.");
+      } else {
+        console.error("[management] background refresh failed (kept showing last good data):", err);
+      }
     }
   }, []);
 
@@ -147,7 +255,8 @@ export function ManagementBoard() {
     <div className="space-y-6">
       {error && <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-500">{error}</div>}
 
-      <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
+      <section className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
         <h2 className="text-sm font-semibold">Upcoming &amp; in-house stays ({data.stays.length})</h2>
         {data.stays.length === 0 && (
           <p className="text-sm text-black/50 dark:text-white/50">No upcoming stays on the calendar.</p>
@@ -277,6 +386,9 @@ export function ManagementBoard() {
           ))}
         </div>
       </section>
+
+      <StayCalendar stays={data.stays} />
+      </div>
 
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
         <h2 className="text-sm font-semibold">Team activity log</h2>

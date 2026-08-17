@@ -8,7 +8,7 @@ import { redisGet, redisSet } from "@/lib/redis";
 import { PROPERTY_GROUP_COOKIE, DEFAULT_PROPERTY_GROUP_ID, normalizePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 // Proxy-contact detection (2026-08-16, Seni's ask). No OwnerRez field flags
 // a channel relay/proxy, so only the reliably-detectable cases are labeled:
@@ -138,6 +138,10 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/management failed:", message);
+    // Last resort: even a failed FRESH build should serve the snapshot
+    // rather than erroring — stale stays beat a "failed to fetch" banner.
+    const cached = await redisGet(snapshotKey(orgId, groupId)).catch(() => null);
+    if (cached) return NextResponse.json(JSON.parse(cached));
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }
