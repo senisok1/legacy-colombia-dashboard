@@ -138,7 +138,20 @@ const TEAM_HIDDEN_LABELS = new Set(["CRM", "Messaging", "Marketing", "AI Activit
 function PropertySwitcher({ activeGroupId }: { activeGroupId: string }) {
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  // position:fixed dropdown, same fix as the nav group panels: the header's
+  // overflow handling clips position:absolute children (menu was in the DOM
+  // but invisible — confirmed live 2026-08-16).
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
   const active = propertyGroupById(activeGroupId);
+
+  function toggle() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setMenuPos({ top: r.bottom + 6, left: r.left });
+    }
+    setOpen((o) => !o);
+  }
 
   async function choose(groupId: string) {
     if (groupId === activeGroupId || switching) {
@@ -162,7 +175,8 @@ function PropertySwitcher({ activeGroupId }: { activeGroupId: string }) {
   return (
     <div className="relative shrink-0 whitespace-nowrap">
       <button
-        onClick={() => setOpen((o) => !o)}
+        ref={btnRef}
+        onClick={toggle}
         className="font-semibold tracking-tight flex items-center gap-2 hover:opacity-80"
         title="Switch property"
       >
@@ -170,10 +184,13 @@ function PropertySwitcher({ activeGroupId }: { activeGroupId: string }) {
         {switching ? "Switching…" : active.label}
         <span className="text-xs opacity-60">▾</span>
       </button>
-      {open && (
+      {open && menuPos && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute left-0 top-full z-50 mt-1 min-w-[12rem] rounded-lg border border-black/10 dark:border-white/15 bg-white dark:bg-neutral-900 p-1 shadow-lg">
+          <div
+            style={{ position: "fixed", top: menuPos.top, left: menuPos.left }}
+            className="z-50 min-w-[12rem] rounded-lg border border-black/10 dark:border-white/15 bg-white dark:bg-neutral-900 p-1 shadow-lg"
+          >
             {PROPERTY_GROUPS.map((g) => (
               <button
                 key={g.id}
