@@ -24,6 +24,10 @@ export default async function DashboardPage() {
     getGuests(session?.organizationId).catch(() => []),
   ]);
   const guestsById = buildGuestsById(guests);
+  // READ_ONLY team logins get an ops-focused dashboard: no revenue boxes,
+  // no Total column, no MTD money stats (2026-08-16, Seni's ask). Admins
+  // see everything.
+  const isTeam = session?.role === "READ_ONLY";
   const withNames = (list: typeof bookings) =>
     list.map((b) => ({ ...b, raw: undefined, guestName: resolveGuestName(b, guestsById) || b.guestName }));
   const stats = summaryStats(bookings);
@@ -55,44 +59,50 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard
-          label="Revenue (YTD)"
-          value={<Money amount={stats.ytdRevenue} />}
-          subLabel="Net"
-          subValue={<Money amount={stats.ytdNetRevenue} />}
-          hint={`${stats.ytdBookings} bookings · gross / net after channel fees`}
-        />
+        {!isTeam && (
+          <StatCard
+            label="Revenue (YTD)"
+            value={<Money amount={stats.ytdRevenue} />}
+            subLabel="Net"
+            subValue={<Money amount={stats.ytdNetRevenue} />}
+            hint={`${stats.ytdBookings} bookings · gross / net after channel fees`}
+          />
+        )}
         <StatCard label="Occupancy (90d)" value={`${stats.occupancyRate90d}%`} hint="Booked nights / available nights" />
-        <StatCard
-          label="Avg nightly rate"
-          value={<Money amount={stats.avgNightlyRate} />}
-          subLabel="Net"
-          subValue={<Money amount={stats.avgNetNightlyRate} />}
-          hint="Year to date · gross / net"
-        />
+        {!isTeam && (
+          <StatCard
+            label="Avg nightly rate"
+            value={<Money amount={stats.avgNightlyRate} />}
+            subLabel="Net"
+            subValue={<Money amount={stats.avgNetNightlyRate} />}
+            hint="Year to date · gross / net"
+          />
+        )}
         <StatCard label="Avg length of stay" value={`${stats.avgLengthOfStay} nights`} hint="Year to date" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
           <h2 className="text-sm font-semibold mb-3">Currently checked in ({stats.currentGuests.length})</h2>
-          <BookingsTable bookings={withNames(stats.currentGuests)} emptyLabel="No guests on-property right now." />
+          <BookingsTable bookings={withNames(stats.currentGuests)} emptyLabel="No guests on-property right now." showTotal={!isTeam} />
 
           <h2 className="text-sm font-semibold mt-6 mb-3">Upcoming arrivals</h2>
-          <UpcomingArrivals bookings={allUpcoming} />
+          <UpcomingArrivals bookings={allUpcoming} showTotal={!isTeam} />
         </div>
 
         <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-          <OccupancyCalendar bookings={bookings} />
+          <OccupancyCalendar bookings={bookings} showFinancials={!isTeam} />
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-          <h2 className="text-sm font-semibold mb-3">Revenue by channel (YTD) — gross &amp; net</h2>
-          <RevenueBySourceChart breakdown={revenueByChannel} />
+      {!isTeam && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-1 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
+            <h2 className="text-sm font-semibold mb-3">Revenue by channel (YTD) — gross &amp; net</h2>
+            <RevenueBySourceChart breakdown={revenueByChannel} />
+          </div>
         </div>
-      </div>
+      )}
 
     </div>
   );

@@ -125,7 +125,15 @@ function Badge({ count, active }: { count: number; active: boolean }) {
   );
 }
 
-export function NavBar() {
+// Tabs hidden from READ_ONLY team logins (2026-08-16, Seni's ask) — team
+// members see Dashboard, Management, Bill Pay, and Settings only. Admins
+// keep everything. Display-layer only; the real enforcement is the proxy's
+// role gate (a team member typing /messaging still can't change anything).
+const TEAM_HIDDEN_LABELS = new Set(["CRM", "Messaging", "Marketing", "AI Activity", "Reports"]);
+
+export function NavBar({ role }: { role?: string }) {
+  const visibleEntries =
+    role === "READ_ONLY" ? navEntries.filter((e) => !TEAM_HIDDEN_LABELS.has(e.label)) : navEntries;
   const pathname = usePathname();
   const router = useRouter();
   const [pendingCount, setPendingCount] = useState(0);
@@ -312,7 +320,7 @@ export function NavBar() {
             visible, so this overflow-x-auto can stay exactly as it was for
             the narrow-viewport horizontal-scroll fallback. */}
         <nav ref={navRef} className="flex items-center gap-1 overflow-x-auto">
-          {navEntries.map((entry) => {
+          {visibleEntries.map((entry) => {
             if (entry.type === "link") {
               const active = pathname?.startsWith(entry.href);
               const count = badgeCountForHref(entry.href);

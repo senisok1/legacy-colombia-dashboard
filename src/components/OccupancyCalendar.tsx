@@ -24,7 +24,8 @@ const OCCUPIED_STATUSES = new Set(["Booked", "Checked In", "Checked Out", "Hold"
 // without letting the nav scroll on forever.
 const MONTHS_RANGE = 12;
 
-export function OccupancyCalendar({ bookings }: { bookings: Booking[] }) {
+// showFinancials=false hides Revenue MTD + Avg nightly rate (team dashboards).
+export function OccupancyCalendar({ bookings, showFinancials = true }: { bookings: Booking[]; showFinancials?: boolean }) {
   // Aliased to avoid clashing with date-fns's own `format` import above.
   const { format: formatMoney } = useCurrency();
   const today = startOfDay(new Date());
@@ -172,13 +173,17 @@ export function OccupancyCalendar({ bookings }: { bookings: Booking[] }) {
       </div>
 
       <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-black/10 dark:border-white/10">
-        <MiniStat label="Revenue MTD" value={formatMoney(monthRevenue)} subValue={`Net ${formatMoney(monthNetRevenue)}`} />
+        {showFinancials && (
+          <MiniStat label="Revenue MTD" value={formatMoney(monthRevenue)} subValue={`Net ${formatMoney(monthNetRevenue)}`} />
+        )}
         <MiniStat label="Occupancy MTD" value={`${occupancyPct}%`} />
-        <MiniStat
-          label="Avg nightly rate"
-          value={formatMoney(avgNightlyRate)}
-          subValue={`Net ${formatMoney(avgNetNightlyRate)}`}
-        />
+        {showFinancials && (
+          <MiniStat
+            label="Avg nightly rate"
+            value={formatMoney(avgNightlyRate)}
+            subValue={`Net ${formatMoney(avgNetNightlyRate)}`}
+          />
+        )}
         <MiniStat label="Avg length of stay" value={`${Math.round(avgLengthOfStay * 10) / 10} nights`} />
       </div>
     </div>

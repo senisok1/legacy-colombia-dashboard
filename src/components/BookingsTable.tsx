@@ -13,7 +13,8 @@ const statusColors: Record<string, string> = {
   Unknown: "bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
 };
 
-export function BookingsTable({ bookings, emptyLabel = "No bookings to show." }: { bookings: Booking[]; emptyLabel?: string }) {
+// showTotal=false hides the money column (READ_ONLY team dashboards, 2026-08-16).
+export function BookingsTable({ bookings, emptyLabel = "No bookings to show.", showTotal = true }: { bookings: Booking[]; emptyLabel?: string; showTotal?: boolean }) {
   if (bookings.length === 0) {
     return <p className="text-sm text-black/50 dark:text-white/50 py-6 text-center">{emptyLabel}</p>;
   }
@@ -29,7 +30,7 @@ export function BookingsTable({ bookings, emptyLabel = "No bookings to show." }:
             <th className="py-2 pr-4 font-medium">Nights</th>
             <th className="py-2 pr-4 font-medium">Source</th>
             <th className="py-2 pr-4 font-medium">Status</th>
-            <th className="py-2 pr-4 font-medium text-right">Total</th>
+            {showTotal && <th className="py-2 pr-4 font-medium text-right">Total</th>}
           </tr>
         </thead>
         <tbody>
@@ -45,9 +46,11 @@ export function BookingsTable({ bookings, emptyLabel = "No bookings to show." }:
                   {b.status}
                 </span>
               </td>
-              <td className="py-2 pr-4 text-right">
-                <Money amount={b.totalAmount} />
-              </td>
+              {showTotal && (
+                <td className="py-2 pr-4 text-right">
+                  <Money amount={b.totalAmount} />
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

@@ -10,12 +10,12 @@ import { BookingsTable } from "@/components/BookingsTable";
 // the server component; this just controls how many are visible.
 const PAGE_SIZE = 10;
 
-export function UpcomingArrivals({ bookings }: { bookings: Booking[] }) {
+export function UpcomingArrivals({ bookings, showTotal = true }: { bookings: Booking[]; showTotal?: boolean }) {
   const [visible, setVisible] = useState(PAGE_SIZE);
 
   return (
     <div>
-      <BookingsTable bookings={bookings.slice(0, visible)} emptyLabel="No upcoming arrivals." />
+      <BookingsTable bookings={bookings.slice(0, visible)} emptyLabel="No upcoming arrivals." showTotal={showTotal} />
       {bookings.length > visible && (
         <div className="mt-3 text-center">
           <button

@@ -60,6 +60,9 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const { theme, secondaryCurrency } = await resolveOrgSettings();
+  // Role drives nav visibility: READ_ONLY team logins get a simplified nav
+  // (no CRM/Messaging/Marketing/AI Activity/Reports — 2026-08-16 Seni's ask).
+  const session = await getServerSession();
   return (
     <html lang="en" className="h-full antialiased" data-theme={theme.id}>
       {/* No hardcoded bg-neutral-50/dark:bg-neutral-950 here anymore — body's
@@ -70,7 +73,7 @@ export default async function RootLayout({
       <body className="min-h-full flex flex-col">
         <PwaRegister />
         <CurrencyProvider secondaryCurrency={secondaryCurrency}>
-          <NavBar />
+          <NavBar role={session?.role} />
           <StatusBanner />
           <main className="flex-1">{children}</main>
         </CurrencyProvider>
