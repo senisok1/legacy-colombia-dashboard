@@ -60,14 +60,13 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
     });
   }
 
-  // Three day states: booked (blue), past-and-unbooked (red — a night that's
-  // already gone by with nobody in it), and available (neutral — anything
-  // today or in the future that isn't booked yet). Today itself counts as
-  // "available", not "not booked" — the day isn't over.
-  type DayState = "booked" | "notBooked" | "available";
-  function stateForDay(day: Date, booking: Booking | undefined): DayState {
-    if (booking) return "booked";
-    return isBefore(day, today) ? "notBooked" : "available";
+  // Two day states (simplified 2026-08-16, Seni's ask): booked (blue) and
+  // available (neutral). The old red "past night nobody stayed" state was
+  // removed — an empty past night reads as available, which makes the
+  // months of real booking history far easier to scan at a glance.
+  type DayState = "booked" | "available";
+  function stateForDay(_day: Date, booking: Booking | undefined): DayState {
+    return booking ? "booked" : "available";
   }
 
   const canGoBack = monthOffset > -MONTHS_RANGE;
@@ -137,22 +136,20 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
         {days.map((day) => {
           const booking = bookingForDay(day);
           const state = stateForDay(day, booking);
+          // Hover tooltip matches the Management calendar's wording
+          // (2026-08-16): "Guest: <name>" plus the channel it came from.
           const label =
             state === "booked"
-              ? `${booking!.guestName ?? "Guest"} (${booking!.source})`
-              : state === "notBooked"
-                ? "Not booked"
-                : "Available";
+              ? `Guest: ${booking!.guestName ?? "Guest"}${booking!.source ? ` (${booking!.source})` : ""}`
+              : "Available";
           return (
             <div
               key={day.toISOString()}
               title={label}
-              className={`aspect-square rounded-md text-xs flex items-center justify-center border ${
+              className={`aspect-square cursor-default rounded-md text-xs flex items-center justify-center border transition-colors ${
                 state === "booked"
                   ? "bg-blue-500/80 text-white border-blue-600"
-                  : state === "notBooked"
-                    ? "bg-red-500/80 text-white border-red-600"
-                    : "bg-black/[0.03] text-black/50 border-transparent dark:bg-white/5 dark:text-white/40"
+                  : "bg-black/[0.03] text-black/50 border-transparent dark:bg-white/5 dark:text-white/40"
               }`}
             >
               {format(day, "d")}
@@ -165,10 +162,10 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
           <span className="inline-block w-3 h-3 rounded-sm bg-blue-500/80" /> Booked
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-3 rounded-sm bg-red-500/80" /> Not booked
-        </span>
-        <span className="flex items-center gap-1.5">
           <span className="inline-block w-3 h-3 rounded-sm bg-black/[0.06] dark:bg-white/10" /> Available
+        </span>
+        <span className="w-full text-[11px] text-black/40 dark:text-white/40">
+          Hover a day to see who&apos;s at the house.
         </span>
       </div>
 

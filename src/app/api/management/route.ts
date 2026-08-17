@@ -74,7 +74,21 @@ async function buildBoard(orgId: string, groupId: string) {
   const notes = activities.filter((a) => a.kind === "note" && a.bookingId !== null);
   const log = activities.filter((a) => a.kind === "activity");
 
+  // Calendar occupancy needs PAST stays too (2026-08-16, Seni: "so that I
+  // can see what days were actually booked") — the stays list above is
+  // deliberately upcoming/in-house only. Minimal fields, ~12 months back.
+  const calendarWindowMs = Date.now() - 365 * 24 * 60 * 60 * 1000;
+  const calendarStays = bookings
+    .filter((b) => !b.isBlock && b.arrival && b.departure && new Date(b.departure).getTime() >= calendarWindowMs)
+    .map((b) => ({
+      bookingId: b.id,
+      guestName: resolveGuestName(b, guestsById) || "Guest",
+      arrival: b.arrival,
+      departure: b.departure,
+    }));
+
   return {
+    calendarStays,
     stays: upcoming.map((b) => ({
       bookingId: b.id,
       guestName: resolveGuestName(b, guestsById) || "Guest",

@@ -42,7 +42,8 @@ function stayDates(arrival?: string, departure?: string): string[] {
   return out;
 }
 type LogEntry = { id: string; body: string; author: string; at: string };
-type BoardData = { stays: Stay[]; activityLog: LogEntry[]; viewerRole?: string };
+type CalendarStay = { bookingId: number; guestName: string; arrival?: string; departure?: string };
+type BoardData = { stays: Stay[]; calendarStays?: CalendarStay[]; activityLog: LogEntry[]; viewerRole?: string };
 
 function fmtDate(iso?: string): string {
   if (!iso) return "TBD";
@@ -62,7 +63,7 @@ const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 /** Stay & event calendar (2026-08-16, Seni's ask): month grid to the right
  * of the stays list. Occupied nights are filled, event days get a red ring,
  * and hovering any day shows the guest name(s) via the native tooltip. */
-function StayCalendar({ stays }: { stays: Stay[] }) {
+function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: CalendarStay[] }) {
   const [monthOffset, setMonthOffset] = useState(0);
   const now = new Date();
   const view = new Date(Date.UTC(now.getFullYear(), now.getMonth() + monthOffset, 1));
@@ -73,10 +74,18 @@ function StayCalendar({ stays }: { stays: Stay[] }) {
   const todayIso = new Date().toISOString().slice(0, 10);
 
   const byDay = new Map<string, { guests: string[]; events: string[] }>();
+  // Occupancy comes from calendarStays (past + future) so past booked
+  // nights stay blue; events come from the upcoming/in-house stays list.
+  for (const cs of calendarStays) {
+    for (const d of stayDates(cs.arrival, cs.departure)) {
+      if (!byDay.has(d)) byDay.set(d, { guests: [], events: [] });
+      if (!byDay.get(d)!.guests.includes(cs.guestName)) byDay.get(d)!.guests.push(cs.guestName);
+    }
+  }
   for (const s of stays) {
     for (const d of stayDates(s.arrival, s.departure)) {
       if (!byDay.has(d)) byDay.set(d, { guests: [], events: [] });
-      byDay.get(d)!.guests.push(s.guestName);
+      if (!byDay.get(d)!.guests.includes(s.guestName)) byDay.get(d)!.guests.push(s.guestName);
     }
     if (s.eventScheduled && s.eventDate) {
       if (!byDay.has(s.eventDate)) byDay.set(s.eventDate, { guests: [], events: [] });
@@ -120,22 +129,18 @@ function StayCalendar({ stays }: { stays: Stay[] }) {
           const info = byDay.get(iso);
           const occupied = Boolean(info && info.guests.length > 0);
           const hasEvent = Boolean(info && info.events.length > 0);
-          const isPast = iso < todayIso;
-          const tooltip = info
+          const tooltip = info && (info.guests.length > 0 || info.events.length > 0)
             ? [
                 ...info.guests.map((g) => `Guest: ${g}`),
                 ...info.events.map((g) => `🎉 EVENT — ${g}`),
               ].join("\n")
-            : isPast
-              ? "Not booked"
-              : "Available";
-          // Same palette as the Dashboard's occupancy calendar: blue =
-          // booked, red = past day that wasn't booked, gray = available.
+            : "Available";
+          // Blue = booked (past or future, so real booking history shows);
+          // gray = available. Deliberately NO red here (2026-08-16, Seni's
+          // ask) — a past unbooked night reads as available, not an alert.
           const cellColor = occupied
             ? "bg-blue-500/80 font-medium text-white"
-            : isPast
-              ? "bg-red-500/80 text-white"
-              : "bg-black/[0.06] dark:bg-white/10 text-black/60 dark:text-white/60";
+            : "bg-black/[0.06] dark:bg-white/10 text-black/60 dark:text-white/60";
           return (
             <div
               key={iso}
@@ -150,9 +155,6 @@ function StayCalendar({ stays }: { stays: Stay[] }) {
       <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-black/50 dark:text-white/50">
         <span className="flex items-center gap-1">
           <span className="inline-block h-3 w-3 rounded-sm bg-blue-500/80" /> Booked
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-sm bg-red-500/80" /> Not booked
         </span>
         <span className="flex items-center gap-1">
           <span className="inline-block h-3 w-3 rounded-sm bg-black/[0.06] dark:bg-white/10" /> Available
@@ -399,7 +401,7 @@ export function ManagementBoard() {
         </div>
       </section>
 
-      <StayCalendar stays={data.stays} />
+      <StayCalendar stays={data.stays} calendarStays={data.calendarStays ?? []} />
       </div>
 
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
