@@ -63,8 +63,18 @@ async function buildBoard(orgId: string, groupId: string) {
   const opsByBookingId = await listBookingOps(orgId).catch(() => new Map<number, never>());
 
   const todayMs = Date.now() - 24 * 60 * 60 * 1000;
+  // BUG FIX (2026-08-16, Seni spotted a duplicate "Cesia Alvarado" on Legacy
+  // Alva): cancelled bookings were never filtered out here (the Dashboard
+  // tables always did). A guest who rebooks — e.g. Airbnb -> direct — leaves
+  // a CANCELLED original alongside the live one, which reads as a duplicate.
   const upcoming = bookings
-    .filter((b) => !b.isBlock && b.departure && new Date(b.departure).getTime() >= todayMs)
+    .filter(
+      (b) =>
+        !b.isBlock &&
+        b.status !== "Cancelled" &&
+        b.departure &&
+        new Date(b.departure).getTime() >= todayMs
+    )
     .sort((a, b) => new Date(a.arrival || 0).getTime() - new Date(b.arrival || 0).getTime());
 
   const extrasByBookingId = new Set(
@@ -79,7 +89,14 @@ async function buildBoard(orgId: string, groupId: string) {
   // deliberately upcoming/in-house only. Minimal fields, ~12 months back.
   const calendarWindowMs = Date.now() - 365 * 24 * 60 * 60 * 1000;
   const calendarStays = bookings
-    .filter((b) => !b.isBlock && b.arrival && b.departure && new Date(b.departure).getTime() >= calendarWindowMs)
+    .filter(
+      (b) =>
+        !b.isBlock &&
+        b.status !== "Cancelled" &&
+        b.arrival &&
+        b.departure &&
+        new Date(b.departure).getTime() >= calendarWindowMs
+    )
     .map((b) => ({
       bookingId: b.id,
       guestName: resolveGuestName(b, guestsById) || "Guest",

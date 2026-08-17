@@ -225,7 +225,12 @@ async function fetchAllThreadSummaries(organizationId?: string, limit: number = 
   ]);
   const guestsById = buildGuestsById(guests);
 
-  const candidates = bookings.filter((b) => !b.isBlock && b.threadIds.length > 0 && isRecentEnough(b));
+  // Cancelled bookings excluded 2026-08-16 (same fix as the Management
+  // board): a guest who rebooks leaves a cancelled original behind, which
+  // shows up as a duplicate conversation for the same person + dates.
+  const candidates = bookings.filter(
+    (b) => !b.isBlock && b.status !== "Cancelled" && b.threadIds.length > 0 && isRecentEnough(b)
+  );
 
   const base = candidates.map((booking) => ({
     threadId: booking.threadIds[0],
