@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { sumByCurrency, formatCurrencyTotals } from "@/lib/currencyTotals";
 
 // Team Expense Request tab (2026-08-17, Seni's ask). Anyone on the team can
 // raise a request; the owner ticks "Owner approved"; whoever buys it ticks
@@ -208,7 +209,16 @@ export function TeamExpenseRequests() {
   const done = requests.filter((r) => r.completed);
   const waiting = open.filter((r) => !r.approved && !r.declined);
   const shown = tab === "open" ? open : done;
-  const pendingTotal = waiting.reduce((s, r) => s + (r.estimatedAmount ?? 0), 0);
+  // BUG FIX (2026-08-17 audit): this summed estimatedAmount across rows in
+  // DIFFERENT currencies and rendered the result as USD. The submission form
+  // offers COP, and individual rows already respected r.currency — only this
+  // rollup dropped it, so one 500,000 COP request (~$125) made the banner
+  // read "$500,125" on the screen used to approve spending.
+  const pendingTotals = sumByCurrency(
+    waiting,
+    (r) => r.estimatedAmount,
+    (r) => r.currency
+  );
 
   return (
     <div className="space-y-4">
@@ -231,7 +241,9 @@ export function TeamExpenseRequests() {
         {waiting.length > 0 && (
           <span className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-sm text-amber-700 dark:text-amber-400">
             {waiting.length} waiting on the owner
-            {pendingTotal > 0 && <> · {money(pendingTotal, "USD")} estimated</>}
+            {pendingTotals.length > 0 && (
+              <> · {formatCurrencyTotals(pendingTotals, (a, c) => money(a, c))} estimated</>
+            )}
           </span>
         )}
 

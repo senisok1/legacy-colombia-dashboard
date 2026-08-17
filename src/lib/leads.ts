@@ -94,14 +94,24 @@ export async function createLead(input: {
   notes?: string;
   nextAction?: string;
   nextActionDueAt?: string;
+  /** Which property this lead belongs to (2026-08-17 scoping fix). The
+   * INSERT below never wrote property_group_id, so every lead created since
+   * migration 0030 added the column landed as NULL — and propertyGroupFilter()
+   * reads NULL as "belongs to the default group", so an Alva/Pompano/Miami/
+   * Beach House inquiry appeared in Legacy Colombia's pipeline instead of its
+   * own. Callers pass the viewer's active group so listLeads() can scope it.
+   *
+   * OPTIONAL so any caller that isn't request-scoped still compiles; today
+   * api/leads/route.ts POST is the only caller in the app. */
+  propertyGroupId?: string;
 }, organizationId?: string): Promise<Lead> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const row = await queryOne<LeadRow>(
     `insert into leads
        (organization_id, guest_id, booking_id, property_id, guest_name, contact_email, contact_phone, source,
         desired_arrival, desired_departure, party_size, estimated_value_cents, notes,
-        next_action, next_action_due_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        next_action, next_action_due_at, property_group_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      returning *`,
     [
       orgId,
@@ -119,6 +129,7 @@ export async function createLead(input: {
       input.notes ?? null,
       input.nextAction ?? null,
       input.nextActionDueAt ?? null,
+      input.propertyGroupId ?? null,
     ]
   );
   if (!row) throw new Error("Failed to create lead.");

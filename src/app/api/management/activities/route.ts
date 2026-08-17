@@ -3,6 +3,8 @@ import { createTeamActivity } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { translateText } from "@/lib/translate";
+import { getBookings } from "@/lib/ownerrez";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +37,44 @@ export async function POST(req: NextRequest) {
     // entries read "Gabriel" instead of an email address.
     const user = await getUserByEmail(session.email).catch(() => null);
 
+    // Property scoping + bookingId authorisation (2026-08-17 audit).
+    //
+    // THE BUG: this route accepted ANY numeric bookingId from the request body
+    // and wrote a note against it, with no check that the booking belongs to
+    // the caller's property. OwnerRez booking ids are small sequential
+    // integers, so a team member limited to Legacy Colombia could attach notes
+    // to another property's stays just by changing a number in the payload —
+    // and those notes then render on that property's Management board next to
+    // the guest's name and contact details.
+    //
+    // Group resolution matches src/app/api/management/route.ts exactly:
+    // effectivePropertyGroupId() re-checks the cookie against the user's OWN
+    // propertyAccess, so a forged cookie can't widen access either. getBookings
+    // is already group-scoped and cached (unstable_cache, 60s), so this costs
+    // nothing on the hot path.
+    const groupId = effectivePropertyGroupId(
+      req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+      user?.propertyAccess
+    );
+    if (bookingId !== null) {
+      // Fail CLOSED: if the booking list can't be loaded we cannot prove the
+      // stay is this property's, and the whole point of the check is that an
+      // unverified id must not be written.
+      const bookings = await getBookings(session.organizationId, groupId).catch(() => null);
+      if (!bookings) {
+        return NextResponse.json(
+          { error: "Couldn't verify which stay this belongs to just now. Please try again in a moment." },
+          { status: 503 }
+        );
+      }
+      if (!bookings.some((b) => b.id === bookingId)) {
+        return NextResponse.json(
+          { error: "That stay isn't part of the property you're viewing." },
+          { status: 403 }
+        );
+      }
+    }
+
     // Language support (2026-08-16, Seni's ask): a team member set up in
     // Spanish/Portuguese writes in their own language; we store the English
     // translation as `body` (what an English-reading admin sees) plus the
@@ -61,6 +101,10 @@ export async function POST(req: NextRequest) {
 
     const activity = await createTeamActivity({
       organizationId: session.organizationId,
+      // Stamps the row's property (migration 0035) so the general activity
+      // log stops being shared across all five properties — see
+      // src/lib/teamActivities.ts's listTeamActivities.
+      propertyGroupId: groupId,
       bookingId,
       authorEmail: session.email,
       authorName: user?.name ?? null,

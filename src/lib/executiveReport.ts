@@ -209,8 +209,18 @@ export async function buildExecutiveReport(
 
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  // BUG FIX (2026-08-17 audit): this was the ONE revenue reduction in the
+  // codebase missing isRevenueCounting, so every CANCELLED reservation
+  // arriving this month added its full total to "Revenue MTD" — and any
+  // iCal block carrying a non-zero amount did too (Legacy Pompano is 233
+  // blocks out of 246 "bookings"). Cancellation rates here run 9.9%
+  // (Colombia) to 17.6% (Alva), so the overstatement was material, silent,
+  // and read daily in the email, the WhatsApp digest and the AI COO
+  // narrative. The revenueTodayGross block twelve lines below always had
+  // the gate; this one was simply missed.
   const mtdBookings = bookings.filter(
-    (b) => b.arrival && new Date(b.arrival) >= monthStart && new Date(b.arrival) <= now
+    (b) =>
+      isRevenueCounting(b) && b.arrival && new Date(b.arrival) >= monthStart && new Date(b.arrival) <= now
   );
   const revenueMtdGross = mtdBookings.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
 

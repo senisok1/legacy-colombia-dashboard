@@ -6,6 +6,8 @@ import { formatShortDate } from "@/lib/format";
 import { useCurrency } from "@/components/CurrencyProvider";
 import { convertAmountCents } from "@/lib/currencyMath";
 
+import { sumByCurrency, formatCurrencyTotals } from "@/lib/currencyTotals";
+
 /** Converts a native-currency amount into the given display currency using a
  * USD/COP rate, falling back to the original amount if no rate is available
  * yet or the pair isn't convertible (so a still-loading rate never makes the
@@ -86,19 +88,40 @@ export function BillPayExplorer({
     () => bills.filter((b) => ["pending_review", "flagged_duplicate", "flagged_anomaly", "approved_for_payment"].includes(b.status)),
     [bills]
   );
+  // BUG FIX (2026-08-17 audit): when the FX rate hadn't loaded yet — or the
+  // /api/exchange-rate endpoint fails — toDisplayAmount() returns the amount
+  // UNCONVERTED, so real COP bills (e.g. Nukak at 3,777,296 COP) were summed
+  // raw into a USD-labelled total and the banner read "$3,777,446" instead
+  // of "~$1,094". The old comment framed the fallback as protecting against
+  // dropped bills, but it substituted a 4,000x magnitude error for a missing
+  // one. Now: convert only when every bill can actually be converted;
+  // otherwise fall back to honest per-currency totals.
+  const canConvertAll = useMemo(
+    () => openBills.every((b) => b.currency === displayCurrency) || Boolean(rate?.usdToTarget),
+    [openBills, displayCurrency, rate]
+  );
   const openTotalAmount = useMemo(() => {
+    if (!canConvertAll) return null;
     return openBills.reduce(
       (sum, b) => sum + toDisplayAmount(b.amountCents / 100, b.currency, displayCurrency, rate?.usdToTarget ?? null),
       0
     );
-  }, [openBills, displayCurrency, rate]);
+  }, [openBills, displayCurrency, rate, canConvertAll]);
+  const openTotalsByCurrency = useMemo(
+    () => sumByCurrency(openBills, (b) => b.amountCents / 100, (b) => b.currency),
+    [openBills]
+  );
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-xs text-black/40 dark:text-white/40">
-          {openBills.length === 0 ? "Nothing" : format(openTotalAmount, displayCurrency)} still open across{" "}
-          {openBills.length} bill(s)
+          {openBills.length === 0
+            ? "Nothing"
+            : openTotalAmount !== null
+              ? format(openTotalAmount, displayCurrency)
+              : formatCurrencyTotals(openTotalsByCurrency, (a, c) => format(a, c))}{" "}
+          still open across {openBills.length} bill(s)
         </p>
         <button
           onClick={() => setShowForm((s) => !s)}

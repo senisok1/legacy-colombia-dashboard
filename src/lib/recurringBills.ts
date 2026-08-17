@@ -1,4 +1,5 @@
 import { query, queryOne } from "./db";
+import { sumByCurrency, type CurrencyTotal } from "./currencyTotals";
 
 // Monthly recurring bills checklist (2026-08-17, Seni's ask). See
 // db/migrations/0027_recurring_bills.sql for why "paid" is modelled as the
@@ -97,21 +98,37 @@ export function periodLabel(period: string): string {
 }
 
 /** Every 'YYYY-MM' from `from` through `to`, inclusive. Capped at 24 so a
- * bad start_period can never produce an unbounded list. */
+ * bad start_period can never produce an unbounded list.
+ *
+ * BUG FIX (2026-08-17 audit): the cap used to stop the loop after 24 entries
+ * counting FORWARD from `from`, which silently dropped the far end of the
+ * range — the CURRENT month. A bill whose start_period was 24+ months ago
+ * (any bill set up two years ago, or one created with a mistyped start year
+ * like "2019-01") produced lines only for 2019, never for today, so it
+ * vanished from the Bill Pay board entirely and could not be ticked paid.
+ * The board looked complete while a real monthly bill was missing from it.
+ *
+ * The cap now keeps the MOST RECENT 24 periods instead of the first 24: the
+ * current month is always present, and it's the oldest carryovers — the ones
+ * least likely to still be actionable — that get trimmed. */
 export function periodsBetween(from: string, to: string): string[] {
   const [fy, fm] = from.split("-").map(Number);
   const [ty, tm] = to.split("-").map(Number);
   if (!fy || !fm || !ty || !tm) return [to];
+  const MAX_PERIODS = 24;
+  // Month indices rather than a while-loop, so the cap is applied to the START
+  // of the range up front. Looping and trimming afterwards would still need an
+  // iteration guard, and any such guard would re-introduce exactly the bug
+  // above for a nonsense start_period (year 1900 → guard trips → current month
+  // dropped again). This way the loop runs at most MAX_PERIODS times no matter
+  // what start_period contains, and `to` is always the final entry.
+  const fromIdx = fy * 12 + (fm - 1);
+  const toIdx = ty * 12 + (tm - 1);
+  if (toIdx < fromIdx) return [to];
+  const startIdx = Math.max(fromIdx, toIdx - (MAX_PERIODS - 1));
   const out: string[] = [];
-  let y = fy;
-  let m = fm;
-  while ((y < ty || (y === ty && m <= tm)) && out.length < 24) {
-    out.push(`${y}-${String(m).padStart(2, "0")}`);
-    m += 1;
-    if (m > 12) {
-      m = 1;
-      y += 1;
-    }
+  for (let idx = startIdx; idx <= toIdx; idx++) {
+    out.push(`${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, "0")}`);
   }
   return out.length > 0 ? out : [to];
 }
@@ -255,7 +272,10 @@ export type RecurringBillsBoard = {
   /** This month's lines, plus any unpaid lines rolled forward from earlier. */
   dues: BillDue[];
   outstandingCount: number;
-  outstandingTotal: number;
+  /** Outstanding money owed, split per currency — NOT one number. Bills can
+   * be in COP and USD at the same time; see the 2026-08-17 fix note where
+   * this is computed. */
+  outstandingTotals: CurrencyTotal[];
   /** True when every line (this month + carryovers) is ticked. */
   allPaid: boolean;
   /** Ready-made banner text, e.g. "All July bills paid". */
@@ -289,8 +309,19 @@ export async function getRecurringBillsBoard(
 
   const dues: BillDue[] = [];
   for (const b of active) {
+    // BUG FIX (2026-08-17 audit): this used to CLAMP a future start_period
+    // down to the current month —
+    //     const start = b.startPeriod > period ? period : b.startPeriod;
+    // — which meant a bill that doesn't start until, say, October appeared as
+    // due RIGHT NOW the moment it was created. The owner sees a bill demanding
+    // payment months before the contract begins, and ticking it paid writes a
+    // payment row for a month the bill didn't exist in.
+    //
+    // A bill simply must not appear before its start period, so skip it
+    // entirely until the calendar reaches that month.
+    if (b.startPeriod > period) continue;
     // Never look further back than the bill's own start month.
-    const start = b.startPeriod > period ? period : b.startPeriod;
+    const start = b.startPeriod;
     for (const p of periodsBetween(start, period)) {
       const hit = paidKeys.get(`${b.id}:${p}`);
       const isCurrent = p === period;
@@ -320,7 +351,19 @@ export async function getRecurringBillsBoard(
   );
 
   const outstanding = dues.filter((d) => !d.paid);
-  const outstandingTotal = outstanding.reduce((sum, d) => sum + (d.amount ?? 0), 0);
+  // BUG FIX (2026-08-17 audit): this used to be a single
+  //     outstanding.reduce((sum, d) => sum + (d.amount ?? 0), 0)
+  // summed across bills whose `currency` differs — the board renders each
+  // line's own currency correctly, but the rollup threw it away, and
+  // RecurringBills.tsx then printed the number as USD. One COP utility bill
+  // (say 800,000 COP ≈ $200) made "outstanding" read $800,450 instead of
+  // ~$650. See src/lib/currencyTotals.ts for the full rationale on why we
+  // group by currency instead of converting.
+  const outstandingTotals = sumByCurrency(
+    outstanding,
+    (d) => d.amount,
+    (d) => d.currency
+  );
   const allPaid = dues.length > 0 && outstanding.length === 0;
 
   const summary = allPaid
@@ -338,7 +381,7 @@ export async function getRecurringBillsBoard(
     periodLabel: periodLabel(period),
     dues,
     outstandingCount: outstanding.length,
-    outstandingTotal,
+    outstandingTotals,
     allPaid,
     summary,
     bills,

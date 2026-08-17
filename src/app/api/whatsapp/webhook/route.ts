@@ -234,8 +234,54 @@ async function recordStatusCallbacks(body: unknown): Promise<void> {
   }
 }
 
+// SECURITY FIX (2026-08-17 audit). This POST handler previously did no
+// payload verification at all: authorization was isFromAuthorizedSender(
+// msg.from), read straight out of attacker-controlled JSON. A forged POST
+// claiming to come from Seni's number could approve a pending AI draft —
+// which SENDS A REAL MESSAGE TO A REAL GUEST — or trigger a refund-adjacent
+// bill-forward flow. The GET handler has always verified hub.verify_token;
+// only POST was unprotected.
+//
+// Meta signs every webhook POST with HMAC-SHA256 over the RAW body using the
+// app secret, in the X-Hub-Signature-256 header. Verifying it is the only
+// way to know a payload actually came from Meta.
+//
+// Requires WHATSAPP_APP_SECRET (Meta for Developers -> App -> Settings ->
+// Basic -> App Secret). Until it is set this stays open but logs loudly —
+// same reasoning as the OwnerRez webhook: silently rejecting all real guest
+// traffic would be a worse failure than the one being fixed.
+async function verifyMetaSignature(req: NextRequest, rawBody: string): Promise<boolean> {
+  const appSecret = (process.env.WHATSAPP_APP_SECRET || "").trim();
+  if (!appSecret) {
+    console.warn(
+      "[whatsapp webhook] WHATSAPP_APP_SECRET is not set — accepting UNVERIFIED payloads. A forged POST could approve a draft and message a guest. Set it in Vercel."
+    );
+    return true;
+  }
+  const header = req.headers.get("x-hub-signature-256") ?? "";
+  if (!header.startsWith("sha256=")) return false;
+  const { createHmac, timingSafeEqual } = await import("node:crypto");
+  const expected = createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
+  const supplied = header.slice("sha256=".length);
+  if (supplied.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(supplied, "hex"), Buffer.from(expected, "hex"));
+}
+
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
+  // Must read the RAW text: re-serializing the parsed object would change
+  // key order/whitespace and the HMAC would never match.
+  const rawBody = await req.text();
+  if (!(await verifyMetaSignature(req, rawBody))) {
+    console.warn("[whatsapp webhook] rejected a POST with a missing/invalid X-Hub-Signature-256");
+    return NextResponse.json({ error: "Invalid signature." }, { status: 401 });
+  }
+  const body = (() => {
+    try {
+      return JSON.parse(rawBody) as unknown;
+    } catch {
+      return null;
+    }
+  })();
   await recordStatusCallbacks(body);
   const incoming = parseIncomingWhatsAppMessages(body);
 

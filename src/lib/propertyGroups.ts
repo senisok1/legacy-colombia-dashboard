@@ -46,9 +46,32 @@ export function propertyGroupById(id: string | undefined | null): PropertyGroup 
 
 /** Groups a login may use — empty access list means every group. */
 export function allowedPropertyGroups(access: string[] | undefined | null): PropertyGroup[] {
+  // No list at all = an unrestricted owner. This stays permissive on
+  // purpose: every call site resolves access via
+  // `getUserByEmail(...).catch(() => null)`, so a transient database blip
+  // yields undefined here, and failing closed would lock a legitimate owner
+  // out of his own dashboard mid-session. The blast radius is bounded
+  // because the ROLE gate is independent of this and is not fail-open.
   if (!access || access.length === 0) return PROPERTY_GROUPS;
+
   const allowed = PROPERTY_GROUPS.filter((g) => access.includes(g.id));
-  return allowed.length > 0 ? allowed : PROPERTY_GROUPS;
+  if (allowed.length > 0) return allowed;
+
+  // SECURITY FIX (2026-08-17 audit): this used to `return PROPERTY_GROUPS`,
+  // i.e. a user with an EXPLICIT restriction list that happened to match
+  // nothing was silently upgraded to ALL FIVE properties. That's exactly
+  // backwards — a non-empty list is a deliberate restriction, and the most
+  // likely way it matches nothing is a group being renamed in
+  // PROPERTY_GROUPS while stale ids sit in user_properties. Gabriel is
+  // restricted to Legacy Colombia by such a list; one rename would have
+  // handed him Alva, Pompano, Miami and Beach House.
+  //
+  // Fall back to the default group alone: restrictive, and still a working
+  // dashboard rather than an empty screen.
+  console.warn(
+    `[propertyGroups] access list ${JSON.stringify(access)} matched no known group — falling back to ${DEFAULT_PROPERTY_GROUP_ID} only. Check user_properties for stale ids.`
+  );
+  return [propertyGroupById(DEFAULT_PROPERTY_GROUP_ID)];
 }
 
 /** The group a viewer should actually see: their cookie choice when it's

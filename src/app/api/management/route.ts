@@ -59,7 +59,11 @@ async function buildBoard(orgId: string, groupId: string) {
     getBookings(orgId, groupId),
     getGuests(orgId, groupId).catch(() => []),
     getAllPendingDrafts(orgId, groupId).catch(() => []),
-    listTeamActivities(orgId).catch(() => []),
+    // Scoped by property group (2026-08-17 audit): team_activities had no
+    // property column at all until migration 0035, so the general activity
+    // log was shared across all five properties. Passing groupId here is
+    // what actually closes that — the column alone does nothing.
+    listTeamActivities(orgId, 200, groupId).catch(() => []),
   ]);
   const guestsById = buildGuestsById(guests);
   const opsByBookingId = await listBookingOps(orgId).catch(() => new Map<number, never>());

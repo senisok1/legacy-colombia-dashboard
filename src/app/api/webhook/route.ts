@@ -1,13 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { OwnerRezWebhookEvent } from "@/lib/webhookHandlers";
 
-// Public endpoint for OwnerRez webhook events (no auth — called by
-// OwnerRez's servers). Must be whitelisted in src/proxy.ts alongside the
-// other public webhook routes. Always returns 200 quickly so OwnerRez
-// doesn't retry-storm on our own processing errors.
+// Endpoint for OwnerRez webhook events. Whitelisted in src/proxy.ts
+// alongside the other public webhook routes. Always returns 200 quickly on
+// PROCESSING errors so OwnerRez doesn't retry-storm — but not on auth
+// failures, which must be visible.
+//
+// SECURITY FIX (2026-08-17 audit): this route previously had NO
+// authentication of any kind. Anyone on the internet who knew the URL could
+// POST forged OwnerRez events — injecting fake guest messages and bookings,
+// driving Anthropic spend on AI draft generation, and triggering WhatsApp
+// approval texts to Seni's phone.
+//
+// OwnerRez doesn't sign its webhooks, so the standard HMAC pattern used for
+// Stripe isn't available. Instead the secret travels in the URL, exactly
+// like the Elementor form webhook already does
+// (WEBSITE_FORM_WEBHOOK_SECRET): subscribe OwnerRez to
+// https://crm.legacyestaterentals.com/api/webhook?secret=<WEBHOOK_SECRET>.
+//
+// Set WEBHOOK_SECRET in Vercel and re-subscribe via
+// /api/admin/webhook-status. Until it is set this route stays OPEN rather
+// than silently dropping every real event — a webhook that rejects
+// production traffic is a worse failure than the one being fixed — and it
+// logs loudly on every request so the gap can't go unnoticed.
 export const maxDuration = 30;
 
+function isAuthorized(req: NextRequest): boolean {
+  const expected = (process.env.WEBHOOK_SECRET || "").trim();
+  if (!expected) {
+    console.warn(
+      "[ownerrez-webhook] WEBHOOK_SECRET is not set — this endpoint is accepting UNAUTHENTICATED events. Set it in Vercel and re-subscribe with ?secret=…"
+    );
+    return true;
+  }
+  const supplied = req.nextUrl.searchParams.get("secret") ?? "";
+  // Length-first comparison; these are short shared secrets, not password
+  // hashes, and the value never varies per request.
+  return supplied.length === expected.length && supplied === expected;
+}
+
 export async function POST(req: NextRequest) {
+  if (!isAuthorized(req)) {
+    console.warn("[ownerrez-webhook] rejected a request with a missing/invalid secret");
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
   try {
     const event = (await req.json()) as OwnerRezWebhookEvent;
 

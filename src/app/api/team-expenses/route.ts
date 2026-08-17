@@ -210,11 +210,48 @@ export async function PUT(req: NextRequest) {
 
   const raw = body.actualAmount;
   const actualAmount = raw === "" || raw === null || raw === undefined ? null : Number(raw);
-  if (actualAmount !== null && !Number.isFinite(actualAmount)) {
-    return NextResponse.json({ error: "Actual cost must be a number." }, { status: 400 });
+  // BUG FIX (2026-08-17 audit): this only checked Number.isFinite, while the
+  // POST handler's estimatedAmount above correctly also requires >= 0. A
+  // negative actual cost was accepted and stored, which then flows straight
+  // into the spend rollups as a CREDIT — one mistyped "-450" quietly reduces
+  // reported spend instead of increasing it. Same rule as the estimate.
+  if (actualAmount !== null && (!Number.isFinite(actualAmount) || actualAmount < 0)) {
+    return NextResponse.json({ error: "Actual cost must be a positive number." }, { status: 400 });
   }
 
   try {
+    // BUG FIX (2026-08-17 audit): completion never checked approval. Anyone
+    // could mark a DECLINED — or simply never-approved — request "completed"
+    // with a real spend amount, and it would land in the completed list and
+    // the spend totals as though the owner had signed off on it. That defeats
+    // the whole point of the PATCH owner-only approval gate above: the money
+    // is recorded as authorised without an authorisation ever happening.
+    //
+    // Only completion is gated. UN-ticking (completed === false) stays open so
+    // a mis-click is always reversible, and a declined request stays visible
+    // rather than becoming un-editable.
+    if (body.completed) {
+      // Deliberately UNfiltered by property group: listExpenseRequests caps at
+      // the 300 most recent rows, and GET above reads the same list narrowed
+      // to one group — so this superset always contains anything the user
+      // could actually have seen and ticked, and can't 404 a legitimate
+      // completion that the UI is showing.
+      const existing = (await listExpenseRequests(session.organizationId)).find((r) => r.id === body.id);
+      if (!existing) return NextResponse.json({ error: "No such request." }, { status: 404 });
+      if (existing.declined) {
+        return NextResponse.json(
+          { error: "This request was declined by the owner, so it can't be marked as completed." },
+          { status: 409 }
+        );
+      }
+      if (!existing.approved) {
+        return NextResponse.json(
+          { error: "This request hasn't been approved yet. The owner needs to approve it before it can be marked as completed." },
+          { status: 409 }
+        );
+      }
+    }
+
     const updated = await setCompleted({
       organizationId: session.organizationId,
       id: body.id,

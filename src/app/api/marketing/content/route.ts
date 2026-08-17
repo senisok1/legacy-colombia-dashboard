@@ -13,7 +13,17 @@ const VALID_TYPES: ContentPieceType[] = ["blog", "social", "email"];
 export async function GET(req: NextRequest) {
   if (!isDbConfigured()) return NextResponse.json({ pieces: [] });
   const session = getSessionFromRequest(req);
-  const pieces = await listContentPieces(session?.organizationId);
+  // Property scoping (2026-08-17). POST below already stamped the active
+  // group on every new piece, but this GET was org-wide — so a piece written
+  // for Legacy Pompano still showed up on Legacy Miami's Content tab. Resolve
+  // the group the same way POST does; the cookie is only a request, and
+  // effectivePropertyGroupId() re-checks it against the viewer's
+  // propertyAccess.
+  const viewer = await getUserByEmail(session?.email ?? "").catch(() => null);
+  const pieces = await listContentPieces(
+    session?.organizationId,
+    effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess)
+  );
   return NextResponse.json({ pieces });
 }
 

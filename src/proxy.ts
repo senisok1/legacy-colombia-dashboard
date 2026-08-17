@@ -144,6 +144,42 @@ export function proxy(req: NextRequest) {
         }
         return NextResponse.redirect(new URL("/management", req.url));
       }
+
+      // STRUCTURAL FIX (2026-08-17 audit). The blocklist above gates admin
+      // PAGES but only ever listed three API prefixes by hand, and the role
+      // gate further down only blocks non-GET methods. Net effect: a team
+      // session couldn't open the Reports tab but could fetch
+      // /api/reports/executive directly and read whole-portfolio financials
+      // — same for /api/bills, /api/leads, /api/approvals (guest message
+      // bodies), /api/marketing/contacts (guest PII) and ~8 others. The nav
+      // was in fact polling several of them on every session.
+      //
+      // Enumerating what to block will always drift behind new routes, so
+      // this is DEFAULT-DENY: a team session may reach only the APIs its own
+      // five tabs actually need, and anything new is blocked until someone
+      // deliberately adds it here.
+      const TEAM_API_ALLOWLIST = [
+        "/api/logout",
+        "/api/translate", // reading Spanish guest threads
+        "/api/management", // Team Management board + notes, event flags, extras
+        "/api/team-expenses", // Team Expense Requests
+        // (The Team Activity Log tab has no API of its own — it reads
+        // /api/management and writes /api/management/activities.)
+        "/api/settings/password", // their OWN password (target comes from the cookie)
+        "/api/settings/property-group", // property switcher (re-checks propertyAccess)
+        "/api/settings/theme",
+        "/api/settings/currency",
+        "/api/exchange-rate", // display-only FX for the currency toggle
+      ];
+      if (
+        pathname.startsWith("/api/") &&
+        !TEAM_API_ALLOWLIST.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+      ) {
+        return NextResponse.json(
+          { error: "This area is admin-only — team accounts can't access it." },
+          { status: 403 }
+        );
+      }
     }
 
     if (session!.role === "READ_ONLY" && !["GET", "HEAD", "OPTIONS"].includes(req.method) && pathname.startsWith("/api/")) {

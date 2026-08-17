@@ -810,7 +810,62 @@ function nextDatesOnWeekdays(weekdays: number[], count: number): string[] {
   return dates;
 }
 
-async function computeWeekdayWeekendRates(organizationId?: string): Promise<WeekdayWeekendRates> {
+const EMPTY_WEEKDAY_WEEKEND_RATES = (): WeekdayWeekendRates => ({
+  weekdayAvgCents: null,
+  weekendAvgCents: null,
+  weekdaySampleSize: 0,
+  weekendSampleSize: 0,
+  computedAt: new Date().toISOString(),
+});
+
+/**
+ * BUG FIX (2026-08-17 audit): the Redis CACHE KEY in getWeekdayWeekendRates()
+ * below was namespaced per property group, but the VALUE was not — this
+ * function took no propertyGroupId at all, and getQuotedNightlyRateCents()
+ * quotes whatever getTargetProperty(organizationId) resolves to, which is
+ * always the DEFAULT (Legacy Colombia) property. So every property's Reports
+ * page showed Legacy Colombia's weekday/weekend rates, stored under that
+ * property's own cache key — which made the wrong numbers look thoroughly
+ * legitimate: per-property, freshly computed, and consistent between reloads.
+ *
+ * The group is now threaded in and checked against the properties that group
+ * actually resolves to (getTargetProperties, which IS group-aware).
+ *
+ * IMPORTANT LIMITATION — do not delete this guard thinking it's redundant.
+ * lib/ownerrez.ts's getQuotedNightlyRateCents(date, organizationId) has no
+ * property/group parameter; it hard-resolves the default property. Until that
+ * signature gains one (it's part of the PmsProvider contract in
+ * src/lib/pms/types.ts, so both need changing together), we cannot quote a
+ * non-default property at all. Given that, the only honest answer for a group
+ * whose properties don't include the quoted one is NO DATA — reported the
+ * same way "OwnerRez isn't configured" already is (nulls, sample size 0),
+ * which the report renders as "not enough data yet". An absent KPI is
+ * recoverable; a confidently-wrong one that another property's pricing gets
+ * benchmarked against is not.
+ */
+async function computeWeekdayWeekendRates(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<WeekdayWeekendRates> {
+  // Which property will getQuotedNightlyRateCents() actually quote, and is it
+  // one of THIS group's properties? Any failure here is treated as "can't
+  // prove it's ours", i.e. no data — never as permission to show the default
+  // property's rates under another property's name.
+  if (propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID) {
+    const [quoted, groupProperties] = await Promise.all([
+      getTargetProperty(organizationId).catch(() => null),
+      getTargetProperties(organizationId, propertyGroupId).catch(() => [] as { id: number }[]),
+    ]);
+    if (!quoted || !groupProperties.some((p) => p.id === quoted.id)) {
+      console.warn(
+        `[revenueManager] weekday/weekend rates unavailable for property group "${propertyGroupId}": ` +
+          "getQuotedNightlyRateCents() can only quote the default property. Reporting no data rather " +
+          "than the default property's rates."
+      );
+      return EMPTY_WEEKDAY_WEEKEND_RATES();
+    }
+  }
+
   // 8 candidates each (~4 weeks of Fri/Sat and Tue/Wed) rather than 4 — a
   // quote comes back null for any date that's already booked (nothing left
   // to quote), and near-term weekend nights are exactly the ones most likely
@@ -847,7 +902,7 @@ export async function getWeekdayWeekendRates(
   propertyGroupId?: string
 ): Promise<WeekdayWeekendRates> {
   if (!isLiveModeConfigured()) {
-    return { weekdayAvgCents: null, weekendAvgCents: null, weekdaySampleSize: 0, weekendSampleSize: 0, computedAt: new Date().toISOString() };
+    return EMPTY_WEEKDAY_WEEKEND_RATES();
   }
 
   // Phase 3: this cache used to be a single global Redis key, which would
@@ -874,7 +929,9 @@ export async function getWeekdayWeekendRates(
     }
   }
 
-  const result = await computeWeekdayWeekendRates(orgId);
+  // The group must be passed to the COMPUTE too, not just the cache key —
+  // that mismatch was the bug; see computeWeekdayWeekendRates' header.
+  const result = await computeWeekdayWeekendRates(orgId, propertyGroupId);
   if (isRedisConfigured()) {
     await redisSet(cacheKey, JSON.stringify(result), { exSeconds: WEEKDAY_WEEKEND_CACHE_TTL_SECONDS });
   }

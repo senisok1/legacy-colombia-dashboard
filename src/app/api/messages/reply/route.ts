@@ -8,6 +8,8 @@ import { isMessagingConfigured, isWhatsAppConfigured } from "@/lib/config";
 import { notifyGabrielIfServiceRequest } from "@/lib/serviceRequestNotify";
 import { logAiActivity } from "@/lib/aiActivity";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 const AGENT_KEY = "guest_experience";
 const AGENT_NAME = "AI Guest Experience Manager";
@@ -48,9 +50,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
 
+  // Guest response time is recorded per property (2026-08-17 audit): the
+  // write used an un-namespaced Redis key while the read was namespaced, so
+  // Colombia's metric was contaminated by every property and the other four
+  // read a permanently empty key. resolvePendingDraft threads this through
+  // to recordResponseTime.
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(
+    req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+    viewer?.propertyAccess
+  );
+
   if (payload.action === "discard") {
     if (payload.draftId) {
-      await resolvePendingDraft(payload.draftId, { status: "rejected" }, session?.organizationId);
+      await resolvePendingDraft(payload.draftId, { status: "rejected" }, session?.organizationId, groupId);
       if (isWhatsAppConfigured()) {
         await sendWhatsAppText(
           `Discarded that suggested reply to ${payload.guestName ?? "the guest"} from the dashboard.`,
@@ -89,7 +102,7 @@ export async function POST(req: NextRequest) {
     await sendMessage(payload.threadId, sendText, session?.organizationId);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to send message.";
-    if (payload.draftId) await resolvePendingDraft(payload.draftId, { status: "failed" }, session?.organizationId);
+    if (payload.draftId) await resolvePendingDraft(payload.draftId, { status: "failed" }, session?.organizationId, groupId);
     const failedEntry = await appendMessage({
       bookingId: payload.bookingId,
       guestId: payload.guestId,
@@ -133,7 +146,8 @@ export async function POST(req: NextRequest) {
     const resolved = await resolvePendingDraft(
       payload.draftId,
       { status: "sent", draftReply: sendText },
-      session?.organizationId
+      session?.organizationId,
+      groupId
     );
     if (isWhatsAppConfigured()) {
       const gabrielNote = resolved ? await notifyGabrielIfServiceRequest(resolved) : "";

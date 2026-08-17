@@ -113,6 +113,19 @@ export async function createWorkOrder(
     source?: string;
     reportedBy?: string;
     priority?: WorkOrderPriority;
+    /** Which property this work order belongs to (2026-08-17 scoping fix).
+     * Until now the INSERT never wrote property_group_id at all, so every
+     * work order created since migration 0032 landed as NULL — and because
+     * propertyGroupFilter() treats NULL as "belongs to the default group",
+     * a work order logged on Legacy Alva/Pompano/Miami/Beach House showed up
+     * under Legacy Colombia and nowhere else. Callers must pass the viewer's
+     * active group so listWorkOrders() can filter it back out.
+     *
+     * OPTIONAL on purpose: lib/serviceRequestNotify.ts still calls this with
+     * no group (it runs off an inbound guest message, not a UI request) —
+     * that file STILL NEEDS UPDATING to resolve and pass the booking's
+     * property group, otherwise guest-reported issues keep landing as NULL. */
+    propertyGroupId?: string;
   },
   organizationId?: string
 ): Promise<WorkOrder> {
@@ -120,8 +133,8 @@ export async function createWorkOrder(
   const row = await queryOne<WorkOrderRow>(
     `insert into work_orders
        (organization_id, property_id, guest_id, booking_id, thread_id, title, description, category,
-        source, reported_by, priority)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::work_order_priority)
+        source, reported_by, priority, property_group_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::work_order_priority, $12)
      returning *, (select name from vendors where id = work_orders.assigned_vendor_id) as assigned_vendor_name`,
     [
       orgId,
@@ -135,6 +148,7 @@ export async function createWorkOrder(
       input.source ?? "manual",
       input.reportedBy ?? null,
       input.priority ?? "normal",
+      input.propertyGroupId ?? null,
     ]
   );
   if (!row) throw new Error("Failed to create work order.");

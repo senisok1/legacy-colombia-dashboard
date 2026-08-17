@@ -1,6 +1,9 @@
 import { isDbConfigured } from "@/lib/config";
 import { listVendors } from "@/lib/billPay";
 import { getServerSession } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { cookies } from "next/headers";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { VendorsExplorer } from "@/components/VendorsExplorer";
 import { PageHeader } from "@/components/PageHeader";
@@ -21,7 +24,16 @@ export default async function VendorsPage() {
 
   const session = await getServerSession();
   await enforceBillingLock(session);
-  const vendors = await listVendors(session?.organizationId);
+  // Property scoping (2026-08-17). listVendors() was called with the org id
+  // only, so this tab listed every property's vendors while the sibling Bill
+  // Pay tab (api/bills) was already scoped — the two disagreed. Same
+  // resolution as dashboard/page.tsx: the cookie is only a request,
+  // effectivePropertyGroupId() re-checks it against the viewer's
+  // propertyAccess so a restricted login can't read another property.
+  const cookieStore = await cookies();
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
+  const vendors = await listVendors(session?.organizationId, groupId);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">

@@ -301,6 +301,13 @@ export function NavBar({
   useEffect(() => {
     if (pathname?.startsWith("/login") || pathname?.startsWith("/signup") || pathname?.startsWith("/onboarding"))
       return;
+    // These badges are all for admin-only tabs a team member can't see, yet
+    // the polls ran on EVERY session — which is how a team login was reaching
+    // /api/bills, /api/approvals, /api/leads and friends at all (2026-08-17
+    // audit). The middleware now returns 403 for those, so skipping the polls
+    // here isn't the security fix, just the reason the console isn't full of
+    // 403s for requests that were never wanted.
+    if (role === "READ_ONLY") return;
     let cancelled = false;
 
     async function poll() {
@@ -366,7 +373,7 @@ export function NavBar({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [pathname]);
+  }, [pathname, role]);
 
   // Close an open group dropdown on outside click or on navigation.
   useEffect(() => {

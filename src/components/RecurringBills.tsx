@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+// Pure formatting helper, no server dependencies — safe in a client component.
+import { formatCurrencyTotals } from "@/lib/currencyTotals";
 
 // Monthly recurring bills checklist on the Bill Pay tab (2026-08-17, Seni's
 // ask). Add the bills you pay every month once; each month they reappear as
@@ -39,7 +41,9 @@ type Board = {
   periodLabel: string;
   dues: BillDue[];
   outstandingCount: number;
-  outstandingTotal: number;
+  /** Per-currency, NOT one number — see the 2026-08-17 note where it's
+   * rendered below, and src/lib/currencyTotals.ts. */
+  outstandingTotals: { currency: string; amount: number }[];
   allPaid: boolean;
   summary: string;
   bills: Bill[];
@@ -221,8 +225,17 @@ export function RecurringBills() {
           }`}
         >
           {board.summary}
-          {!board.allPaid && board.outstandingTotal > 0 && (
-            <span className="ml-2 font-normal">· {money(board.outstandingTotal, "USD")} outstanding</span>
+          {/* BUG FIX (2026-08-17 audit): this used to render a single
+              board.outstandingTotal hard-coded as "USD", while the server
+              had summed amounts across bills in DIFFERENT currencies. One
+              COP bill made the banner overstate what's owed by orders of
+              magnitude — on the exact line the owner reads to decide what
+              to pay. The server now returns per-currency totals; render each
+              one with its own currency rather than re-flattening them. */}
+          {!board.allPaid && (board.outstandingTotals?.length ?? 0) > 0 && (
+            <span className="ml-2 font-normal">
+              · {formatCurrencyTotals(board.outstandingTotals, money)} outstanding
+            </span>
           )}
         </div>
         <button

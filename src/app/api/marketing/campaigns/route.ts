@@ -12,7 +12,18 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   if (!isDbConfigured()) return NextResponse.json({ campaigns: [] });
   const session = getSessionFromRequest(req);
-  const campaigns = await listContentCampaigns(session?.organizationId);
+  // Property scoping (2026-08-17). POST below already stamped the active
+  // group on every campaign it creates, but this GET was org-wide — so every
+  // property's Content tab listed every property's campaigns. Resolve the
+  // group the same way POST does; the cookie is only a request, and
+  // effectivePropertyGroupId() re-checks it against the viewer's
+  // propertyAccess. listPiecesForCampaign() below needs no group of its own:
+  // it's keyed by campaign_id, so filtering the campaigns filters the pieces.
+  const viewer = await getUserByEmail(session?.email ?? "").catch(() => null);
+  const campaigns = await listContentCampaigns(
+    session?.organizationId,
+    effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess)
+  );
   const withPieces = await Promise.all(
     campaigns.map(async (campaign) => ({
       campaign,

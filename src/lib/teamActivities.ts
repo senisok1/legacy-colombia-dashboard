@@ -1,4 +1,4 @@
-import { query } from "./db";
+import { query, propertyGroupFilter } from "./db";
 
 // Data layer for the Management tab's team activities + per-booking ops
 // notes (migration 0021). Org-scoped like every other lib/*.ts — the
@@ -47,14 +47,39 @@ function fromRow(r: Row): TeamActivity {
   };
 }
 
-export async function listTeamActivities(organizationId: string, limit = 200): Promise<TeamActivity[]> {
+/**
+ * BUG FIX (2026-08-17 audit): team_activities had NO property_group_id column
+ * at all, so the Management tab's general activity log and per-stay notes were
+ * organization-wide — every property's board showed every other property's
+ * "pool cleaned" / "restocked towels" entries, and a team member scoped to one
+ * property could read another's operational notes. Migration
+ * db/migrations/0035_team_activities_property_group.sql adds the column; this
+ * read applies the standard propertyGroupFilter() convention (NULL counts as
+ * the default legacy-colombia group, because every pre-multi-property row was
+ * written by and about Legacy Colombia).
+ *
+ * `propertyGroupId` is OPTIONAL, and omitting it deliberately preserves the
+ * old cross-property behaviour, because one caller still can't supply it:
+ *   - src/app/api/management/route.ts (buildBoard) calls
+ *     listTeamActivities(orgId) — it ALREADY resolves `groupId` for
+ *     getBookings/getGuests a few lines above and simply needs to pass it
+ *     through. That's the last step to close this leak, and it's outside this
+ *     change's file scope.
+ * Cross-property admin/cron paths that genuinely want everything should keep
+ * passing undefined.
+ */
+export async function listTeamActivities(
+  organizationId: string,
+  limit = 200,
+  propertyGroupId?: string
+): Promise<TeamActivity[]> {
   const rows = await query<Row>(
     `select id, booking_id, author_email, author_name, kind, body, body_original, author_language, created_at
      from team_activities
-     where organization_id = $1
+     where organization_id = $1${propertyGroupFilter(propertyGroupId, 3)}
      order by created_at desc
      limit $2`,
-    [organizationId, limit]
+    propertyGroupId ? [organizationId, limit, propertyGroupId] : [organizationId, limit]
   );
   return rows.map(fromRow);
 }
@@ -130,6 +155,12 @@ export async function upsertBookingOps(input: {
 
 export async function createTeamActivity(input: {
   organizationId: string;
+  /** The property this activity belongs to (2026-08-17 audit — see
+   * listTeamActivities above). Optional so callers that predate the column
+   * still compile; a NULL lands in the default legacy-colombia group, which
+   * is what those rows meant historically. The one real write path,
+   * src/app/api/management/activities/route.ts, does pass it. */
+  propertyGroupId?: string | null;
   bookingId?: number | null;
   authorEmail: string;
   authorName?: string | null;
@@ -139,11 +170,12 @@ export async function createTeamActivity(input: {
   authorLanguage?: string | null;
 }): Promise<TeamActivity> {
   const rows = await query<Row>(
-    `insert into team_activities (organization_id, booking_id, author_email, author_name, kind, body, body_original, author_language)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)
+    `insert into team_activities (organization_id, property_group_id, booking_id, author_email, author_name, kind, body, body_original, author_language)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      returning id, booking_id, author_email, author_name, kind, body, body_original, author_language, created_at`,
     [
       input.organizationId,
+      input.propertyGroupId ?? null,
       input.bookingId ?? null,
       input.authorEmail,
       input.authorName ?? null,

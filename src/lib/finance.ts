@@ -270,8 +270,24 @@ export type SummaryStats = {
 export function summaryStats(bookings: Booking[]): SummaryStats {
   const now = new Date();
   const yearStart = new Date(now.getFullYear(), 0, 1);
+  // BUG FIX (2026-08-17 audit): this filter had no upper bound, so "Revenue
+  // (YTD)" counted the ENTIRE FORWARD BOOK — every reservation already on
+  // the books for the rest of this year, plus 2027+ arrivals — as
+  // year-to-date revenue. It also skewed avgNightlyRate and avgLengthOfStay,
+  // since future stays are priced and sized differently from past ones.
+  //
+  // Confirmed a bug rather than a deliberate "booked this year" definition:
+  // the MTD figure in executiveReport.ts bounds its top end, and bookingPace
+  // already exists as the separate forward-looking metric. Year-to-DATE has
+  // to end at the date.
+  //
+  // Accrual basis is arrival date, matching every other figure in this file.
   const ytd = bookings.filter(
-    (b) => isRevenueCounting(b) && b.arrival && parseISO(b.arrival) >= yearStart
+    (b) =>
+      isRevenueCounting(b) &&
+      b.arrival &&
+      parseISO(b.arrival) >= yearStart &&
+      parseISO(b.arrival) <= now
   );
 
   const ytdRevenue = ytd.reduce((sum, b) => sum + (b.totalAmount || 0), 0);

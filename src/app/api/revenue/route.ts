@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isDbConfigured } from "@/lib/config";
 import { getLatestRateSnapshots, getLatestRateOverrides } from "@/lib/revenueManager";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +16,19 @@ export async function GET(req: NextRequest) {
   if (!isDbConfigured()) {
     return NextResponse.json({ error: "Database isn't connected yet." }, { status: 400 });
   }
+  // Property scoping (2026-08-17). Both calls were org-wide, so the Revenue
+  // Management table listed every property's rate snapshots and showed
+  // "Applied" badges from overrides belonging to other listings. The switcher
+  // cookie is only a request — effectivePropertyGroupId() re-checks it
+  // against the viewer's propertyAccess so a restricted login can't read
+  // another property's rates. Same shape as api/bills/route.ts. Snapshots and
+  // overrides must share one group id or the badges wouldn't line up with the
+  // rows they annotate.
+  const viewer = await getUserByEmail(session?.email ?? "").catch(() => null);
+  const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
   const [snapshots, overrides] = await Promise.all([
-    getLatestRateSnapshots(session?.organizationId),
-    getLatestRateOverrides(session?.organizationId),
+    getLatestRateSnapshots(session?.organizationId, groupId),
+    getLatestRateOverrides(session?.organizationId, groupId),
   ]);
   return NextResponse.json({ snapshots, overrides });
 }

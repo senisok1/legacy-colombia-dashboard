@@ -217,10 +217,23 @@ export async function getAllPendingDrafts(
   }
 }
 
+/**
+ * `propertyGroupId` (added 2026-08-17) only affects WHICH property's
+ * response-time bucket a "sent" resolution is recorded against — see
+ * recordResponseTime() below for the mis-namespacing bug it fixes. It's
+ * optional so the existing callers keep compiling and keep their current
+ * (default-group) behaviour:
+ *   - src/app/api/messages/reply/route.ts — can and should pass the active
+ *     group (it already reads the PROPERTY_GROUP_COOKIE for other purposes);
+ *     still to be updated.
+ *   - src/app/api/whatsapp/webhook/route.ts — inbound Meta webhook, no
+ *     session/cookie available, so it stays on the default bucket.
+ */
 export async function resolvePendingDraft(
   id: string,
   update: { status: PendingDraft["status"]; draftReply?: string },
-  organizationId?: string
+  organizationId?: string,
+  propertyGroupId?: string
 ): Promise<PendingDraft | null> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const draft = await getPendingDraft(id, orgId);
@@ -248,7 +261,7 @@ export async function resolvePendingDraft(
   if (update.status === "sent") {
     const minutes = (new Date(resolvedAt).getTime() - new Date(draft.createdAt).getTime()) / 60000;
     if (minutes >= 0) {
-      await recordResponseTime(minutes, resolvedAt, orgId);
+      await recordResponseTime(minutes, resolvedAt, orgId, propertyGroupId);
     }
   }
 
@@ -308,8 +321,35 @@ const RESPONSE_TIMES_MAX = 300; // plenty for any "last N days" window this app 
 
 type ResponseTimeEntry = { resolvedAt: string; minutes: number };
 
-async function recordResponseTime(minutes: number, resolvedAt: string, orgId: string): Promise<void> {
-  const raw = await redisGet(responseTimesKey(orgId));
+/**
+ * BUG FIX (2026-08-17 audit): this wrote to `responseTimesKey(orgId)` with NO
+ * property group, while getRecentResponseTimes() below reads
+ * `responseTimesKey(orgId, propertyGroupId)`. Because the key builder only
+ * omits the suffix for the DEFAULT group, that meant:
+ *   - every property's response times were appended to one shared,
+ *     un-namespaced bucket, and
+ *   - all four non-default properties read a key nothing ever wrote to, so
+ *     their executive summary's response-time SLA was permanently empty and
+ *     read as "no data yet" forever, not just at launch.
+ * The write now takes the same propertyGroupId the read expects.
+ *
+ * The parameter is OPTIONAL because not every caller can supply it, and
+ * omitting it reproduces exactly the old (correct-for-Legacy-Colombia)
+ * default-group key rather than inventing a new one:
+ *   - src/app/api/messages/reply/route.ts — HAS the session + property-group
+ *     cookie and should pass it (out of this fix's file scope; see the note
+ *     on resolvePendingDraft).
+ *   - src/app/api/whatsapp/webhook/route.ts — an inbound Meta webhook with no
+ *     session and no cookie, so it genuinely cannot resolve a group here; its
+ *     approvals fall back to the default group's bucket.
+ */
+async function recordResponseTime(
+  minutes: number,
+  resolvedAt: string,
+  orgId: string,
+  propertyGroupId?: string
+): Promise<void> {
+  const raw = await redisGet(responseTimesKey(orgId, propertyGroupId));
   let entries: ResponseTimeEntry[] = [];
   if (raw) {
     try {
@@ -322,7 +362,7 @@ async function recordResponseTime(minutes: number, resolvedAt: string, orgId: st
   if (entries.length > RESPONSE_TIMES_MAX) {
     entries = entries.slice(entries.length - RESPONSE_TIMES_MAX);
   }
-  await redisSet(responseTimesKey(orgId), JSON.stringify(entries));
+  await redisSet(responseTimesKey(orgId, propertyGroupId), JSON.stringify(entries));
 }
 
 /** Response times for replies sent within the last `days` days, oldest

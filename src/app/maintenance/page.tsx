@@ -2,6 +2,9 @@ import { isDbConfigured } from "@/lib/config";
 import { listWorkOrders } from "@/lib/maintenance";
 import { listVendors } from "@/lib/billPay";
 import { getServerSession } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { cookies } from "next/headers";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { MaintenanceExplorer } from "@/components/MaintenanceExplorer";
 
@@ -21,7 +24,20 @@ export default async function MaintenancePage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
   const orgId = session?.organizationId;
-  const [workOrders, vendors] = await Promise.all([listWorkOrders(orgId), listVendors(orgId)]);
+  // Property scoping (2026-08-17). This page used to call both lists with the
+  // org id only, so Maintenance showed every property's work orders and
+  // vendors regardless of which property was selected in the switcher — the
+  // one place in the app that leaked other properties' data outright. Resolve
+  // the group the same way dashboard/page.tsx does: the cookie is only a
+  // request, effectivePropertyGroupId() re-checks it against the viewer's own
+  // propertyAccess so a restricted login can't read a property it isn't on.
+  const cookieStore = await cookies();
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
+  const [workOrders, vendors] = await Promise.all([
+    listWorkOrders(orgId, groupId),
+    listVendors(orgId, groupId),
+  ]);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
