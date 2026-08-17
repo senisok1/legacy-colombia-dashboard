@@ -75,10 +75,10 @@ const EVENT_TIMES: { value: string; label: string }[] = (() => {
   return out;
 })();
 
-/** Attendance options: every number 1-40, then 45..200 by fives. */
+/** Attendance options: every number 1-40, then 45..300 by fives. */
 const EVENT_GUEST_COUNTS: number[] = [
   ...Array.from({ length: 40 }, (_, i) => i + 1),
-  ...Array.from({ length: 32 }, (_, i) => 45 + i * 5),
+  ...Array.from({ length: 52 }, (_, i) => 45 + i * 5),
 ];
 
 function fmtTime(hhmm?: string | null): string | null {
