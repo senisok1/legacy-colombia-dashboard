@@ -80,7 +80,15 @@ export async function GET(req: NextRequest) {
   }
 }
 
-const WEBHOOK_URL = "https://legacy-colombia-dashboard.vercel.app/api/webhook";
+// The secret travels in the URL because OwnerRez doesn't sign its webhooks
+// (2026-08-17 audit — /api/webhook previously had no authentication at all).
+// Built from the same env var the endpoint checks, so subscribing and
+// verifying can never drift apart: change WEBHOOK_SECRET, re-POST here, done.
+const WEBHOOK_URL = (() => {
+  const base = "https://legacy-colombia-dashboard.vercel.app/api/webhook";
+  const secret = (process.env.WEBHOOK_SECRET || "").trim();
+  return secret ? `${base}?secret=${encodeURIComponent(secret)}` : base;
+})();
 
 // POST { create: ["message", "booking", ...] } — subscribes THIS dashboard's
 // /api/webhook to the given OwnerRez entity types. Found 2026-08-15 that the
