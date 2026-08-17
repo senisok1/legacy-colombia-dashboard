@@ -55,20 +55,31 @@ export type BookingOps = {
   bookingId: number;
   eventScheduled: boolean;
   eventDate: string | null; // YYYY-MM-DD
+  eventTime: string | null; // "HH:MM" local wall-clock at the property
 };
 
-type OpsRow = { booking_id: string; event_scheduled: boolean; event_date: string | null };
+type OpsRow = {
+  booking_id: string;
+  event_scheduled: boolean;
+  event_date: string | null;
+  event_time: string | null;
+};
 
 export async function listBookingOps(organizationId: string): Promise<Map<number, BookingOps>> {
   const rows = await query<OpsRow>(
-    `select booking_id, event_scheduled, event_date::text as event_date
+    `select booking_id, event_scheduled, event_date::text as event_date, event_time
      from booking_ops where organization_id = $1`,
     [organizationId]
   );
   return new Map(
     rows.map((r) => [
       Number(r.booking_id),
-      { bookingId: Number(r.booking_id), eventScheduled: r.event_scheduled, eventDate: r.event_date },
+      {
+        bookingId: Number(r.booking_id),
+        eventScheduled: r.event_scheduled,
+        eventDate: r.event_date,
+        eventTime: r.event_time,
+      },
     ])
   );
 }
@@ -78,17 +89,26 @@ export async function upsertBookingOps(input: {
   bookingId: number;
   eventScheduled: boolean;
   eventDate: string | null;
+  eventTime: string | null;
   updatedBy: string;
 }): Promise<void> {
   await query(
-    `insert into booking_ops (organization_id, booking_id, event_scheduled, event_date, updated_by, updated_at)
-     values ($1, $2, $3, $4, $5, now())
+    `insert into booking_ops (organization_id, booking_id, event_scheduled, event_date, event_time, updated_by, updated_at)
+     values ($1, $2, $3, $4, $5, $6, now())
      on conflict (organization_id, booking_id) do update set
        event_scheduled = excluded.event_scheduled,
        event_date = excluded.event_date,
+       event_time = excluded.event_time,
        updated_by = excluded.updated_by,
        updated_at = now()`,
-    [input.organizationId, input.bookingId, input.eventScheduled, input.eventDate, input.updatedBy]
+    [
+      input.organizationId,
+      input.bookingId,
+      input.eventScheduled,
+      input.eventDate,
+      input.eventTime,
+      input.updatedBy,
+    ]
   );
 }
 

@@ -26,6 +26,7 @@ type Stay = {
   extrasRequested: boolean;
   eventScheduled?: boolean;
   eventDate?: string | null;
+  eventTime?: string | null;
   notes: StayNote[];
 };
 
@@ -60,6 +61,27 @@ function fmtWhen(iso: string): string {
 
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 
+/** Half-hour options 6:00 AM → 11:30 PM for the event-time dropdown. */
+const EVENT_TIMES: { value: string; label: string }[] = (() => {
+  const out: { value: string; label: string }[] = [];
+  for (let h = 6; h <= 23; h++) {
+    for (const m of [0, 30]) {
+      const value = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      const hour12 = h % 12 === 0 ? 12 : h % 12;
+      out.push({ value, label: `${hour12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}` });
+    }
+  }
+  return out;
+})();
+
+function fmtTime(hhmm?: string | null): string | null {
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  return `${hour12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+}
+
 /** Stay & event calendar (2026-08-16, Seni's ask): month grid to the right
  * of the stays list. Occupied nights are filled, event days get a red ring,
  * and hovering any day shows the guest name(s) via the native tooltip. */
@@ -89,7 +111,7 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
     }
     if (s.eventScheduled && s.eventDate) {
       if (!byDay.has(s.eventDate)) byDay.set(s.eventDate, { guests: [], events: [] });
-      byDay.get(s.eventDate)!.events.push(s.guestName);
+      byDay.get(s.eventDate)!.events.push(fmtTime(s.eventTime) ? `${s.guestName} at ${fmtTime(s.eventTime)}` : s.guestName);
     }
   }
 
@@ -207,7 +229,7 @@ export function ManagementBoard() {
     return () => clearInterval(t);
   }, [load]);
 
-  async function setEvent(s: Stay, eventScheduled: boolean, eventDate: string | null) {
+  async function setEvent(s: Stay, eventScheduled: boolean, eventDate: string | null, eventTime: string | null) {
     // Optimistic: flip the checkbox/date in place immediately (2026-08-16 —
     // waiting for the server round-trip made the first click feel dead, so
     // people double-clicked). The POST syncs in the background; on failure
@@ -217,7 +239,7 @@ export function ManagementBoard() {
         ? {
             ...prev,
             stays: prev.stays.map((x) =>
-              x.bookingId === s.bookingId ? { ...x, eventScheduled, eventDate } : x
+              x.bookingId === s.bookingId ? { ...x, eventScheduled, eventDate, eventTime } : x
             ),
           }
         : prev
@@ -226,7 +248,7 @@ export function ManagementBoard() {
       const res = await fetch("/api/management/booking-ops", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookingId: s.bookingId, eventScheduled, eventDate }),
+        body: JSON.stringify({ bookingId: s.bookingId, eventScheduled, eventDate, eventTime }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -325,7 +347,14 @@ export function ManagementBoard() {
                   <input
                     type="checkbox"
                     checked={Boolean(s.eventScheduled)}
-                    onChange={(e) => void setEvent(s, e.target.checked, e.target.checked ? (s.eventDate ?? null) : null)}
+                    onChange={(e) =>
+                      void setEvent(
+                        s,
+                        e.target.checked,
+                        e.target.checked ? (s.eventDate ?? null) : null,
+                        e.target.checked ? (s.eventTime ?? null) : null
+                      )
+                    }
                     className="h-6 w-6 cursor-pointer accent-red-600"
                   />
                   Event deposit paid &amp; scheduled during stay
@@ -333,7 +362,7 @@ export function ManagementBoard() {
                 {s.eventScheduled && (
                   <select
                     value={s.eventDate ?? ""}
-                    onChange={(e) => void setEvent(s, true, e.target.value || null)}
+                    onChange={(e) => void setEvent(s, true, e.target.value || null, s.eventTime ?? null)}
                     className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
                     <option value="">Pick the event date…</option>
@@ -349,6 +378,20 @@ export function ManagementBoard() {
                     ))}
                   </select>
                 )}
+                {s.eventScheduled && (
+                  <select
+                    value={s.eventTime ?? ""}
+                    onChange={(e) => void setEvent(s, true, s.eventDate ?? null, e.target.value || null)}
+                    className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
+                  >
+                    <option value="">Pick the time…</option>
+                    {EVENT_TIMES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 {s.eventScheduled && s.eventDate && (
                   <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">
                     EVENT{" "}
@@ -357,6 +400,7 @@ export function ManagementBoard() {
                       day: "numeric",
                       timeZone: "UTC",
                     })}
+                    {fmtTime(s.eventTime) ? ` · ${fmtTime(s.eventTime)}` : ""}
                   </span>
                 )}
               </div>
