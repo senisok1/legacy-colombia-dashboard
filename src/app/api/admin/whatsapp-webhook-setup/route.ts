@@ -48,6 +48,42 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Is the App Secret actually CORRECT? (2026-08-17)
+  //
+  // The probes above prove the endpoint now REQUIRES a signature — but a
+  // mistyped secret passes every one of them while silently rejecting every
+  // real Meta delivery, which would kill guest messaging with no error
+  // anywhere obvious. Nothing in this app can detect that on its own,
+  // because a wrong secret and a forged request look identical.
+  //
+  // Meta's appsecret_proof settles it: an HMAC of the access token keyed by
+  // the app secret, which Graph validates server-side. A 200 means the
+  // secret we hold is the one Meta has. Never logs or returns the secret.
+  async function appSecretMatchesMeta(): Promise<{ ok: boolean; detail: string }> {
+    if (!appSecret) return { ok: false, detail: "WHATSAPP_APP_SECRET is not set." };
+    const token = config.whatsappAccessToken;
+    if (!token) return { ok: false, detail: "WHATSAPP_ACCESS_TOKEN isn't set, so this can't be checked." };
+    try {
+      const { createHmac } = await import("node:crypto");
+      const proof = createHmac("sha256", appSecret).update(token, "utf8").digest("hex");
+      const res = await fetch(
+        `https://graph.facebook.com/v21.0/me?access_token=${encodeURIComponent(token)}&appsecret_proof=${proof}`,
+        { cache: "no-store" }
+      );
+      if (res.ok) return { ok: true, detail: "Meta accepted an appsecret_proof built from this secret." };
+      const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+      const message = body.error?.message ?? `HTTP ${res.status}`;
+      return {
+        ok: false,
+        detail: /appsecret_proof/i.test(message)
+          ? "Meta REJECTED the proof — the stored App Secret does not match this app. Real WhatsApp messages are being dropped. Re-copy it from Settings -> Basic."
+          : `Couldn't confirm: ${message}`,
+      };
+    } catch (err) {
+      return { ok: false, detail: `Couldn't reach Meta: ${err instanceof Error ? err.message : "unknown"}` };
+    }
+  }
+
   const runProbe = req.nextUrl.searchParams.get("probe") === "1";
   const probes = runProbe
     ? {
@@ -81,6 +117,7 @@ export async function GET(req: NextRequest) {
         : "NONE — endpoint currently accepts unverified payloads",
     appSecretSet: Boolean(appSecret),
     urlSecretSet: Boolean(webhookSecret),
+    appSecretMatchesMeta: runProbe ? await appSecretMatchesMeta() : null,
     probes,
     note: runProbe
       ? "Every probe's `got` should equal its `expect`."
