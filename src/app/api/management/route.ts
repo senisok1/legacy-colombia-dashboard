@@ -132,6 +132,7 @@ async function buildBoard(orgId: string, groupId: string) {
       eventScheduled: opsByBookingId.get(b.id)?.eventScheduled ?? false,
       eventDate: opsByBookingId.get(b.id)?.eventDate ?? null,
       eventTime: opsByBookingId.get(b.id)?.eventTime ?? null,
+      eventGuestCount: opsByBookingId.get(b.id)?.eventGuestCount ?? null,
       notes: notes
         .filter((n) => n.bookingId === b.id)
         .map((n) => ({ id: n.id, body: n.body, author: n.authorName || n.authorEmail, at: n.createdAt })),

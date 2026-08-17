@@ -56,6 +56,7 @@ export type BookingOps = {
   eventScheduled: boolean;
   eventDate: string | null; // YYYY-MM-DD
   eventTime: string | null; // "HH:MM" local wall-clock at the property
+  eventGuestCount: number | null;
 };
 
 type OpsRow = {
@@ -63,11 +64,12 @@ type OpsRow = {
   event_scheduled: boolean;
   event_date: string | null;
   event_time: string | null;
+  event_guest_count: number | null;
 };
 
 export async function listBookingOps(organizationId: string): Promise<Map<number, BookingOps>> {
   const rows = await query<OpsRow>(
-    `select booking_id, event_scheduled, event_date::text as event_date, event_time
+    `select booking_id, event_scheduled, event_date::text as event_date, event_time, event_guest_count
      from booking_ops where organization_id = $1`,
     [organizationId]
   );
@@ -79,6 +81,7 @@ export async function listBookingOps(organizationId: string): Promise<Map<number
         eventScheduled: r.event_scheduled,
         eventDate: r.event_date,
         eventTime: r.event_time,
+        eventGuestCount: r.event_guest_count === null ? null : Number(r.event_guest_count),
       },
     ])
   );
@@ -90,15 +93,17 @@ export async function upsertBookingOps(input: {
   eventScheduled: boolean;
   eventDate: string | null;
   eventTime: string | null;
+  eventGuestCount: number | null;
   updatedBy: string;
 }): Promise<void> {
   await query(
-    `insert into booking_ops (organization_id, booking_id, event_scheduled, event_date, event_time, updated_by, updated_at)
-     values ($1, $2, $3, $4, $5, $6, now())
+    `insert into booking_ops (organization_id, booking_id, event_scheduled, event_date, event_time, event_guest_count, updated_by, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, now())
      on conflict (organization_id, booking_id) do update set
        event_scheduled = excluded.event_scheduled,
        event_date = excluded.event_date,
        event_time = excluded.event_time,
+       event_guest_count = excluded.event_guest_count,
        updated_by = excluded.updated_by,
        updated_at = now()`,
     [
@@ -107,6 +112,7 @@ export async function upsertBookingOps(input: {
       input.eventScheduled,
       input.eventDate,
       input.eventTime,
+      input.eventGuestCount,
       input.updatedBy,
     ]
   );

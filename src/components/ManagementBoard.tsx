@@ -27,6 +27,7 @@ type Stay = {
   eventScheduled?: boolean;
   eventDate?: string | null;
   eventTime?: string | null;
+  eventGuestCount?: number | null;
   notes: StayNote[];
 };
 
@@ -74,6 +75,12 @@ const EVENT_TIMES: { value: string; label: string }[] = (() => {
   return out;
 })();
 
+/** Attendance options: every number 1-40, then 45..200 by fives. */
+const EVENT_GUEST_COUNTS: number[] = [
+  ...Array.from({ length: 40 }, (_, i) => i + 1),
+  ...Array.from({ length: 32 }, (_, i) => 45 + i * 5),
+];
+
 function fmtTime(hhmm?: string | null): string | null {
   if (!hhmm) return null;
   const [h, m] = hhmm.split(":").map(Number);
@@ -111,7 +118,13 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
     }
     if (s.eventScheduled && s.eventDate) {
       if (!byDay.has(s.eventDate)) byDay.set(s.eventDate, { guests: [], events: [] });
-      byDay.get(s.eventDate)!.events.push(fmtTime(s.eventTime) ? `${s.guestName} at ${fmtTime(s.eventTime)}` : s.guestName);
+      byDay
+        .get(s.eventDate)!
+        .events.push(
+          [s.guestName, fmtTime(s.eventTime) ? `at ${fmtTime(s.eventTime)}` : null, s.eventGuestCount ? `(${s.eventGuestCount} ppl)` : null]
+            .filter(Boolean)
+            .join(" ")
+        );
     }
   }
 
@@ -190,6 +203,54 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
   );
 }
 
+/** Event-only list under the calendar (2026-08-16, Seni's ask): every
+ * flagged event with guest, date, time and headcount — soonest first. */
+function EventsList({ stays }: { stays: Stay[] }) {
+  const events = stays
+    .filter((s) => s.eventScheduled)
+    .sort((a, b) => (a.eventDate ?? "9999").localeCompare(b.eventDate ?? "9999"));
+
+  return (
+    <aside className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
+      <h3 className="mb-2 text-sm font-semibold">Events ({events.length})</h3>
+      {events.length === 0 ? (
+        <p className="text-sm text-black/50 dark:text-white/50">
+          No events booked yet. Check &ldquo;Event deposit paid&rdquo; on a stay to add one.
+        </p>
+      ) : (
+        <ul className="max-h-80 space-y-2 overflow-y-auto pr-1">
+          {events.map((e) => (
+            <li
+              key={e.bookingId}
+              className="rounded-lg border border-amber-400/40 bg-amber-400/5 px-3 py-2 text-sm"
+            >
+              <div className="font-medium">{e.guestName}</div>
+              <div className="text-black/60 dark:text-white/60">
+                {e.eventDate
+                  ? new Date(`${e.eventDate}T00:00:00Z`).toLocaleDateString("en-US", {
+                      weekday: "short",
+                      month: "short",
+                      day: "numeric",
+                      timeZone: "UTC",
+                    })
+                  : "date TBD"}
+                {fmtTime(e.eventTime) ? ` · ${fmtTime(e.eventTime)}` : " · time TBD"}
+              </div>
+              <div className="text-black/60 dark:text-white/60">
+                {e.eventGuestCount ? `${e.eventGuestCount} people attending` : "headcount TBD"}
+              </div>
+              <div className="mt-0.5 text-[11px] text-black/40 dark:text-white/40">
+                Stay: {fmtDate(e.arrival)} → {fmtDate(e.departure)}
+                {e.propertyName ? ` · ${e.propertyName}` : ""}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
+  );
+}
+
 export function ManagementBoard() {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -229,7 +290,13 @@ export function ManagementBoard() {
     return () => clearInterval(t);
   }, [load]);
 
-  async function setEvent(s: Stay, eventScheduled: boolean, eventDate: string | null, eventTime: string | null) {
+  async function setEvent(
+    s: Stay,
+    eventScheduled: boolean,
+    eventDate: string | null,
+    eventTime: string | null,
+    eventGuestCount: number | null
+  ) {
     // Optimistic: flip the checkbox/date in place immediately (2026-08-16 —
     // waiting for the server round-trip made the first click feel dead, so
     // people double-clicked). The POST syncs in the background; on failure
@@ -239,7 +306,7 @@ export function ManagementBoard() {
         ? {
             ...prev,
             stays: prev.stays.map((x) =>
-              x.bookingId === s.bookingId ? { ...x, eventScheduled, eventDate, eventTime } : x
+              x.bookingId === s.bookingId ? { ...x, eventScheduled, eventDate, eventTime, eventGuestCount } : x
             ),
           }
         : prev
@@ -248,7 +315,7 @@ export function ManagementBoard() {
       const res = await fetch("/api/management/booking-ops", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookingId: s.bookingId, eventScheduled, eventDate, eventTime }),
+        body: JSON.stringify({ bookingId: s.bookingId, eventScheduled, eventDate, eventTime, eventGuestCount }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -352,7 +419,8 @@ export function ManagementBoard() {
                         s,
                         e.target.checked,
                         e.target.checked ? (s.eventDate ?? null) : null,
-                        e.target.checked ? (s.eventTime ?? null) : null
+                        e.target.checked ? (s.eventTime ?? null) : null,
+                        e.target.checked ? (s.eventGuestCount ?? null) : null
                       )
                     }
                     className="h-6 w-6 cursor-pointer accent-red-600"
@@ -362,7 +430,7 @@ export function ManagementBoard() {
                 {s.eventScheduled && (
                   <select
                     value={s.eventDate ?? ""}
-                    onChange={(e) => void setEvent(s, true, e.target.value || null, s.eventTime ?? null)}
+                    onChange={(e) => void setEvent(s, true, e.target.value || null, s.eventTime ?? null, s.eventGuestCount ?? null)}
                     className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
                     <option value="">Pick the event date…</option>
@@ -381,13 +449,35 @@ export function ManagementBoard() {
                 {s.eventScheduled && (
                   <select
                     value={s.eventTime ?? ""}
-                    onChange={(e) => void setEvent(s, true, s.eventDate ?? null, e.target.value || null)}
+                    onChange={(e) => void setEvent(s, true, s.eventDate ?? null, e.target.value || null, s.eventGuestCount ?? null)}
                     className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
                     <option value="">Pick the time…</option>
                     {EVENT_TIMES.map((t) => (
                       <option key={t.value} value={t.value}>
                         {t.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {s.eventScheduled && (
+                  <select
+                    value={s.eventGuestCount ?? ""}
+                    onChange={(e) =>
+                      void setEvent(
+                        s,
+                        true,
+                        s.eventDate ?? null,
+                        s.eventTime ?? null,
+                        e.target.value ? Number(e.target.value) : null
+                      )
+                    }
+                    className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
+                  >
+                    <option value="">People attending…</option>
+                    {EVENT_GUEST_COUNTS.map((n) => (
+                      <option key={n} value={n}>
+                        {n} {n === 1 ? "person" : "people"}
                       </option>
                     ))}
                   </select>
@@ -401,6 +491,7 @@ export function ManagementBoard() {
                       timeZone: "UTC",
                     })}
                     {fmtTime(s.eventTime) ? ` · ${fmtTime(s.eventTime)}` : ""}
+                    {s.eventGuestCount ? ` · ${s.eventGuestCount} ppl` : ""}
                   </span>
                 )}
               </div>
@@ -445,7 +536,10 @@ export function ManagementBoard() {
         </div>
       </section>
 
-      <StayCalendar stays={data.stays} calendarStays={data.calendarStays ?? []} />
+      <div className="space-y-6">
+        <StayCalendar stays={data.stays} calendarStays={data.calendarStays ?? []} />
+        <EventsList stays={data.stays} />
+      </div>
       </div>
 
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">

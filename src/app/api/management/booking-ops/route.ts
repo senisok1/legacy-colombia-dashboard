@@ -11,7 +11,13 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const body = (await req.json().catch(() => null)) as
-    | { bookingId?: number; eventScheduled?: boolean; eventDate?: string | null; eventTime?: string | null }
+    | {
+        bookingId?: number;
+        eventScheduled?: boolean;
+        eventDate?: string | null;
+        eventTime?: string | null;
+        eventGuestCount?: number | null;
+      }
     | null;
 
   if (typeof body?.bookingId !== "number" || !Number.isFinite(body.bookingId)) {
@@ -24,6 +30,10 @@ export async function POST(req: NextRequest) {
     typeof body.eventDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.eventDate) ? body.eventDate : null;
   const eventTime =
     typeof body.eventTime === "string" && /^\d{2}:\d{2}$/.test(body.eventTime) ? body.eventTime : null;
+  const eventGuestCount =
+    typeof body.eventGuestCount === "number" && Number.isInteger(body.eventGuestCount) && body.eventGuestCount > 0
+      ? Math.min(body.eventGuestCount, 500)
+      : null;
 
   try {
     await upsertBookingOps({
@@ -32,6 +42,7 @@ export async function POST(req: NextRequest) {
       eventScheduled: body.eventScheduled,
       eventDate: body.eventScheduled ? eventDate : null,
       eventTime: body.eventScheduled ? eventTime : null,
+      eventGuestCount: body.eventScheduled ? eventGuestCount : null,
       updatedBy: session.email,
     });
     return NextResponse.json({ ok: true });
