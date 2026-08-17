@@ -28,7 +28,20 @@ export async function notifyGabrielIfServiceRequest(
   draft: Pick<
     PendingDraft,
     "isServiceRequest" | "guestName" | "guestPhone" | "guestMessageEnglish" | "guestMessage" | "guestId" | "bookingId" | "threadId"
-  >
+  >,
+  // Which property this request belongs to (2026-08-17 audit). Without it
+  // createWorkOrder stored property_group_id NULL, which propertyGroupFilter
+  // reads as Legacy Colombia — so every guest-reported service request from
+  // Alva/Pompano/Miami/Beach House silently appeared on Colombia's
+  // Maintenance tab and nowhere else.
+  //
+  // Optional because the two callers differ: the dashboard approve/edit path
+  // (api/messages/reply) has a session and a property cookie and passes it;
+  // the WhatsApp webhook path has neither — an inbound Meta payload carries
+  // no property context — so it falls back to the default group, which is
+  // the pre-existing behaviour rather than a regression. Threading it there
+  // needs the draft store to persist the group at draft-creation time.
+  propertyGroupId?: string
 ): Promise<string> {
   if (!draft.isServiceRequest) return "";
 
@@ -45,6 +58,7 @@ export async function notifyGabrielIfServiceRequest(
         description: summary,
         source: "guest_message",
         reportedBy: draft.guestName ?? "guest (via WhatsApp/OwnerRez message)",
+        propertyGroupId,
       });
       workOrderId = workOrder.id;
     } catch {

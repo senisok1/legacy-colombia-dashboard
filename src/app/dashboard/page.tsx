@@ -51,9 +51,19 @@ export default async function DashboardPage() {
 
   // Same year-to-date window as the "Revenue (YTD)" stat card above, so the
   // pie chart's total lines up with the number Seni already sees there.
-  const yearStart = new Date(new Date().getFullYear(), 0, 1);
+  // Must use the SAME bounded window as summaryStats' ytdRevenue — including
+  // the `<= now` upper bound added in the 2026-08-17 audit. Bounding only the
+  // stat card would leave this chart counting the entire forward book, so the
+  // pie's total would visibly exceed the Revenue (YTD) figure right above it,
+  // which is precisely what this comment originally existed to prevent.
+  const nowForYtd = new Date();
+  const yearStart = new Date(nowForYtd.getFullYear(), 0, 1);
   const ytdBookings = bookings.filter(
-    (b) => isRevenueCounting(b) && b.arrival && parseISO(b.arrival) >= yearStart
+    (b) =>
+      isRevenueCounting(b) &&
+      b.arrival &&
+      parseISO(b.arrival) >= yearStart &&
+      parseISO(b.arrival) <= nowForYtd
   );
   const revenueByChannel = revenueBySource(ytdBookings);
 

@@ -62,8 +62,20 @@ export default function SettingsPage() {
   const [currentCurrency, setCurrentCurrency] = useState<string | null>(null);
   const [savingCurrency, setSavingCurrency] = useState<string | null>(null);
 
+  // 403 here means a team (READ_ONLY) session: the middleware default-denies
+  // admin APIs (2026-08-17 audit). Before this flag, the page swallowed the
+  // 403 and rendered the whole org-credential form with every field reading
+  // "not configured" — worse than not showing it, because it invites a team
+  // member to type an OwnerRez token into a form whose save is also blocked.
+  // Team members get the one Settings thing that IS theirs: their password.
+  const [restricted, setRestricted] = useState(false);
+
   async function refresh() {
     const res = await fetch("/api/settings/credentials");
+    if (res.status === 403) {
+      setRestricted(true);
+      return;
+    }
     if (res.ok) {
       const data = (await res.json()) as { storedKeys: string[] };
       setStoredKeys(new Set(data.storedKeys));
@@ -151,6 +163,28 @@ export default function SettingsPage() {
       const body = (await res.json().catch(() => null)) as { error?: string } | null;
       setError(body?.error || "Couldn't save that — try again.");
     }
+  }
+
+  if (restricted) {
+    return (
+      <div className="mx-auto max-w-2xl px-6 py-8 space-y-6">
+        <div>
+          <h1 className="text-lg font-semibold">Settings</h1>
+          <p className="text-sm text-black/50 dark:text-white/50 mt-1">
+            Account connections are managed by the property owner. Here&apos;s what you can change.
+          </p>
+        </div>
+        <Link
+          href="/settings/account"
+          className="block rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 hover:border-black/20 dark:hover:border-white/20"
+        >
+          <span className="text-sm font-medium">Change your password →</span>
+          <span className="block text-xs text-black/50 dark:text-white/50 mt-0.5">
+            Set a new password for your own login.
+          </span>
+        </Link>
+      </div>
+    );
   }
 
   return (

@@ -264,7 +264,15 @@ async function verifyMetaSignature(req: NextRequest, rawBody: string): Promise<b
   const expected = createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
   const supplied = header.slice("sha256=".length);
   if (supplied.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(supplied, "hex"), Buffer.from(expected, "hex"));
+  // Compare the HEX STRINGS, not decoded buffers. Buffer.from(x, "hex")
+  // silently truncates at the first non-hex character, so a 64-character
+  // signature of garbage (e.g. "z".repeat(64)) decodes to a ZERO-byte
+  // buffer while `expected` decodes to 32 bytes — and timingSafeEqual then
+  // throws RangeError rather than returning false. That turned a forged
+  // request into a 500, which Meta retry-storms, instead of a clean 401.
+  // Both strings are fixed-length hex here, so a byte-wise compare over the
+  // ASCII is equivalent and can't throw.
+  return timingSafeEqual(Buffer.from(supplied, "ascii"), Buffer.from(expected, "ascii"));
 }
 
 export async function POST(req: NextRequest) {

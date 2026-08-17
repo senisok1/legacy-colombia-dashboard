@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
       groupId
     );
     if (isWhatsAppConfigured()) {
-      const gabrielNote = resolved ? await notifyGabrielIfServiceRequest(resolved) : "";
+      const gabrielNote = resolved ? await notifyGabrielIfServiceRequest(resolved, groupId) : "";
       await sendWhatsAppText(
         `Sent to ${payload.guestName ?? "the guest"} via dashboard ✅${gabrielNote}`,
         session?.organizationId

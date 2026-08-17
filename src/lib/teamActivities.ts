@@ -59,14 +59,10 @@ function fromRow(r: Row): TeamActivity {
  * written by and about Legacy Colombia).
  *
  * `propertyGroupId` is OPTIONAL, and omitting it deliberately preserves the
- * old cross-property behaviour, because one caller still can't supply it:
- *   - src/app/api/management/route.ts (buildBoard) calls
- *     listTeamActivities(orgId) — it ALREADY resolves `groupId` for
- *     getBookings/getGuests a few lines above and simply needs to pass it
- *     through. That's the last step to close this leak, and it's outside this
- *     change's file scope.
- * Cross-property admin/cron paths that genuinely want everything should keep
- * passing undefined.
+ * old cross-property behaviour. The Management board — the caller this leak
+ * was actually about — now passes it (api/management/route.ts's buildBoard),
+ * so the log is genuinely scoped there. Cross-property admin/cron paths that
+ * genuinely want everything should keep passing undefined.
  */
 export async function listTeamActivities(
   organizationId: string,
