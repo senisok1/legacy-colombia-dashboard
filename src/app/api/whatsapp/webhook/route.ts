@@ -262,9 +262,20 @@ async function recordStatusCallbacks(body: unknown): Promise<void> {
 //      needs no password to set up, and it closes the actual hole here:
 //      an anonymous forged POST approving a draft and messaging a guest.
 //
-// Prefer #1 when both are set. With NEITHER set this stays open and logs
-// loudly on every request — silently rejecting all real guest traffic would
-// be a worse failure than the one being fixed.
+// STRICT LADDER, highest configured wins:
+//   app secret set  -> HMAC REQUIRED; the URL secret alone is NOT accepted.
+//   only url secret -> URL secret required.
+//   neither         -> open, and logs loudly on every request.
+//
+// The middle rung deliberately stops being accepted once the App Secret
+// exists. An earlier version accepted EITHER proof for resilience, but that
+// caps the endpoint's security at the weaker of the two: anyone who ever saw
+// the callback URL could still replay a forged body. "Add the App Secret to
+// upgrade" is only true if adding it actually removes the weaker path.
+//
+// Nothing breaks at the moment of upgrade: Meta signs every POST, so a
+// correctly-configured app is already sending a valid signature before the
+// env var is set.
 function hasValidUrlSecret(req: NextRequest): boolean {
   const expected = (process.env.WHATSAPP_WEBHOOK_SECRET || "").trim();
   if (!expected) return false;
@@ -283,11 +294,12 @@ async function verifyMetaSignature(req: NextRequest, rawBody: string): Promise<b
     );
     return true;
   }
+  // App secret is configured, so the HMAC is now the ONLY accepted proof.
   const header = req.headers.get("x-hub-signature-256") ?? "";
-  // A valid URL secret is accepted alongside the HMAC rather than instead of
-  // it: both are secrets only Meta and this app know, and accepting either
-  // means rotating one can't take guest messaging down.
-  if (!header.startsWith("sha256=")) return hasValidUrlSecret(req);
+  if (!header.startsWith("sha256=")) {
+    console.warn("[whatsapp webhook] rejected: WHATSAPP_APP_SECRET is set but the request carried no X-Hub-Signature-256");
+    return false;
+  }
   const { createHmac, timingSafeEqual } = await import("node:crypto");
   const expected = createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
   const supplied = header.slice("sha256=".length);
@@ -300,9 +312,7 @@ async function verifyMetaSignature(req: NextRequest, rawBody: string): Promise<b
   // request into a 500, which Meta retry-storms, instead of a clean 401.
   // Both strings are fixed-length hex here, so a byte-wise compare over the
   // ASCII is equivalent and can't throw.
-  return (
-    timingSafeEqual(Buffer.from(supplied, "ascii"), Buffer.from(expected, "ascii")) || hasValidUrlSecret(req)
-  );
+  return timingSafeEqual(Buffer.from(supplied, "ascii"), Buffer.from(expected, "ascii"));
 }
 
 export async function POST(req: NextRequest) {
