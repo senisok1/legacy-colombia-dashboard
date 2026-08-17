@@ -86,8 +86,20 @@ export function ManagementBoard() {
   }, [load]);
 
   async function setEvent(s: Stay, eventScheduled: boolean, eventDate: string | null) {
-    if (busy) return;
-    setBusy(true);
+    // Optimistic: flip the checkbox/date in place immediately (2026-08-16 —
+    // waiting for the server round-trip made the first click feel dead, so
+    // people double-clicked). The POST syncs in the background; on failure
+    // we resync from the server and show the error.
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            stays: prev.stays.map((x) =>
+              x.bookingId === s.bookingId ? { ...x, eventScheduled, eventDate } : x
+            ),
+          }
+        : prev
+    );
     try {
       const res = await fetch("/api/management/booking-ops", {
         method: "POST",
@@ -97,11 +109,9 @@ export function ManagementBoard() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setError(null);
-      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save event flag.");
-    } finally {
-      setBusy(false);
+      void load(true); // resync — the optimistic flip was wrong
     }
   }
 
@@ -192,7 +202,6 @@ export function ManagementBoard() {
                   <input
                     type="checkbox"
                     checked={Boolean(s.eventScheduled)}
-                    disabled={busy}
                     onChange={(e) => void setEvent(s, e.target.checked, e.target.checked ? (s.eventDate ?? null) : null)}
                     className="h-6 w-6 cursor-pointer accent-red-600"
                   />
@@ -201,7 +210,6 @@ export function ManagementBoard() {
                 {s.eventScheduled && (
                   <select
                     value={s.eventDate ?? ""}
-                    disabled={busy}
                     onChange={(e) => void setEvent(s, true, e.target.value || null)}
                     className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
