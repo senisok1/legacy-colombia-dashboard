@@ -1,4 +1,3 @@
-import { listMessages, listTemplates } from "@/lib/store";
 import { MessagingCenter } from "@/components/MessagingCenter";
 import { isMessagingConfigured } from "@/lib/config";
 import { getServerSession } from "@/lib/session";
@@ -16,8 +15,8 @@ export const dynamic = "force-dynamic";
 export default async function MessagingPage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
-  const orgId = session?.organizationId;
-  const [templates, log] = await Promise.all([listTemplates(orgId), listMessages(orgId)]);
+  // Templates + sent log now load client-side after first paint (2026-08-16
+  // instant-load fix) — the shell renders immediately.
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
@@ -30,11 +29,7 @@ export default async function MessagingPage() {
       </div>
 
       <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-        <MessagingCenter
-          initialTemplates={templates}
-          initialLog={log}
-          messagingConfigured={isMessagingConfigured()}
-        />
+        <MessagingCenter messagingConfigured={isMessagingConfigured()} />
       </div>
     </div>
   );

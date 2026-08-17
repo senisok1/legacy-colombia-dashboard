@@ -64,9 +64,9 @@ export function ManagementBoard() {
   const [logDraft, setLogDraft] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh = false) => {
     try {
-      const res = await fetch("/api/management");
+      const res = await fetch(fresh ? "/api/management?fresh=1" : "/api/management");
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setData(json as BoardData);
@@ -77,8 +77,11 @@ export function ManagementBoard() {
   }, []);
 
   useEffect(() => {
+    // Instant paint from the server's Redis snapshot, then a fresh copy
+    // right behind it, then a 2-minute refresh loop (2026-08-16).
     void load();
-    const t = setInterval(() => void load(), 120_000);
+    void load(true);
+    const t = setInterval(() => void load(true), 120_000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -94,7 +97,7 @@ export function ManagementBoard() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setError(null);
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save event flag.");
     } finally {
@@ -115,7 +118,7 @@ export function ManagementBoard() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       if (kind === "activity") setLogDraft("");
       else if (bookingId !== undefined) setNoteDrafts((d) => ({ ...d, [bookingId]: "" }));
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {

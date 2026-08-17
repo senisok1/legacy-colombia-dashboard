@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { getBookings, getGuests } from "@/lib/ownerrez";
 import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { listBookingOps, listTeamActivities } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
+import { redisGet, redisSet } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -38,75 +39,99 @@ function isProxyPhone(phone: string): boolean {
 // pending paid-extras signals, and the general team activity log. Read side
 // of the Management tab — every logged-in role may read this (READ_ONLY
 // included); writes go through /api/management/activities.
+// Instant-load snapshot (2026-08-16, same pattern as the Messaging inbox):
+// the board is served from a Redis snapshot immediately (single O(1) GET)
+// while a background recompute refreshes it. ?fresh=1 skips the snapshot -
+// the client calls that right after painting the cached copy, and after
+// every note/flag write.
+const SNAPSHOT_TTL_SECONDS = 6 * 60 * 60;
+
+function snapshotKey(orgId: string): string {
+  return `management:board:${orgId}`;
+}
+
+async function buildBoard(orgId: string) {
+  const [bookings, guests, drafts, activities] = await Promise.all([
+    getBookings(orgId),
+    getGuests(orgId).catch(() => []),
+    getAllPendingDrafts(orgId).catch(() => []),
+    listTeamActivities(orgId).catch(() => []),
+  ]);
+  const guestsById = buildGuestsById(guests);
+  const opsByBookingId = await listBookingOps(orgId).catch(() => new Map<number, never>());
+
+  const todayMs = Date.now() - 24 * 60 * 60 * 1000;
+  const upcoming = bookings
+    .filter((b) => !b.isBlock && b.departure && new Date(b.departure).getTime() >= todayMs)
+    .sort((a, b) => new Date(a.arrival || 0).getTime() - new Date(b.arrival || 0).getTime());
+
+  const extrasByBookingId = new Set(
+    drafts.filter((d) => d.isServiceRequest && d.status === "pending").map((d) => d.bookingId)
+  );
+
+  const notes = activities.filter((a) => a.kind === "note" && a.bookingId !== null);
+  const log = activities.filter((a) => a.kind === "activity");
+
+  return {
+    stays: upcoming.map((b) => ({
+      bookingId: b.id,
+      guestName: resolveGuestName(b, guestsById) || "Guest",
+      ...(() => {
+        const g = b.guestId != null ? guestsById.get(b.guestId) : undefined;
+        const phone = g?.phone || null;
+        const email = g?.email || null;
+        return {
+          guestPhone: phone && isProxyPhone(phone) ? null : phone,
+          guestPhoneProxy: Boolean(phone && isProxyPhone(phone)),
+          guestEmail: email && isProxyEmail(email) ? null : email,
+          guestEmailProxy: Boolean(email && isProxyEmail(email)),
+        };
+      })(),
+      propertyName: b.propertyName,
+      arrival: b.arrival,
+      departure: b.departure,
+      nights: b.nights,
+      adults: b.adults,
+      children: b.children,
+      source: b.source,
+      totalAmount: b.totalAmount,
+      extrasRequested: extrasByBookingId.has(b.id),
+      eventScheduled: opsByBookingId.get(b.id)?.eventScheduled ?? false,
+      eventDate: opsByBookingId.get(b.id)?.eventDate ?? null,
+      notes: notes
+        .filter((n) => n.bookingId === b.id)
+        .map((n) => ({ id: n.id, body: n.body, author: n.authorName || n.authorEmail, at: n.createdAt })),
+    })),
+    activityLog: log
+      .slice(0, 100)
+      .map((a) => ({ id: a.id, body: a.body, author: a.authorName || a.authorEmail, at: a.createdAt })),
+  };
+}
+
+async function buildAndStore(orgId: string) {
+  const board = await buildBoard(orgId);
+  await redisSet(snapshotKey(orgId), JSON.stringify(board), { exSeconds: SNAPSHOT_TTL_SECONDS }).catch(() => {});
+  return board;
+}
+
 export async function GET(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
+  const orgId = session.organizationId;
+  const fresh = req.nextUrl.searchParams.get("fresh") === "1";
+
   try {
-    const orgId = session.organizationId;
-    const [bookings, guests, drafts, activities] = await Promise.all([
-      getBookings(orgId),
-      // Guest contact info (phone/email when the channel shares it — Airbnb/
-      // Vrbo often withhold real email/phone; direct bookings have both).
-      getGuests(orgId).catch(() => []),
-      getAllPendingDrafts(orgId).catch(() => []),
-      listTeamActivities(orgId).catch(() => []),
-    ]);
-    const guestsById = buildGuestsById(guests);
-    const opsByBookingId = await listBookingOps(orgId).catch(() => new Map<number, never>());
-
-    // Stays the team actually works from: real bookings (no calendar
-    // blocks) that haven't checked out yet (checkout today still shows —
-    // that's the turnover the cleaners care about most).
-    const todayMs = Date.now() - 24 * 60 * 60 * 1000;
-    const upcoming = bookings
-      .filter((b) => !b.isBlock && b.departure && new Date(b.departure).getTime() >= todayMs)
-      .sort((a, b) => new Date(a.arrival || 0).getTime() - new Date(b.arrival || 0).getTime());
-
-    // Paid-extras signal: a pending AI draft flagged as a service request
-    // (chef, massage, jet ski, boat, transport...) on this booking.
-    const extrasByBookingId = new Set(
-      drafts.filter((d) => d.isServiceRequest && d.status === "pending").map((d) => d.bookingId)
-    );
-
-    const notes = activities.filter((a) => a.kind === "note" && a.bookingId !== null);
-    const log = activities.filter((a) => a.kind === "activity");
-
-    return NextResponse.json({
-      stays: upcoming.map((b) => ({
-        bookingId: b.id,
-        guestName: resolveGuestName(b, guestsById) || "Guest",
-        ...(() => {
-          const g = b.guestId != null ? guestsById.get(b.guestId) : undefined;
-          const phone = g?.phone || null;
-          const email = g?.email || null;
-          return {
-            guestPhone: phone && isProxyPhone(phone) ? null : phone,
-            guestPhoneProxy: Boolean(phone && isProxyPhone(phone)),
-            guestEmail: email && isProxyEmail(email) ? null : email,
-            guestEmailProxy: Boolean(email && isProxyEmail(email)),
-          };
-        })(),
-        propertyName: b.propertyName,
-        arrival: b.arrival,
-        departure: b.departure,
-        nights: b.nights,
-        adults: b.adults,
-        children: b.children,
-        source: b.source,
-        totalAmount: b.totalAmount,
-        extrasRequested: extrasByBookingId.has(b.id),
-        eventScheduled: opsByBookingId.get(b.id)?.eventScheduled ?? false,
-        eventDate: opsByBookingId.get(b.id)?.eventDate ?? null,
-        notes: notes
-          .filter((n) => n.bookingId === b.id)
-          .map((n) => ({ id: n.id, body: n.body, author: n.authorName || n.authorEmail, at: n.createdAt })),
-      })),
-      activityLog: log
-        .slice(0, 100)
-        .map((a) => ({ id: a.id, body: a.body, author: a.authorName || a.authorEmail, at: a.createdAt })),
-      viewerRole: session.role,
-    });
+    if (!fresh) {
+      const cached = await redisGet(snapshotKey(orgId)).catch(() => null);
+      if (cached) {
+        // Serve the snapshot instantly; refresh it in the background so the
+        // client's follow-up ?fresh=1 (and the next visitor) get current data.
+        after(buildAndStore(orgId).catch(() => {}));
+        return NextResponse.json(JSON.parse(cached));
+      }
+    }
+    return NextResponse.json(await buildAndStore(orgId));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/management failed:", message);

@@ -1,23 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { MessageLogEntry, MessageTemplate } from "@/lib/types";
 import { ThreadInbox } from "@/components/ThreadInbox";
 
 type Tab = "inbox" | "templates" | "log";
 
 export function MessagingCenter({
-  initialTemplates,
-  initialLog,
+  initialTemplates = [],
+  initialLog = [],
   messagingConfigured,
 }: {
-  initialTemplates: MessageTemplate[];
-  initialLog: MessageLogEntry[];
+  initialTemplates?: MessageTemplate[];
+  initialLog?: MessageLogEntry[];
   messagingConfigured: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("inbox");
   const [templates, setTemplates] = useState(initialTemplates);
-  const [log] = useState(initialLog);
+  const [log, setLog] = useState(initialLog);
+
+  // Instant-load fix (2026-08-16): the page no longer blocks its shell on
+  // the templates/sent-log DB reads — they load here, after first paint.
+  useEffect(() => {
+    if (initialTemplates.length === 0) {
+      fetch("/api/templates")
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d) => Array.isArray(d) && setTemplates(d))
+        .catch(() => {});
+    }
+    if (initialLog.length === 0) {
+      fetch("/api/messages")
+        .then((r) => (r.ok ? r.json() : []))
+        .then((d) => Array.isArray(d) && setLog(d))
+        .catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="space-y-4">
