@@ -95,7 +95,7 @@ export default async function DashboardPage() {
         </div>
 
         <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-          <OccupancyCalendar bookings={bookings} showFinancials={!isTeam} />
+          <OccupancyCalendar bookings={withNames(bookings)} showFinancials={!isTeam} />
         </div>
       </div>
 
