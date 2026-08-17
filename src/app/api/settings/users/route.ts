@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
-import { deleteUser, getUserByEmail, listUsers, setUserActive, upsertUser } from "@/lib/users";
+import { deleteUser, getUserByEmail, listUsers, setUserActive, updateUser, upsertUser } from "@/lib/users";
 
 export const dynamic = "force-dynamic";
 
@@ -119,6 +119,71 @@ export async function PATCH(req: NextRequest) {
     return ok
       ? NextResponse.json({ ok: true })
       : NextResponse.json({ error: "No such login." }, { status: 404 });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
+  }
+}
+
+export async function PUT(req: NextRequest) {
+  const { session, error } = requireCeo(req);
+  if (error) return error;
+
+  const body = (await req.json().catch(() => null)) as
+    | { userId?: string; email?: string; name?: string; password?: string; role?: string; language?: string }
+    | null;
+  if (!body?.userId) return NextResponse.json({ error: "userId is required." }, { status: 400 });
+
+  const email = body.email?.trim().toLowerCase();
+  if (email !== undefined && (!email || !email.includes("@"))) {
+    return NextResponse.json({ error: "A valid email is required." }, { status: 400 });
+  }
+  if (body.password && body.password.length < 8) {
+    return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+  }
+
+  const ALLOWED = ["English", "Spanish", "Portuguese"];
+  const language = body.language && ALLOWED.includes(body.language) ? body.language : undefined;
+  const role = body.role === "CEO" ? ("CEO" as const) : body.role === "READ_ONLY" ? ("READ_ONLY" as const) : undefined;
+
+  try {
+    const users = await listUsers(session.organizationId);
+    const target = users.find((u) => u.id === body.userId);
+    if (!target) return NextResponse.json({ error: "No such login." }, { status: 404 });
+
+    const isSelf = target.email.toLowerCase() === session.email.toLowerCase();
+    // Lockout guard: don't let an admin demote their own account.
+    if (isSelf && role && role !== "CEO") {
+      return NextResponse.json({ error: "You can't remove admin access from your own login." }, { status: 400 });
+    }
+    // Email-collision guard (emails are globally unique across tenants).
+    if (email && email !== target.email.toLowerCase()) {
+      const clash = await getUserByEmail(email);
+      if (clash) return NextResponse.json({ error: "That email is already in use." }, { status: 409 });
+    }
+
+    const updated = await updateUser(body.userId, session.organizationId, {
+      ...(email !== undefined ? { email } : {}),
+      ...(body.name !== undefined ? { name: body.name.trim() || null } : {}),
+      ...(body.password ? { password: body.password } : {}),
+      ...(role ? { role } : {}),
+      ...(language ? { language } : {}),
+    });
+    if (!updated) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
+
+    return NextResponse.json({
+      ok: true,
+      user: {
+        id: updated.id,
+        email: updated.email,
+        name: updated.name,
+        role: updated.role,
+        language: updated.language,
+        active: updated.active,
+      },
+      // A changed email/password invalidates nothing server-side, but the
+      // person must sign in again with the new credentials.
+      selfChanged: isSelf,
+    });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
   }

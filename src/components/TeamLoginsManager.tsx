@@ -25,6 +25,50 @@ export function TeamLoginsManager() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+  // Inline edit (2026-08-16): change a teammate's email/password/name/
+  // language/access without deleting and recreating the login.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+
+  function startEdit(u: ManagedUser) {
+    setEditingId(u.id);
+    setNotice(null);
+    setEditForm({
+      name: u.name ?? "",
+      email: u.email,
+      password: "",
+      role: u.role,
+      language: u.language || "English",
+    });
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy || !editingId) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/settings/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: editingId, ...editForm }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setNotice(
+        json.selfChanged
+          ? `Updated ${json.user.email}. If you changed your own email or password, sign in again with the new details.`
+          : `Updated ${json.user.email}.${editForm.password ? " New password is set — share it with them." : ""}`
+      );
+      setEditingId(null);
+      setError(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update login.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -163,8 +207,17 @@ export function TeamLoginsManager() {
               )}
               {u.isYou && <span className="text-xs text-black/40 dark:text-white/40">(you)</span>}
               {!u.active && <span className="text-xs text-red-500">deactivated</span>}
+              <span className="ml-auto flex gap-1.5">
+                <button
+                  onClick={() => (editingId === u.id ? setEditingId(null) : startEdit(u))}
+                  disabled={busy}
+                  className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"
+                >
+                  {editingId === u.id ? "Cancel" : "Edit"}
+                </button>
+              </span>
               {!u.isYou && (
-                <span className="ml-auto flex gap-1.5">
+                <span className="flex gap-1.5">
                   <button
                     onClick={() => void toggleActive(u)}
                     disabled={busy}
@@ -180,6 +233,68 @@ export function TeamLoginsManager() {
                     Delete
                   </button>
                 </span>
+              )}
+              {editingId === u.id && (
+                <form onSubmit={saveEdit} className="mt-2 flex w-full flex-wrap items-end gap-2 border-t border-black/10 dark:border-white/10 pt-2">
+                  <label className="text-xs text-black/60 dark:text-white/60">
+                    Name
+                    <input
+                      className="mt-0.5 block w-36 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      value={editForm.name}
+                      onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                    />
+                  </label>
+                  <label className="text-xs text-black/60 dark:text-white/60">
+                    Email
+                    <input
+                      type="email"
+                      className="mt-0.5 block w-52 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      value={editForm.email}
+                      onChange={(e) => setEditForm((f) => ({ ...f, email: e.target.value }))}
+                    />
+                  </label>
+                  <label className="text-xs text-black/60 dark:text-white/60">
+                    New password (optional)
+                    <input
+                      type="text"
+                      placeholder="leave blank to keep"
+                      className="mt-0.5 block w-44 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      value={editForm.password}
+                      onChange={(e) => setEditForm((f) => ({ ...f, password: e.target.value }))}
+                    />
+                  </label>
+                  <label className="text-xs text-black/60 dark:text-white/60">
+                    Access
+                    <select
+                      className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      value={editForm.role}
+                      onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}
+                      disabled={u.isYou}
+                    >
+                      <option value="READ_ONLY">Team member (view only)</option>
+                      <option value="CEO">Admin (full access)</option>
+                    </select>
+                  </label>
+                  <label className="text-xs text-black/60 dark:text-white/60">
+                    Language
+                    <select
+                      className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      value={editForm.language}
+                      onChange={(e) => setEditForm((f) => ({ ...f, language: e.target.value }))}
+                    >
+                      <option value="English">English</option>
+                      <option value="Spanish">Spanish (Español)</option>
+                      <option value="Portuguese">Portuguese (Português)</option>
+                    </select>
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+                  >
+                    {busy ? "Saving…" : "Save changes"}
+                  </button>
+                </form>
               )}
             </div>
           ))}

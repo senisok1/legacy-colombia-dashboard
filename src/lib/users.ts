@@ -134,6 +134,40 @@ export async function setUserActive(userId: string, active: boolean, organizatio
   return rows.length > 0;
 }
 
+/** Updates an existing login BY ID (Settings → Team logins' Edit button,
+ * 2026-08-16). Unlike upsertUser (which keys on email and therefore can't
+ * rename one), this can change the email itself. Only the fields provided
+ * are touched; password is re-hashed only when a new one is supplied.
+ * Org-scoped so one tenant can never edit another's users. Returns null if
+ * no matching row. */
+export async function updateUser(
+  userId: string,
+  organizationId: string,
+  fields: { email?: string; name?: string | null; password?: string; role?: Role; language?: string }
+): Promise<AppUser | null> {
+  const sets: string[] = [];
+  const values: unknown[] = [userId, organizationId];
+  const push = (sql: string, value: unknown) => {
+    values.push(value);
+    sets.push(`${sql} = $${values.length}`);
+  };
+
+  if (fields.email !== undefined) push("email", fields.email.toLowerCase());
+  if (fields.name !== undefined) push("name", fields.name);
+  if (fields.role !== undefined) push("role", fields.role);
+  if (fields.language !== undefined) push("language", fields.language);
+  if (fields.password) push("password_hash", await bcrypt.hash(fields.password, 12));
+  if (sets.length === 0) return null;
+
+  const row = await queryOne<UserRow>(
+    `update users set ${sets.join(", ")}
+     where id = $1 and organization_id = $2
+     returning id, email, password_hash, name, role, active, organization_id, language`,
+    values
+  );
+  return row ? fromRow(row) : null;
+}
+
 /** Permanently deletes a login (Settings → Team logins' Delete button).
  * Org-scoped like setUserActive. Nothing else references users(id) — team
  * activity attribution is stored denormalized as author_email/author_name,
