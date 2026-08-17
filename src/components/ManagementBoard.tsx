@@ -120,21 +120,27 @@ function StayCalendar({ stays }: { stays: Stay[] }) {
           const info = byDay.get(iso);
           const occupied = Boolean(info && info.guests.length > 0);
           const hasEvent = Boolean(info && info.events.length > 0);
+          const isPast = iso < todayIso;
           const tooltip = info
             ? [
                 ...info.guests.map((g) => `Guest: ${g}`),
                 ...info.events.map((g) => `🎉 EVENT — ${g}`),
               ].join("\n")
-            : "Available";
+            : isPast
+              ? "Not booked"
+              : "Available";
+          // Same palette as the Dashboard's occupancy calendar: blue =
+          // booked, red = past day that wasn't booked, gray = available.
+          const cellColor = occupied
+            ? "bg-blue-500/80 font-medium text-white"
+            : isPast
+              ? "bg-red-500/80 text-white"
+              : "bg-black/[0.06] dark:bg-white/10 text-black/60 dark:text-white/60";
           return (
             <div
               key={iso}
               title={tooltip}
-              className={`flex h-8 cursor-default items-center justify-center rounded-md text-xs transition-colors ${
-                occupied
-                  ? "bg-[var(--accent)]/80 font-medium text-white"
-                  : "bg-black/[0.04] dark:bg-white/[0.06] text-black/60 dark:text-white/60"
-              } ${hasEvent ? "ring-2 ring-red-500" : ""} ${iso === todayIso ? "outline outline-2 outline-offset-1 outline-black/30 dark:outline-white/40" : ""}`}
+              className={`flex h-8 cursor-default items-center justify-center rounded-md text-xs transition-colors ${cellColor} ${hasEvent ? "ring-2 ring-amber-400" : ""} ${iso === todayIso ? "outline outline-2 outline-offset-1 outline-black/30 dark:outline-white/40" : ""}`}
             >
               {day}
             </div>
@@ -143,10 +149,16 @@ function StayCalendar({ stays }: { stays: Stay[] }) {
       </div>
       <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-black/50 dark:text-white/50">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-sm bg-[var(--accent)]/80" /> Guest staying
+          <span className="inline-block h-3 w-3 rounded-sm bg-blue-500/80" /> Booked
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-sm ring-2 ring-red-500" /> Event day
+          <span className="inline-block h-3 w-3 rounded-sm bg-red-500/80" /> Not booked
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-3 w-3 rounded-sm bg-black/[0.06] dark:bg-white/10" /> Available
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-3 w-3 rounded-sm ring-2 ring-amber-400" /> Event day
         </span>
       </div>
       <p className="mt-1 text-[11px] text-black/40 dark:text-white/40">Hover a day to see who&apos;s at the house.</p>
