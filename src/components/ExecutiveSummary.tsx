@@ -77,12 +77,29 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
         />
         <StatCard label="Direct bookings (30d)" value={`${report.directBookingPct}%`} />
         <StatCard
-          label="Revenue YTD"
-          value={<Money amount={report.revenueYtdGross} />}
+          label={report.extrasYtd?.count ? "Total revenue YTD" : "Revenue YTD"}
+          value={<Money amount={report.extrasYtd?.count ? report.totalRevenueYtdGross : report.revenueYtdGross} />}
           subLabel="Net"
-          subValue={<Money amount={report.revenueYtdNet} />}
+          subValue={<Money amount={report.revenueYtdNet + (report.extrasYtd?.houseRevenue ?? 0)} />}
+          hint={
+            report.extrasYtd?.count
+              ? `Stays $${Math.round(report.revenueYtdGross).toLocaleString()} · Extras $${Math.round(
+                  report.extrasYtd.houseRevenue
+                ).toLocaleString()} (house share)`
+              : undefined
+          }
         />
-        <StatCard label="Revenue MTD" value={<Money amount={report.revenueMtdGross} />} />
+        <StatCard
+          label={report.extrasMtd?.count ? "Total revenue MTD" : "Revenue MTD"}
+          value={<Money amount={report.extrasMtd?.count ? report.totalRevenueMtdGross : report.revenueMtdGross} />}
+          hint={
+            report.extrasMtd?.count
+              ? `Stays $${Math.round(report.revenueMtdGross).toLocaleString()} · Extras $${Math.round(
+                  report.extrasMtd.houseRevenue
+                ).toLocaleString()}`
+              : undefined
+          }
+        />
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -170,6 +187,81 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
           }
         />
       </div>
+
+      {(report.extrasYtd?.count ?? 0) > 0 && (
+        <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
+          <div className="mb-1 flex items-baseline justify-between gap-2">
+            <h3 className="text-sm font-medium">Extras &amp; ancillary revenue (YTD)</h3>
+            {/* Unlike booking revenue this is hand-entered and reconciles to
+                no payment processor — say so rather than let it read as
+                platform-sourced. */}
+            <span className="text-xs text-black/40 dark:text-white/40">Manually recorded</span>
+          </div>
+          <p className="mb-3 text-xs text-black/50 dark:text-white/50">
+            Only the house share counts as revenue — the guest total also contains Gabriel&apos;s commission, which
+            passes through. Extras are deliberately excluded from ADR, RevPAR and occupancy above.
+          </p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-black/50 dark:text-white/50">
+                <th className="pb-1 font-medium">Extra</th>
+                <th className="pb-1 text-right font-medium">Sold</th>
+                <th className="pb-1 text-right font-medium">Guest paid</th>
+                <th className="pb-1 text-right font-medium">House share</th>
+                <th className="pb-1 text-right font-medium">Commission</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.extrasYtd.byKind.map((row) => (
+                <tr key={row.label} className="border-t border-black/5 dark:border-white/5">
+                  <td className="py-1">{row.label}</td>
+                  <td className="py-1 text-right">{row.count}</td>
+                  <td className="py-1 text-right text-black/50 dark:text-white/50">
+                    <Money amount={row.guestPaid} />
+                  </td>
+                  <td className="py-1 text-right font-semibold">
+                    <Money amount={row.houseRevenue} />
+                  </td>
+                  <td className="py-1 text-right text-black/50 dark:text-white/50">
+                    <Money amount={row.commission} />
+                  </td>
+                </tr>
+              ))}
+              <tr className="border-t border-black/10 dark:border-white/10 font-semibold">
+                <td className="py-1">Total</td>
+                <td className="py-1 text-right">{report.extrasYtd.count}</td>
+                <td className="py-1 text-right">
+                  <Money amount={report.extrasYtd.guestPaid} />
+                </td>
+                <td className="py-1 text-right">
+                  <Money amount={report.extrasYtd.houseRevenue} />
+                </td>
+                <td className="py-1 text-right">
+                  <Money amount={report.extrasYtd.commission} />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <StatCard
+              label="Attach rate"
+              value={`${report.extrasYtd.attachRatePct}%`}
+              hint={`${report.extrasYtd.staysWithExtras} of ${report.extrasYtd.totalStays} stays bought at least one extra`}
+            />
+            <StatCard
+              label="House share per stay"
+              value={<Money amount={report.extrasYtd.houseRevenuePerStay} />}
+              hint="Averaged across every stay, not just those with extras"
+            />
+            <StatCard label="Extras MTD (house)" value={<Money amount={report.extrasMtd.houseRevenue} />} />
+            <StatCard
+              label="Commission paid YTD"
+              value={<Money amount={report.extrasYtd.commission} />}
+              hint="A cost, not revenue"
+            />
+          </div>
+        </div>
+      )}
 
       <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
         <h3 className="text-sm font-medium mb-2">Needs your attention</h3>

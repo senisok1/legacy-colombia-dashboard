@@ -300,3 +300,52 @@ export async function translateThreadMessages(
 
   return result;
 }
+
+/**
+ * Detects what language a piece of inbound text is written in AND returns an
+ * English translation of it, in ONE Claude call.
+ *
+ * Added 2026-08-17 to close a real gap: guest-message approvals already did a
+ * full round trip (guest's language -> English for Seni -> back to the
+ * guest's language on send), because lib/aiReply.ts asks Claude for
+ * `language` + `guest_message_english` as part of drafting. Website chat
+ * escalations had none of that, so a Spanish-speaking visitor's question
+ * reached Seni untranslated, and his English answer went back untranslated.
+ *
+ * Returns the language as a human-readable NAME ("Spanish"), not a code,
+ * because that's what translateToLanguage() above takes for the return trip.
+ * Degrades safely: on any failure it reports English and echoes the original,
+ * which reproduces the old behaviour rather than dropping the message.
+ */
+export async function detectLanguageAndTranslateToEnglish(
+  text: string,
+  organizationId?: string
+): Promise<{ language: string; english: string }> {
+  const trimmed = text.trim();
+  if (!trimmed) return { language: "English", english: text };
+
+  const apiKey = await resolveAnthropicApiKey(organizationId);
+  if (!apiKey) return { language: "English", english: text };
+
+  const raw = await callClaude(
+    `You are given an inbound message from a website visitor or guest.
+Respond with ONLY a JSON object, no markdown fences, in exactly this shape:
+{"language":"the English NAME of the language the message is written in, e.g. Spanish, Portuguese, French, English","english":"a natural English translation of the message, or the original text unchanged if it is already English"}`,
+    trimmed,
+    1024,
+    apiKey
+  );
+  if (!raw) return { language: "English", english: text };
+
+  try {
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const parsed = JSON.parse(cleaned) as { language?: unknown; english?: unknown };
+    const language =
+      typeof parsed.language === "string" && parsed.language.trim() ? parsed.language.trim() : "English";
+    const english =
+      typeof parsed.english === "string" && parsed.english.trim() ? parsed.english.trim() : text;
+    return { language, english };
+  } catch {
+    return { language: "English", english: text };
+  }
+}

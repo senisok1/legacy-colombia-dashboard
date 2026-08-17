@@ -160,8 +160,16 @@ function threadSummariesFallbackKey(organizationId?: string, propertyGroupId?: s
 // v2: bumped 2026-08-10 to skip past entries written during the rate-limit-
 // triggered "Guest" regression described above — see getAllThreadSummaries'
 // own v3->v4 bump for the same incident.
-function threadSummaryLiteKey(orgId: string, threadId: number): string {
-  return `thread-summary-lite-v2:${orgId}:${threadId}`;
+// v3 (2026-08-17): namespaced per property group. The v2 keyspace was
+// shared, so with a warm cache the thread route happily returned an Alva
+// booking while Colombia was selected (and vice versa) — thread ids are
+// globally unique, so there was no collision, just no way to reject an
+// out-of-group thread. The default group keeps an un-suffixed key so the
+// existing warm entries stay valid.
+function threadSummaryLiteKey(orgId: string, threadId: number, propertyGroupId?: string): string {
+  const suffix =
+    propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID ? `:${propertyGroupId}` : "";
+  return `thread-summary-lite-v3${suffix}:${orgId}:${threadId}`;
 }
 
 const THREAD_SUMMARY_LITE_TTL_SECONDS = 1800; // matches getAllThreadSummaries' own window
@@ -170,11 +178,12 @@ export type ThreadSummaryLite = Pick<ThreadSummary, "booking" | "guestName">;
 
 export async function getCachedThreadSummaryLite(
   threadId: number,
-  organizationId?: string
+  organizationId?: string,
+  propertyGroupId?: string
 ): Promise<ThreadSummaryLite | null> {
   if (!isRedisConfigured() || !organizationId) return null;
   try {
-    const raw = await redisGet(threadSummaryLiteKey(organizationId, threadId));
+    const raw = await redisGet(threadSummaryLiteKey(organizationId, threadId, propertyGroupId));
     if (!raw) return null;
     return JSON.parse(raw) as ThreadSummaryLite;
   } catch {
@@ -182,13 +191,17 @@ export async function getCachedThreadSummaryLite(
   }
 }
 
-async function warmThreadSummaryLiteCache(summaries: ThreadSummary[], organizationId?: string): Promise<void> {
+async function warmThreadSummaryLiteCache(
+  summaries: ThreadSummary[],
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<void> {
   if (!isRedisConfigured() || !organizationId || summaries.length === 0) return;
   try {
     await Promise.all(
       summaries.map((s) =>
         redisSet(
-          threadSummaryLiteKey(organizationId, s.threadId),
+          threadSummaryLiteKey(organizationId, s.threadId, propertyGroupId),
           JSON.stringify({ booking: s.booking, guestName: s.guestName } satisfies ThreadSummaryLite),
           { exSeconds: THREAD_SUMMARY_LITE_TTL_SECONDS }
         )
@@ -383,7 +396,7 @@ async function fetchAllThreadSummaries(organizationId?: string, limit: number = 
   // unstable_cache wrapper (getAllThreadSummaries) returns — so any request
   // racing to open a conversation right after the Inbox list first loads
   // still gets a hit instead of a coin flip.
-  await warmThreadSummaryLiteCache(page, organizationId);
+  await warmThreadSummaryLiteCache(page, organizationId, propertyGroupId);
   return page;
 }
 
@@ -444,8 +457,14 @@ export { fetchAllThreadSummaries };
  * guest's own thread, which is often just one or two prior messages and not
  * enough for the AI to reliably match his tone.
  */
-async function computeGlobalHostStyleExamples(limit: number, organizationId?: string): Promise<string[]> {
-  const summaries = await getAllThreadSummaries(organizationId);
+async function computeGlobalHostStyleExamples(
+  limit: number,
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<string[]> {
+  // propertyGroupId added 2026-08-17: the tone corpus was always built from
+  // Legacy Colombia's threads, for every property.
+  const summaries = await getAllThreadSummaries(organizationId, undefined, propertyGroupId);
   const hostMessages = summaries
     .flatMap((s) => s.messages)
     .filter((m) => !m.isGuest && m.body.trim())

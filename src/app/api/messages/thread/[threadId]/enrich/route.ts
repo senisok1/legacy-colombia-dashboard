@@ -8,6 +8,8 @@ import { createPendingDraft, getPendingDraftByThreadId } from "@/lib/pendingDraf
 import { isAiReplyConfigured, isMessagingConfigured } from "@/lib/config";
 import { trailingGuestMessages, combineGuestMessageBodies } from "@/lib/guestMessageGroup";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +38,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
   }
 
   const session = getSessionFromRequest(req);
+  // Property scoping (2026-08-17): without it, getBookings/getGuests below
+  // defaulted to Legacy Colombia, so an Alva thread resolved to no booking,
+  // showed the guest as "Guest", and never got an AI-drafted reply.
+  const groupId = effectivePropertyGroupId(
+    req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+    (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+  );
   const { threadId: threadIdParam } = await params;
   const threadId = Number(threadIdParam);
   if (!threadId || Number.isNaN(threadId)) {
@@ -44,8 +53,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
 
   const [messages, bookings, guests] = await Promise.all([
     getThreadMessages(threadId, session?.organizationId),
-    getBookings(session?.organizationId),
-    getGuests(session?.organizationId),
+    getBookings(session?.organizationId, groupId),
+    getGuests(session?.organizationId, groupId),
   ]);
   const booking = bookings.find((b) => b.threadIds.includes(threadId));
   const guestsById = buildGuestsById(guests);
@@ -75,7 +84,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
     try {
       // Grounded in Seni's own replies across every recent conversation, not
       // just this one thread's (often sparse) history — see inbox.ts.
-      const stylePool = await getGlobalHostStyleExamples(MAX_STYLE_EXAMPLES, session?.organizationId);
+      const stylePool = await getGlobalHostStyleExamples(MAX_STYLE_EXAMPLES, session?.organizationId, groupId);
       const drafted = await draftGuestReply({
         guestMessage: combinedGuestMessage,
         booking,

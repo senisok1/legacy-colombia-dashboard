@@ -478,6 +478,15 @@ export type ChatEscalation = {
   // hedged reply the visitor already saw in the widget (see
   // lib/chatWidget.ts's draftEscalationAnswerForApproval).
   aiDraftAnswer?: string;
+  // Language round-trip for website inquiries (2026-08-17). `language` is the
+  // human-readable name of the language the VISITOR wrote in ("Spanish"), and
+  // questionEnglish is the English translation shown to Seni — the same
+  // treatment guest messages already got via lib/aiReply.ts. Together they
+  // let his English "EDIT: ..." answer be translated back before it reaches
+  // the visitor. Optional: escalations created before this existed have
+  // neither, and are treated as English.
+  language?: string;
+  questionEnglish?: string;
   status: ChatEscalationStatus;
   // What actually gets delivered to the visitor: aiDraftAnswer verbatim on
   // "YES", or Seni's own wording after "EDIT: ...". Unset while pending or

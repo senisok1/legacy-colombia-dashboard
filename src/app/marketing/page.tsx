@@ -1,11 +1,17 @@
-import { isDbConfigured, isSearchAnalyticsConfigured, isGa4Configured, isPostizConfigured } from "@/lib/config";
+import { isDbConfigured, isPostizConfigured } from "@/lib/config";
 import { listContentPieces, listContentCampaigns, listPiecesForCampaign } from "@/lib/contentMarketing";
 import { getPushableChannels } from "@/lib/postiz";
 import { listMarketingContacts, getMarketingContactStats } from "@/lib/marketingContacts";
-import { getSearchConsolePerformance, getGa4Overview } from "@/lib/searchAnalytics";
+import { getSearchConsolePerformance, getGa4Overview, gscSiteUrlFor, ga4PropertyIdFor } from "@/lib/searchAnalytics";
 import { getServerSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, propertyGroupById } from "@/lib/propertyGroups";
+
 import { enforceBillingLock } from "@/lib/billingGate";
 import { MarketingExplorer } from "@/components/MarketingExplorer";
+import { PageHeader } from "@/components/PageHeader";
+import { MARKETING_GROUP_TABS } from "@/lib/navGroups";
 import { SocialMediaManager } from "@/components/SocialMediaManager";
 import { MarketingContactsPanel } from "@/components/MarketingContactsPanel";
 import { SearchAnalyticsPanel } from "@/components/SearchAnalyticsPanel";
@@ -25,17 +31,29 @@ export default async function MarketingPage() {
 
   const session = await getServerSession();
   await enforceBillingLock(session);
+  // Property scoping (2026-08-17, Seni: "ensure these tabs show only the
+  // specific data for that specific property ONLY").
+  const cookieStore = await cookies();
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
   const orgId = session?.organizationId;
   const [pieces, campaigns, contacts, contactStats, gsc, ga4] = await Promise.all([
-    listContentPieces(orgId),
-    listContentCampaigns(orgId),
-    listMarketingContacts(orgId),
-    getMarketingContactStats(orgId),
-    isSearchAnalyticsConfigured()
-      ? getSearchConsolePerformance().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }))
+    listContentPieces(orgId, groupId),
+    listContentCampaigns(orgId, groupId),
+    listMarketingContacts(orgId, groupId),
+    getMarketingContactStats(orgId, groupId),
+    // Per-property Search Console / GA4 (2026-08-17): Legacy Alva pulls
+    // legacyalva.com, not legacycolombia.com. A property with nothing
+    // configured shows "not connected" instead of another site's numbers.
+    gscSiteUrlFor(groupId)
+      ? getSearchConsolePerformance(28, groupId).catch((err) => ({
+          error: err instanceof Error ? err.message : String(err),
+        }))
       : Promise.resolve(null),
-    isGa4Configured()
-      ? getGa4Overview().catch((err) => ({ error: err instanceof Error ? err.message : String(err) }))
+    ga4PropertyIdFor(groupId)
+      ? getGa4Overview(28, groupId).catch((err) => ({
+          error: err instanceof Error ? err.message : String(err),
+        }))
       : Promise.resolve(null),
   ]);
   const campaignsWithPieces = await Promise.all(
@@ -44,14 +62,14 @@ export default async function MarketingPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold">Marketing</h1>
-        <p className="text-sm text-black/50 dark:text-white/50">
-          Social Media Manager below drafts a full weekly batch from one pillar asset; standalone blog/email ideas
-          are further down. Approving a social piece on a connected Postiz channel stages it as a real draft there —
-          everything else is copy-and-post-yourself until connected.
-        </p>
-      </div>
+      {/* Section strip added 2026-08-17 when Campaigns + Pipeline moved
+          under Marketing and the CRM group was removed. */}
+      <PageHeader
+        eyebrow="Marketing"
+        title={`Marketing — ${propertyGroupById(groupId).label}`}
+        subtitle="Social Media Manager below drafts a full weekly batch from one pillar asset; standalone blog/email ideas are further down. Approving a social piece on a connected Postiz channel stages it as a real draft there — everything else is copy-and-post-yourself until connected."
+        tabs={MARKETING_GROUP_TABS}
+      />
 
       <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
         <SearchAnalyticsPanel gsc={gsc} ga4={ga4} />

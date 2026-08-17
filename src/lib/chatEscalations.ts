@@ -15,6 +15,8 @@ type ChatEscalationRow = {
   visitor_email: string | null;
   visitor_phone: string | null;
   ai_draft_answer: string | null;
+  language: string | null;
+  question_english: string | null;
   status: ChatEscalation["status"];
   final_answer: string | null;
   wamid: string | null;
@@ -37,6 +39,8 @@ function fromRow(row: ChatEscalationRow): ChatEscalation {
     visitorPhone: row.visitor_phone ?? undefined,
     source: row.source ?? "website",
     aiDraftAnswer: row.ai_draft_answer ?? undefined,
+    language: row.language ?? undefined,
+    questionEnglish: row.question_english ?? undefined,
     status: row.status,
     finalAnswer: row.final_answer ?? undefined,
     wamid: row.wamid ?? undefined,
@@ -57,6 +61,11 @@ export async function createChatEscalation(
     visitorEmail?: string;
     visitorPhone?: string;
     aiDraftAnswer?: string;
+    /** Human-readable name of the language the visitor wrote in ("Spanish").
+     * Drives translating Seni's English answer back on the way out. */
+    language?: string;
+    /** English translation of `question`, shown to Seni. */
+    questionEnglish?: string;
     /** Defaults to "website" — see ChatEscalationSource in lib/types.ts. */
     source?: ChatEscalation["source"];
   },
@@ -69,8 +78,8 @@ export async function createChatEscalation(
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const row = await queryOne<ChatEscalationRow>(
     `insert into chat_escalations
-       (organization_id, question, conversation_summary, visitor_name, visitor_email, visitor_phone, ai_draft_answer, source)
-     values ($1, $2, $3, $4, $5, $6, $7, $8)
+       (organization_id, question, conversation_summary, visitor_name, visitor_email, visitor_phone, ai_draft_answer, source, language, question_english)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      returning *`,
     [
       orgId,
@@ -81,6 +90,8 @@ export async function createChatEscalation(
       input.visitorPhone ?? null,
       input.aiDraftAnswer ?? null,
       input.source ?? "website",
+      input.language ?? null,
+      input.questionEnglish ?? null,
     ]
   );
   if (!row) throw new Error("Insert into chat_escalations returned no row.");

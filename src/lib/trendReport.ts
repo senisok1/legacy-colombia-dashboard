@@ -116,9 +116,12 @@ function buildComparison(bookings: Booking[], label: string, daysBack: number): 
   };
 }
 
-export async function buildTrendReport(organizationId?: string): Promise<TrendReport> {
+export async function buildTrendReport(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<TrendReport> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const bookings = await getBookings(orgId);
+  const bookings = await getBookings(orgId, propertyGroupId);
   return {
     generatedAt: new Date().toISOString(),
     weekly: buildComparison(bookings, "This week vs. the 7 days before", 7),
@@ -204,6 +207,12 @@ export function formatTrendReportForEmailHtml(report: TrendReport): string {
   `;
 }
 
+// WhatsApp is deliberately reserved for the three things Seni wants in the
+// moment — inquiries, guest messages, new bookings (2026-08-17). Recaps and
+// digests go by EMAIL only. Flipping this to true restores the WhatsApp leg
+// without touching any other code.
+const SEND_RECAPS_TO_WHATSAPP = false;
+
 export type TrendDeliveryResult = { attempted: boolean; sent: boolean; error?: string };
 
 /** Same independent-per-channel delivery convention as
@@ -217,7 +226,9 @@ export async function deliverTrendReport(
   const whatsapp: TrendDeliveryResult = { attempted: false, sent: false };
   const email: TrendDeliveryResult = { attempted: false, sent: false };
 
-  if (isWhatsAppConfigured()) {
+  // WhatsApp delivery removed 2026-08-17 (same reason as the daily recap in
+  // executiveReport.ts — Seni reads these by email). Email leg below is live.
+  if (SEND_RECAPS_TO_WHATSAPP && isWhatsAppConfigured()) {
     whatsapp.attempted = true;
     try {
       await sendWhatsAppText(formatTrendReportForWhatsApp(report), orgId);

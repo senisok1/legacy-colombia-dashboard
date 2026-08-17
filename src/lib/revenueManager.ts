@@ -1,6 +1,7 @@
 import { query, queryOne } from "./db";
 import { config, isDbConfigured, isAiReplyConfigured, isLiveModeConfigured, isPriceLabsConfigured, isRedisConfigured } from "./config";
-import { getTargetProperty, getQuotedNightlyRateCents, OwnerRezApiError } from "./ownerrez";
+import { getTargetProperty, getTargetProperties, getQuotedNightlyRateCents, OwnerRezApiError } from "./ownerrez";
+import { DEFAULT_PROPERTY_GROUP_ID } from "./propertyGroups";
 import { getListingPrices, applyDateOverride, PriceLabsError } from "./pricelabs";
 import { logAiActivity } from "./aiActivity";
 import { redisGet, redisSet } from "./redis";
@@ -389,16 +390,43 @@ type RawRow = {
 
 /** The latest snapshot per stay_date (whatever the most recent run_date is
  * for that night), soonest night first — powers the Revenue Management tab. */
-export async function getLatestRateSnapshots(organizationId?: string): Promise<RateSnapshotRow[]> {
+/** Restricts rate rows to the OwnerRez properties in one property group
+ * (2026-08-17). rate_snapshots/rate_overrides already carry a property_id
+ * pointing at the local `properties` table, so no new column is needed —
+ * the subquery maps that back to OwnerRez ids. A NULL property_id is only
+ * shown under the default group, where every legacy row belongs. */
+async function ratePropertyFilter(
+  organizationId: string,
+  propertyGroupId: string | undefined,
+  paramIndex: number
+): Promise<{ sql: string; params: unknown[] }> {
+  if (!propertyGroupId) return { sql: "", params: [] };
+  const properties = await getTargetProperties(organizationId, propertyGroupId).catch(() => []);
+  const ids = properties.map((p) => p.id);
+  const membership = `property_id in (select id from properties where ownerrez_property_id = any($${paramIndex}::int[]))`;
+  return {
+    sql:
+      propertyGroupId === DEFAULT_PROPERTY_GROUP_ID
+        ? ` and (property_id is null or ${membership})`
+        : ` and ${membership}`,
+    params: [ids],
+  };
+}
+
+export async function getLatestRateSnapshots(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<RateSnapshotRow[]> {
   if (!isDbConfigured()) return [];
   const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const filter = await ratePropertyFilter(orgId, propertyGroupId, 2);
   const rows = await query<RawRow>(
     `select distinct on (stay_date) stay_date, run_date, ownerrez_rate_cents, pricelabs_rate_cents,
             ai_recommended_rate_cents, ai_reasoning, ai_confidence
      from rate_snapshots
-     where organization_id = $1
+     where organization_id = $1${filter.sql}
      order by stay_date asc, run_date desc`,
-    [orgId]
+    [orgId, ...filter.params]
   );
   return rows.map((r) => ({
     stayDate: r.stay_date,
@@ -431,9 +459,12 @@ export type RateComparisonSummary = {
  * lib/pricelabs.ts's header comment for that migration path). OwnerRez's
  * average has a smaller sample size than the other two by nature — a quote
  * only comes back for dates that aren't already booked. */
-export async function getRateComparisonSummary(organizationId?: string): Promise<RateComparisonSummary> {
+export async function getRateComparisonSummary(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<RateComparisonSummary> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const snapshots = await getLatestRateSnapshots(orgId);
+  const snapshots = await getLatestRateSnapshots(orgId, propertyGroupId);
   const avg = (nums: number[]) => (nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null);
 
   const aiCents = snapshots.map((s) => s.aiRecommendedRateCents).filter((c): c is number => c !== null);
@@ -595,9 +626,13 @@ export type RateOverrideRow = {
 
 /** The latest override attempt per stay_date — powers the "Applied" /
  * "Push failed" badge in the Revenue Management tab. */
-export async function getLatestRateOverrides(organizationId?: string): Promise<RateOverrideRow[]> {
+export async function getLatestRateOverrides(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<RateOverrideRow[]> {
   if (!isDbConfigured()) return [];
   const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const filter = await ratePropertyFilter(orgId, propertyGroupId, 2);
   const rows = await query<{
     stay_date: string;
     applied_price_cents: number;
@@ -608,9 +643,9 @@ export async function getLatestRateOverrides(organizationId?: string): Promise<R
   }>(
     `select distinct on (stay_date) stay_date, applied_price_cents, status, created_at, reason, triggered_by
      from rate_overrides
-     where organization_id = $1
+     where organization_id = $1${filter.sql}
      order by stay_date asc, created_at desc`,
-    [orgId]
+    [orgId, ...filter.params]
   );
   return rows.map((r) => ({
     stayDate: r.stay_date,
@@ -807,7 +842,10 @@ async function computeWeekdayWeekendRates(organizationId?: string): Promise<Week
  * cached. Returns nulls (with sample sizes of 0) if OwnerRez isn't
  * configured, so callers can tell "not live yet" apart from "genuinely no
  * quotes came back." */
-export async function getWeekdayWeekendRates(organizationId?: string): Promise<WeekdayWeekendRates> {
+export async function getWeekdayWeekendRates(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<WeekdayWeekendRates> {
   if (!isLiveModeConfigured()) {
     return { weekdayAvgCents: null, weekendAvgCents: null, weekdaySampleSize: 0, weekendSampleSize: 0, computedAt: new Date().toISOString() };
   }
@@ -819,7 +857,11 @@ export async function getWeekdayWeekendRates(organizationId?: string): Promise<W
   // is stable) when no organizationId is passed, so existing behavior is
   // unchanged for today's single-tenant deployment.
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const cacheKey = `${WEEKDAY_WEEKEND_CACHE_KEY}:${orgId}`;
+  // Group-namespaced (2026-08-17) — without this, one property's live rate
+  // sample was cached under a key every other property also read.
+  const cacheKey = `${WEEKDAY_WEEKEND_CACHE_KEY}:${orgId}${
+    propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID ? `:${propertyGroupId}` : ""
+  }`;
 
   if (isRedisConfigured()) {
     const cached = await redisGet(cacheKey);

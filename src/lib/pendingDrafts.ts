@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { redisGet, redisSet, redisDel, redisMGet } from "./redis";
 import { logAiActivity } from "./aiActivity";
 import { getDefaultOrganizationId } from "./organizations";
+import { getBookings } from "./ownerrez";
 import type { PendingDraft } from "./types";
 
 // Redis-backed store for AI-drafted guest replies awaiting Seni's approval
@@ -188,13 +189,32 @@ export async function getOldestPendingDraft(organizationId?: string): Promise<Pe
  * standalone Approvals tab (app/approvals/page.tsx), which flattens every
  * open AI-suggested reply across every conversation into one queue instead
  * of requiring him to click into each thread individually to find them. */
-export async function getAllPendingDrafts(organizationId?: string): Promise<PendingDraft[]> {
+export async function getAllPendingDrafts(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<PendingDraft[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const ids = await getPendingIds(orgId);
   const drafts = await Promise.all(ids.map((id) => getPendingDraft(id, orgId)));
-  return drafts
+  const pending = drafts
     .filter((d): d is PendingDraft => d !== null && d.status === "pending")
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+  // Property scoping (2026-08-17). The Redis keyspace is org-level, and
+  // rekeying it per property would strand every draft already queued — so
+  // instead each draft is matched to the active group through its booking,
+  // which getBookings() already returns group-scoped. A draft whose booking
+  // isn't in this group (or no longer exists) is hidden here rather than
+  // deleted, so switching property brings it straight back.
+  if (!propertyGroupId) return pending;
+  try {
+    const bookings = await getBookings(orgId, propertyGroupId);
+    const ourBookingIds = new Set(bookings.map((b) => b.id));
+    return pending.filter((d) => ourBookingIds.has(d.bookingId));
+  } catch {
+    // Never hide the approvals queue just because OwnerRez hiccuped.
+    return pending;
+  }
 }
 
 export async function resolvePendingDraft(
@@ -247,8 +267,42 @@ export async function resolvePendingDraft(
 // executiveReport.ts's dataGaps should say plainly rather than implying a
 // longer history than really exists.
 
-function responseTimesKey(orgId: string): string {
-  return `draft:${orgId}:response-times`;
+// Group-namespaced 2026-08-17: response-time stats fed the daily executive
+// summary, so one property's reply speed was being reported on every other
+// property's report. Default group keeps the original key so existing
+// history isn't orphaned.
+/** Short-lived guard against alerting twice for the SAME guest text
+ * (2026-08-17). Seni received two WhatsApp alerts for one guest message
+ * ("Exacto, pero deberían poner eso de una vez en el precio") a few seconds
+ * apart, each carrying a DIFFERENT AI draft — i.e. it was drafted twice.
+ *
+ * The existing guard compares the pending draft's stored guestMessage, which
+ * only protects within a single thread's pending draft. It can't stop the
+ * same text arriving on two OwnerRez threads for one guest (Airbnb + direct
+ * are separate threads), nor two overlapping cron runs that both read
+ * last-seen before either wrote it. Keying on the message CONTENT closes
+ * both, and a short TTL means a guest legitimately repeating themselves
+ * later still gets through. */
+export async function alreadyAlertedRecently(
+  orgId: string,
+  guestMessage: string,
+  ttlSeconds = 15 * 60
+): Promise<boolean> {
+  const body = guestMessage.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 400);
+  if (!body) return false;
+  let h = 0;
+  for (let i = 0; i < body.length; i++) h = (Math.imul(31, h) + body.charCodeAt(i)) | 0;
+  const key = `draft:${orgId}:alerted:${(h >>> 0).toString(36)}`;
+  const seen = await redisGet(key).catch(() => null);
+  if (seen) return true;
+  await redisSet(key, "1", { exSeconds: ttlSeconds }).catch(() => {});
+  return false;
+}
+
+function responseTimesKey(orgId: string, propertyGroupId?: string): string {
+  const suffix =
+    propertyGroupId && propertyGroupId !== "legacy-colombia" ? `:${propertyGroupId}` : "";
+  return `draft:${orgId}:response-times${suffix}`;
 }
 const RESPONSE_TIMES_MAX = 300; // plenty for any "last N days" window this app looks at
 
@@ -274,9 +328,13 @@ async function recordResponseTime(minutes: number, resolvedAt: string, orgId: st
 /** Response times for replies sent within the last `days` days, oldest
  * first. Empty until enough real approvals have happened since this
  * shipped — see the header comment above. */
-export async function getRecentResponseTimes(days: number, organizationId?: string): Promise<ResponseTimeEntry[]> {
+export async function getRecentResponseTimes(
+  days: number,
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<ResponseTimeEntry[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const raw = await redisGet(responseTimesKey(orgId));
+  const raw = await redisGet(responseTimesKey(orgId, propertyGroupId));
   if (!raw) return [];
   let entries: ResponseTimeEntry[] = [];
   try {

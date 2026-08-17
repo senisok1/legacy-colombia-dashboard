@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isDbConfigured } from "@/lib/config";
 import { createContentPiece, listContentPieces } from "@/lib/contentMarketing";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import type { ContentPieceType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +33,12 @@ export async function POST(req: NextRequest) {
       channel: body.channel,
       targetKeyword: body.targetKeyword,
     },
-    session?.organizationId
+    session?.organizationId,
+    await (async () =>
+      effectivePropertyGroupId(
+        req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+        (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+      ))()
   );
   return NextResponse.json({ piece });
 }

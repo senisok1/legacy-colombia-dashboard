@@ -416,6 +416,15 @@ async function handleEscalationReply(rawText: string, escalation: ChatEscalation
   const reply = rawText.trim();
   const isYes = /^y(es)?$/i.test(reply);
   const isNo = /^n(o)?$/i.test(reply);
+  // Language the website visitor wrote in, if it wasn't English — set at
+  // escalation time by detectLanguageAndTranslateToEnglish (see
+  // api/public/chat-widget/escalate). Null for English or for escalations
+  // created before language capture existed.
+  const escalationTarget =
+    escalation.language && escalation.language.trim().toLowerCase() !== "english"
+      ? escalation.language
+      : null;
+
   const editMatch = reply.match(/^edit:\s*([\s\S]+)$/i);
 
   const isWhatsAppInquiry = escalation.source === "whatsapp";
@@ -458,9 +467,17 @@ async function handleEscalationReply(rawText: string, escalation: ChatEscalation
       ).catch(() => {});
       return;
     }
-    finalAnswer = escalation.aiDraftAnswer;
+    // The AI draft was written in response to the visitor's own question, so
+    // for a foreign-language inquiry it needs the same return trip as an
+    // edited answer — Claude drafts these in English for Seni's approval.
+    finalAnswer = escalationTarget
+      ? await translateToLanguage(escalation.aiDraftAnswer, escalationTarget)
+      : escalation.aiDraftAnswer;
   } else if (editMatch) {
-    finalAnswer = editMatch[1].trim();
+    // Seni writes English; the visitor may not read it. Same rule the
+    // guest-reply path above already applies (2026-08-17).
+    const edited = editMatch[1].trim();
+    finalAnswer = escalationTarget ? await translateToLanguage(edited, escalationTarget) : edited;
   } else {
     await sendWhatsAppText(
       `Nothing sent to ${escalation.visitorName} — reply "YES" to send the suggested answer, "NO" to skip it, or "EDIT: <your text>" to send your own wording.`

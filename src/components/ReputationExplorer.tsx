@@ -15,25 +15,31 @@ function ownerRezWriteResponseUrl(review: Review): string {
     : "https://app.ownerrez.com/reviews";
 }
 
-/** Approving a drafted response sends it directly to the guest via WhatsApp.
- * One click: approve and send. The guest receives the message immediately.
- * A separate "Mark as sent" step lets Seni confirm the WhatsApp send worked. */
+/** Approving a drafted response returns the final text to copy into
+ * OwnerRez's Quality Center — OwnerRez has no API for posting review
+ * replies. The WhatsApp copy of this was removed 2026-08-17 at Seni's
+ * request (WhatsApp is inquiries / guest messages / new bookings only). */
 async function sendResponseToGuest(
   review: Review,
   text: string
-): Promise<{ success: boolean; message: string }> {
-  // Send the approved response directly to the guest via WhatsApp
+): Promise<{ success: boolean; message: string; responseText?: string }> {
   try {
     const res = await fetch(`/api/reputation/${review.id}/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
-    if (!res.ok || !data.ok) throw new Error(data.error || "Failed to send.");
+    const data = (await res.json()) as {
+      ok?: boolean;
+      message?: string;
+      error?: string;
+      responseText?: string;
+    };
+    if (!res.ok || !data.ok) throw new Error(data.error || "Failed to prepare the response.");
     return {
       success: true,
-      message: data.message || "Sent to guest via WhatsApp",
+      message: data.message || "Approved — copy into OwnerRez.",
+      responseText: data.responseText,
     };
   } catch (err) {
     return {
@@ -173,6 +179,9 @@ function ReviewCard({
   const [busy, setBusy] = useState<ReputationResponseStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // The approved reply, shown for copy/paste into OwnerRez's Quality Center
+  // (2026-08-17) — replaces the old "we WhatsApp'd it to you" behaviour.
+  const [approvedText, setApprovedText] = useState<string | null>(null);
 
   async function decide(status: ReputationResponseStatus) {
     if (!response) return;
@@ -192,7 +201,8 @@ function ReviewCard({
       if (status === "approved") {
         const result = await sendResponseToGuest(review, draftText);
         if (result.success) {
-          setNote("✓ Sent to guest");
+          setNote(result.message);
+          if (result.responseText) setApprovedText(result.responseText);
         } else {
           setError(result.message);
         }
@@ -252,6 +262,28 @@ function ReviewCard({
 
       {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       {note && <p className="text-xs text-emerald-600 dark:text-emerald-400">{note}</p>}
+      {approvedText && (
+        <div className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2">
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              Copy this into OwnerRez → Quality Center
+            </span>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(approvedText).catch(() => {})}
+              className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 text-xs hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              Copy
+            </button>
+          </div>
+          <textarea
+            readOnly
+            rows={4}
+            value={approvedText}
+            className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+          />
+        </div>
+      )}
 
       {response && !review.hostResponse && (
         <div className="flex gap-2 flex-wrap">

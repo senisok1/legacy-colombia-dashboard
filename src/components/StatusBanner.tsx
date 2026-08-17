@@ -40,11 +40,13 @@ export async function StatusBanner() {
     );
   }
 
-  return (
-    <div className="mx-auto max-w-6xl px-6 pt-4">
-      <div className="rounded-lg border border-green-300 bg-green-50 text-green-900 text-sm px-4 py-2 dark:bg-green-950/40 dark:border-green-900 dark:text-green-200">
-        {connection.message}
-      </div>
-    </div>
-  );
+  // Removed 2026-08-17 (Seni's ask). The green "Connected. Using property
+  // …" bar rendered on EVERY page and always named Legacy Colombia's two
+  // listings, because testConnection() reports the account's config-driven
+  // primary property and knows nothing about the selected property group —
+  // so on Legacy Alva/Pompano/Miami/Beach House it was simply wrong. It also
+  // said nothing actionable when everything was working. The failure states
+  // above (demo mode, connection issue) are still shown, since those DO need
+  // attention; success is now silent.
+  return null;
 }

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { StayExtras } from "./StayExtras";
+import type { BookingExtra } from "@/lib/bookingExtrasShared";
 
 // Client half of the Management tab (see app/management/page.tsx). One
 // fetch renders everything; posting a note/activity optimistically
@@ -38,6 +40,9 @@ type Stay = {
   eventDate?: string | null;
   eventTime?: string | null;
   eventGuestCount?: number | null;
+  /** Paid extras (2026-08-17) — always [] on properties other than Legacy
+   * Colombia, where the server doesn't even query for them. */
+  extras?: BookingExtra[];
   notes: StayNote[];
 };
 
@@ -58,6 +63,8 @@ type CalendarStay = { bookingId: number; guestName: string; arrival?: string; de
 type BoardData = {
   stays: Stay[];
   calendarStays?: CalendarStay[];
+  /** Server-side gate: true only for Legacy Colombia (2026-08-17). */
+  extrasEnabled?: boolean;
   activityLog: LogEntry[];
   viewerRole?: string;
   viewerLanguage?: string;
@@ -256,6 +263,9 @@ function EventsList({ stays }: { stays: Stay[] }) {
                       weekday: "short",
                       month: "short",
                       day: "numeric",
+                      // Year included (2026-08-17, Seni's ask) — events get
+                      // booked well ahead, so "Sat, Nov 6" alone is ambiguous.
+                      year: "numeric",
                       timeZone: "UTC",
                     })
                   : "date TBD"}
@@ -280,7 +290,6 @@ export function ManagementBoard() {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<Record<number, string>>({});
-  const [logDraft, setLogDraft] = useState("");
   const [busy, setBusy] = useState(false);
 
   const hasDataRef = useRef(false);
@@ -362,8 +371,7 @@ export function ManagementBoard() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      if (kind === "activity") setLogDraft("");
-      else if (bookingId !== undefined) setNoteDrafts((d) => ({ ...d, [bookingId]: "" }));
+      if (bookingId !== undefined) setNoteDrafts((d) => ({ ...d, [bookingId]: "" }));
       await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
@@ -520,6 +528,15 @@ export function ManagementBoard() {
                   </span>
                 )}
               </div>
+              {data.extrasEnabled && (
+                <StayExtras
+                  bookingId={s.bookingId}
+                  extras={s.extras ?? []}
+                  stayDates={stayDates(s.arrival, s.departure)}
+                  onChanged={() => void load(true)}
+                  onError={setError}
+                />
+              )}
               {s.notes.length > 0 && (
                 <ul className="space-y-1">
                   {s.notes.map((n) => (
@@ -567,44 +584,6 @@ export function ManagementBoard() {
       </div>
       </div>
 
-      <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
-        <h2 className="text-sm font-semibold">Team activity log</h2>
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void post("activity", logDraft);
-          }}
-        >
-          <input
-            className="flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
-            placeholder="Log what you did (pool cleaned, towels restocked, gas refilled…)"
-            value={logDraft}
-            onChange={(e) => setLogDraft(e.target.value)}
-          />
-          <button
-            type="submit"
-            disabled={busy || !logDraft.trim()}
-            className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1 text-sm text-white dark:text-black disabled:opacity-40"
-          >
-            Log it
-          </button>
-        </form>
-        {data.activityLog.length === 0 ? (
-          <p className="text-sm text-black/50 dark:text-white/50">Nothing logged yet.</p>
-        ) : (
-          <ul className="space-y-1">
-            {data.activityLog.map((a) => (
-              <li key={a.id} className="rounded bg-black/5 dark:bg-white/5 px-2 py-1 text-sm">
-                {textFor(a, data.viewerLanguage)}
-                <span className="ml-2 text-xs text-black/40 dark:text-white/40">
-                  — {a.author}, {fmtWhen(a.at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
     </div>
   );
 }

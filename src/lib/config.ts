@@ -234,7 +234,35 @@ export const config = {
   resendApiKey: (process.env.RESEND_API_KEY || "").trim(),
   // Where the daily report email goes — Seni's own inbox.
   reportEmailTo: (process.env.REPORT_EMAIL_TO || "").trim(),
-  reportEmailFrom: (process.env.REPORT_EMAIL_FROM || "CEO Dashboard <onboarding@resend.dev>").trim(),
+  reportEmailFrom: (process.env.REPORT_EMAIL_FROM || "Legacy Dashboard <onboarding@resend.dev>").trim(),
+
+  // --- Email (Google Workspace SMTP) — preferred transport (2026-08-17) ---
+  // Resend's shared onboarding@resend.dev sender may ONLY deliver to the
+  // Resend account owner, which silently capped team onboarding emails and
+  // the per-property daily summaries at a single recipient. Lifting that
+  // needs a verified sending domain, which needs DNS records on
+  // legacyestaterentals.com — and that zone turned out to live in a
+  // Cloudflare account Seni doesn't control (his own account has zero
+  // domains; both his domains delegate to the same third-party nameserver
+  // pair). Rather than block team onboarding on a third party, this sends
+  // through the Google Workspace that ALREADY runs mail for the domain:
+  // its SPF and DKIM are published and passing, so no DNS change is needed
+  // at all and the From address is properly branded.
+  //
+  // GMAIL_USER is a real Workspace mailbox (e.g. dashboard@legacyestaterentals.com).
+  // GMAIL_APP_PASSWORD is a 16-character Google App Password — NOT the
+  // account password — generated at myaccount.google.com/apppasswords with
+  // 2-Step Verification on. Seni generates and pastes it himself, the same
+  // credential-handoff pattern used for every other key in this file.
+  //
+  // When both are set, lib/email.ts uses SMTP and ignores Resend entirely.
+  // Resend stays as the automatic fallback so nothing breaks mid-migration.
+  gmailUser: (process.env.GMAIL_USER || "").trim(),
+  gmailAppPassword: (process.env.GMAIL_APP_PASSWORD || "").replace(/\s+/g, ""),
+  // Display name shown to recipients. The address itself comes from
+  // GMAIL_USER — Gmail rejects a From that isn't the authenticated mailbox
+  // or one of its verified "Send mail as" aliases, so it can't be free text.
+  gmailFromName: (process.env.GMAIL_FROM_NAME || "Legacy Dashboard").trim(),
 
   // --- Marketing/SEO — real Search Console + GA4 data (headless, read-only) ---
   // A Google Cloud service account (legacy-crm-analytics project), granted
@@ -247,6 +275,14 @@ export const config = {
   googleServiceAccountKey: (process.env.GOOGLE_SERVICE_ACCOUNT_KEY || "").trim(),
   // Search Console "domain property" identifier, e.g. "sc-domain:legacycolombia.com".
   gscSiteUrl: (process.env.GSC_SITE_URL || "").trim(),
+  // Per-property overrides (2026-08-17, Seni: pull Legacy Alva's SEO numbers
+  // from www.legacyalva.com). Env var name derives from the property-group
+  // id in propertyGroups.ts: legacy-alva -> GSC_SITE_URL_LEGACY_ALVA and
+  // GA4_PROPERTY_ID_LEGACY_ALVA. Read through gscSiteUrlFor() /
+  // ga4PropertyIdFor() in lib/searchAnalytics.ts. The default group keeps
+  // the plain names, so Legacy Colombia's setup is untouched. NOTE: the
+  // service account must also be granted Viewer on each new Search Console
+  // / GA4 property — the env var alone isn't enough.
   // GA4 numeric property id (Admin -> Property details), e.g. "540074334".
   // Tracking wasn't actually installed on the site as of 2026-08-02 (Site
   // Kit install deferred — see docs/VISION.md), so GA4 calls below will
@@ -373,15 +409,22 @@ export function isPriceLabsConfigured(): boolean {
   return Boolean(config.pricelabsApiKey);
 }
 
+/** Google Workspace SMTP available? Preferred over Resend when true —
+ * it can reach ANY recipient, whereas unverified Resend can only reach the
+ * Resend account owner. See the gmailUser comment above. */
+export function isGmailSmtpConfigured(): boolean {
+  return Boolean(config.gmailUser && config.gmailAppPassword);
+}
+
 export function isEmailConfigured(): boolean {
-  return Boolean(config.resendApiKey && config.reportEmailTo);
+  return Boolean((isGmailSmtpConfigured() || config.resendApiKey) && config.reportEmailTo);
 }
 
 /** Looser than isEmailConfigured() above — that one also requires
  * REPORT_EMAIL_TO (a fixed destination for the daily report). Sending to an
- * arbitrary website visitor's own address only needs the API key itself. */
+ * arbitrary website visitor's own address only needs a working transport. */
 export function isEmailSendConfigured(): boolean {
-  return Boolean(config.resendApiKey);
+  return Boolean(isGmailSmtpConfigured() || config.resendApiKey);
 }
 
 export function isChatReplyTemplateConfigured(): boolean {

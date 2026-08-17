@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isDbConfigured } from "@/lib/config";
 import { applyRateOverride, RevenueManagerError } from "@/lib/revenueManager";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, DEFAULT_PROPERTY_GROUP_ID, propertyGroupById } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -35,6 +37,25 @@ export async function POST(request: NextRequest) {
   }
   if (!Number.isFinite(priceCents) || priceCents <= 0) {
     return NextResponse.json({ error: "priceCents must be a positive number." }, { status: 400 });
+  }
+
+  // SAFETY GUARD (2026-08-17): applyRateOverride resolves the target
+  // property from config (getTargetProperty) and pushes through the single
+  // configured PriceLabs listing — Legacy Colombia's. Clicking Apply while
+  // another property was selected would therefore have changed COLOMBIA's
+  // price. Refuse rather than push to the wrong listing; per-property
+  // PriceLabs credentials are what this needs to support other properties.
+  const groupId = effectivePropertyGroupId(
+    request.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+    (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+  );
+  if (groupId !== DEFAULT_PROPERTY_GROUP_ID) {
+    return NextResponse.json(
+      {
+        error: `Applying rates isn't set up for ${propertyGroupById(groupId).label} yet — it needs its own PriceLabs listing. Switch to ${propertyGroupById(DEFAULT_PROPERTY_GROUP_ID).label} to apply a rate.`,
+      },
+      { status: 400 }
+    );
   }
 
   try {

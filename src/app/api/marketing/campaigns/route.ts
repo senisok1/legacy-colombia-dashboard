@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isDbConfigured } from "@/lib/config";
 import { createCampaignBatch, listContentCampaigns, listPiecesForCampaign } from "@/lib/contentMarketing";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +37,12 @@ export async function POST(req: NextRequest) {
       pillarAssetMediaUrl: body.pillarAssetMediaUrl,
       channels: Array.isArray(body.channels) ? body.channels : undefined,
     },
-    session?.organizationId
+    session?.organizationId,
+    await (async () =>
+      effectivePropertyGroupId(
+        req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+        (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+      ))()
   );
   return NextResponse.json({ campaign, pieces });
 }

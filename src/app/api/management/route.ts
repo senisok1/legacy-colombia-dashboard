@@ -3,10 +3,11 @@ import { getBookings, getGuests } from "@/lib/ownerrez";
 import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { listBookingOps, listTeamActivities } from "@/lib/teamActivities";
+import { listBookingExtras, EXTRAS_PROPERTY_GROUP_ID } from "@/lib/bookingExtras";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { redisGet, redisSet } from "@/lib/redis";
-import { PROPERTY_GROUP_COOKIE, DEFAULT_PROPERTY_GROUP_ID, normalizePropertyGroupId } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, DEFAULT_PROPERTY_GROUP_ID, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -57,11 +58,19 @@ async function buildBoard(orgId: string, groupId: string) {
   const [bookings, guests, drafts, activities] = await Promise.all([
     getBookings(orgId, groupId),
     getGuests(orgId, groupId).catch(() => []),
-    getAllPendingDrafts(orgId).catch(() => []),
+    getAllPendingDrafts(orgId, groupId).catch(() => []),
     listTeamActivities(orgId).catch(() => []),
   ]);
   const guestsById = buildGuestsById(guests);
   const opsByBookingId = await listBookingOps(orgId).catch(() => new Map<number, never>());
+  // Paid extras (2026-08-17) — Legacy Colombia only, so this query is
+  // skipped entirely on other properties rather than fetched and hidden.
+  // Note the snapshot key is already per-group, so a cached board can never
+  // carry one property's extras onto another's.
+  const extrasEnabled = groupId === EXTRAS_PROPERTY_GROUP_ID;
+  const extrasByBooking = extrasEnabled
+    ? await listBookingExtras(orgId).catch(() => new Map<number, never>())
+    : new Map<number, never>();
 
   const todayMs = Date.now() - 24 * 60 * 60 * 1000;
   // BUG FIX (2026-08-16, Seni spotted a duplicate "Cesia Alvarado" on Legacy
@@ -107,7 +116,9 @@ async function buildBoard(orgId: string, groupId: string) {
 
   return {
     calendarStays,
+    extrasEnabled,
     stays: upcoming.map((b) => ({
+      extras: extrasByBooking.get(b.id) ?? [],
       bookingId: b.id,
       guestName: resolveGuestName(b, guestsById) || "Guest",
       ...(() => {
@@ -169,13 +180,13 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const orgId = session.organizationId;
-  const groupId = normalizePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value);
   const fresh = req.nextUrl.searchParams.get("fresh") === "1";
   // Viewer's own language — the client uses it to show each note in the
   // reader's language (2026-08-16). Cheap single-row lookup, outside the
   // shared board snapshot since it differs per user.
   const viewer = await getUserByEmail(session.email).catch(() => null);
   const viewerLanguage = viewer?.language || "English";
+  const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
 
   try {
     if (!fresh) {

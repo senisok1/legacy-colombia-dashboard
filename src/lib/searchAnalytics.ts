@@ -1,5 +1,6 @@
 import { createSign } from "crypto";
-import { config, isSearchAnalyticsConfigured, isGa4Configured } from "./config";
+import { config } from "./config";
+import { DEFAULT_PROPERTY_GROUP_ID } from "./propertyGroups";
 
 // Real Search Console + GA4 data for the Marketing tab (task #172). Replaces
 // contentMarketing.ts's "no live search data" limitation for the SEO side —
@@ -22,6 +23,27 @@ import { config, isSearchAnalyticsConfigured, isGa4Configured } from "./config";
 // done. Never backfill these with guessed traffic figures.
 
 export class SearchAnalyticsError extends Error {}
+
+/** Env-var suffix for a property group: "legacy-alva" -> "LEGACY_ALVA". */
+function envSuffix(propertyGroupId: string): string {
+  return propertyGroupId.replace(/[^a-z0-9]+/gi, "_").toUpperCase();
+}
+
+/** Search Console site for a property (2026-08-17). The default group uses
+ * GSC_SITE_URL; any other group uses GSC_SITE_URL_<GROUP>, e.g.
+ * GSC_SITE_URL_LEGACY_ALVA. Returns "" when that property has no site
+ * configured — callers surface that as "not connected" rather than silently
+ * falling back to Legacy Colombia's numbers, which is the bug this fixes. */
+export function gscSiteUrlFor(propertyGroupId?: string): string {
+  if (!propertyGroupId || propertyGroupId === DEFAULT_PROPERTY_GROUP_ID) return config.gscSiteUrl;
+  return (process.env[`GSC_SITE_URL_${envSuffix(propertyGroupId)}`] || "").trim();
+}
+
+/** GA4 property id for a property group — same scheme as gscSiteUrlFor(). */
+export function ga4PropertyIdFor(propertyGroupId?: string): string {
+  if (!propertyGroupId || propertyGroupId === DEFAULT_PROPERTY_GROUP_ID) return config.ga4PropertyId;
+  return (process.env[`GA4_PROPERTY_ID_${envSuffix(propertyGroupId)}`] || "").trim();
+}
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
@@ -152,11 +174,18 @@ async function querySearchConsole(
  * matching Search Console's own default UI window), scoped ONLY to
  * config.gscSiteUrl (sc-domain:legacycolombia.com) — never any other
  * property on Seni's Google account. */
-export async function getSearchConsolePerformance(days = 28): Promise<SearchConsolePerformance> {
-  if (!isSearchAnalyticsConfigured()) {
-    throw new SearchAnalyticsError("GSC_SITE_URL / GOOGLE_SERVICE_ACCOUNT_KEY isn't set yet.");
+export async function getSearchConsolePerformance(
+  days = 28,
+  propertyGroupId?: string
+): Promise<SearchConsolePerformance> {
+  const siteUrl = gscSiteUrlFor(propertyGroupId);
+  if (!config.googleServiceAccountKey || !siteUrl) {
+    throw new SearchAnalyticsError(
+      propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID
+        ? `No Search Console site is connected for this property yet (set GSC_SITE_URL_${envSuffix(propertyGroupId)}).`
+        : "GSC_SITE_URL / GOOGLE_SERVICE_ACCOUNT_KEY isn't set yet."
+    );
   }
-  const siteUrl = config.gscSiteUrl;
   const token = await getAccessToken(SEARCH_CONSOLE_SCOPE);
 
   // Search Console's data lags ~2-3 days behind real time, so end the window
@@ -216,11 +245,15 @@ export type Ga4Overview = {
  * config.ga4PropertyId (the Legacy Colombia property) — never any other
  * property on Seni's Google account. Returns real zeros (not estimates) if
  * GA4 has no tracking data yet. */
-export async function getGa4Overview(days = 28): Promise<Ga4Overview> {
-  if (!isGa4Configured()) {
-    throw new SearchAnalyticsError("GA4_PROPERTY_ID / GOOGLE_SERVICE_ACCOUNT_KEY isn't set yet.");
+export async function getGa4Overview(days = 28, propertyGroupId?: string): Promise<Ga4Overview> {
+  const propertyId = ga4PropertyIdFor(propertyGroupId);
+  if (!config.googleServiceAccountKey || !propertyId) {
+    throw new SearchAnalyticsError(
+      propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID
+        ? `No GA4 property is connected for this property yet (set GA4_PROPERTY_ID_${envSuffix(propertyGroupId)}).`
+        : "GA4_PROPERTY_ID / GOOGLE_SERVICE_ACCOUNT_KEY isn't set yet."
+    );
   }
-  const propertyId = config.ga4PropertyId;
   const token = await getAccessToken(GA4_SCOPE);
 
   const res = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`, {

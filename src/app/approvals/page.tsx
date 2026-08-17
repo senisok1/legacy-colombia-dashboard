@@ -2,6 +2,9 @@ import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { ApprovalsQueue } from "@/components/ApprovalsQueue";
 import { isMessagingConfigured } from "@/lib/config";
 import { getServerSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +13,10 @@ export default async function ApprovalsPage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
   const configured = isMessagingConfigured();
-  const drafts = configured ? await getAllPendingDrafts(session?.organizationId) : [];
+  const cookieStore = await cookies();
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
+  const drafts = configured ? await getAllPendingDrafts(session?.organizationId, groupId) : [];
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">

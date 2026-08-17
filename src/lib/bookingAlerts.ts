@@ -17,7 +17,7 @@
 // exactly the kind of silent single-point-of-failure this feature exists to
 // eliminate.
 import { redisGet, redisSet } from "@/lib/redis";
-import { sendWhatsAppText, sendBookingNotificationTemplate } from "@/lib/whatsapp";
+import { sendWhatsAppText, sendBookingNotificationTemplate, sendDailySummaryTemplate } from "@/lib/whatsapp";
 import { logAiActivity } from "@/lib/aiActivity";
 import { resolveGuestName, buildGuestsById } from "@/lib/guestName";
 import type { Booking } from "@/lib/types";
@@ -92,15 +92,42 @@ export async function checkNewBookingAlerts(
         `\nSource: ${booking.source || "Unknown"}` +
         (typeof booking.totalAmount === "number" ? `\nTotal: ${formatMoney(booking.totalAmount)}` : "");
 
-      // Try Meta-approved template first (durable delivery), fall back to plain text if not approved yet
+      // Delivery ladder (rewritten 2026-08-17 after Seni reported never
+      // receiving new-booking alerts).
+      //
+      // ROOT CAUSE: `booking_notification` does not exist on the WhatsApp
+      // Business Account at all — Meta returns 132001 "template name does not
+      // exist" — so this ALWAYS fell through to sendWhatsAppText(), which
+      // sends a content-free session-opener template plus a free-text message
+      // that 131047 blocks whenever the 24h window is shut. Net result: a
+      // meaningless ping, and the booking details never arrived.
+      //
+      // Rather than leave bookings silent until a new template clears Meta
+      // review, step 2 reuses `daily_summary_alert` — already APPROVED and
+      // UTILITY category, and its three body params (label / headline /
+      // stats) fit a booking alert exactly. Step 1 is kept so that if a
+      // purpose-built booking_notification template is created later, it
+      // takes over automatically with no code change.
+      const headline = `New booking — ${guestName ?? "Guest"}`;
+      const statsLine =
+        `${dates} · ${booking.source || "Unknown"}` +
+        (typeof booking.totalAmount === "number" ? ` · ${formatMoney(booking.totalAmount)}` : "");
       try {
         await sendBookingNotificationTemplate({
           guestName: guestName ?? "Guest",
           propertyName: booking.propertyName ?? "your property",
           dates,
         }, orgId);
-      } catch (templateErr) {
-        await sendWhatsAppText(text, orgId);
+      } catch {
+        try {
+          await sendDailySummaryTemplate({
+            orgLabel: booking.propertyName ?? "your property",
+            headline,
+            statsLine,
+          }, orgId);
+        } catch {
+          await sendWhatsAppText(text, orgId);
+        }
       }
       // Only mark seen AFTER a successful send — if sendWhatsAppText throws
       // (transient WhatsApp/Meta failure), leave it unseen so the next run

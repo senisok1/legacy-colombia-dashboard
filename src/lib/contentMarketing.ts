@@ -1,4 +1,4 @@
-import { query, queryOne } from "./db";
+import { query, queryOne, propertyGroupFilter } from "./db";
 import { config, isAiReplyConfigured } from "./config";
 import { PROPERTY_FACTS } from "./propertyFacts";
 import { logAiActivity } from "./aiActivity";
@@ -92,11 +92,14 @@ function campaignFromRow(row: CampaignRow): ContentCampaign {
   };
 }
 
-export async function listContentPieces(organizationId?: string): Promise<ContentPiece[]> {
+export async function listContentPieces(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<ContentPiece[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const rows = await query<ContentRow>(
-    "select * from content_pieces where organization_id = $1 order by created_at desc",
-    [orgId]
+    `select * from content_pieces where organization_id = $1${propertyGroupFilter(propertyGroupId, 2)} order by created_at desc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
   );
   return rows.map(fromRow);
 }
@@ -119,12 +122,13 @@ export async function createContentPiece(
     campaignId?: string;
     mediaUrl?: string;
   },
-  organizationId?: string
+  organizationId?: string,
+  propertyGroupId?: string
 ): Promise<ContentPiece> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const row = await queryOne<ContentRow>(
-    `insert into content_pieces (organization_id, content_type, topic, channel, target_keyword, campaign_id, media_url)
-     values ($1, $2::content_piece_type, $3, $4, $5, $6, $7)
+    `insert into content_pieces (organization_id, content_type, topic, channel, target_keyword, campaign_id, media_url, property_group_id)
+     values ($1, $2::content_piece_type, $3, $4, $5, $6, $7, $8)
      returning *`,
     [
       orgId,
@@ -134,6 +138,7 @@ export async function createContentPiece(
       input.targetKeyword ?? null,
       input.campaignId ?? null,
       input.mediaUrl ?? null,
+      propertyGroupId ?? null,
     ]
   );
   if (!row) throw new Error("Failed to create content piece.");
@@ -296,11 +301,14 @@ Respond with ONLY a single JSON object (no markdown fences), with exactly these 
   return updated;
 }
 
-export async function listContentCampaigns(organizationId?: string): Promise<ContentCampaign[]> {
+export async function listContentCampaigns(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<ContentCampaign[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const rows = await query<CampaignRow>(
-    "select * from content_campaigns where organization_id = $1 order by created_at desc",
-    [orgId]
+    `select * from content_campaigns where organization_id = $1${propertyGroupFilter(propertyGroupId, 2)} order by created_at desc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
   );
   return rows.map(campaignFromRow);
 }
@@ -333,16 +341,17 @@ const ALL_SOCIAL_CHANNELS = Object.keys(SOCIAL_CHANNEL_INSTRUCTIONS) as SocialCh
  * draft on one channel doesn't block the others and so this stays fast. */
 export async function createCampaignBatch(
   input: { pillarAssetDescription: string; pillarAssetMediaUrl?: string; channels?: SocialChannel[] },
-  organizationId?: string
+  organizationId?: string,
+  propertyGroupId?: string
 ): Promise<{ campaign: ContentCampaign; pieces: ContentPiece[] }> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const channels = input.channels && input.channels.length > 0 ? input.channels : ALL_SOCIAL_CHANNELS;
 
   const campaignRow = await queryOne<CampaignRow>(
-    `insert into content_campaigns (organization_id, pillar_asset_description, pillar_asset_media_url, status)
-     values ($1, $2, $3, 'draft'::content_campaign_status)
+    `insert into content_campaigns (organization_id, pillar_asset_description, pillar_asset_media_url, status, property_group_id)
+     values ($1, $2, $3, 'draft'::content_campaign_status, $4)
      returning *`,
-    [orgId, input.pillarAssetDescription, input.pillarAssetMediaUrl ?? null]
+    [orgId, input.pillarAssetDescription, input.pillarAssetMediaUrl ?? null, propertyGroupId ?? null]
   );
   if (!campaignRow) throw new Error("Failed to create campaign.");
   const campaign = campaignFromRow(campaignRow);
@@ -357,7 +366,8 @@ export async function createCampaignBatch(
         campaignId: campaign.id,
         mediaUrl: input.pillarAssetMediaUrl,
       },
-      orgId
+      orgId,
+      propertyGroupId
     );
     pieces.push(piece);
   }

@@ -3,6 +3,9 @@ import { occupancyRate, revenueByMonth, revenueBySource } from "@/lib/finance";
 import { buildExecutiveReport } from "@/lib/executiveReport";
 import { buildTrendReport } from "@/lib/trendReport";
 import { getServerSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, propertyGroupById } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { StatCard } from "@/components/StatCard";
 import { ExecutiveSummary } from "@/components/ExecutiveSummary";
@@ -15,11 +18,16 @@ export const dynamic = "force-dynamic";
 export default async function ReportsPage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
+  // Property scoping (2026-08-17) — Reports used to compute from Legacy
+  // Colombia's bookings no matter which property was selected.
+  const cookieStore = await cookies();
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
   const orgId = session?.organizationId;
   const [bookings, report, trendReport] = await Promise.all([
-    getBookings(orgId),
-    buildExecutiveReport(orgId),
-    buildTrendReport(orgId),
+    getBookings(orgId, groupId),
+    buildExecutiveReport(orgId, groupId),
+    buildTrendReport(orgId, groupId),
   ]);
   const monthly = revenueByMonth(bookings, 12);
   const bySource = revenueBySource(bookings);
@@ -28,7 +36,7 @@ export default async function ReportsPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Reports</h1>
+        <h1 className="text-xl font-semibold">Reports — {propertyGroupById(groupId).label}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
           Revenue and occupancy, computed directly from your booking data.
         </p>

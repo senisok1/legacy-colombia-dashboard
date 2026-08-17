@@ -30,6 +30,8 @@ export type AppUser = {
   organizationId: string;
   /** Interface/notes language — 'English' | 'Spanish' | 'Portuguese'. */
   language: string;
+  /** Property-group ids this login may see; empty array = ALL properties. */
+  propertyAccess: string[];
 };
 
 type UserRow = {
@@ -41,6 +43,7 @@ type UserRow = {
   active: boolean;
   organization_id: string;
   language?: string | null;
+  property_access?: string | null;
 };
 
 function fromRow(row: UserRow): AppUser {
@@ -53,12 +56,16 @@ function fromRow(row: UserRow): AppUser {
     active: row.active,
     organizationId: row.organization_id,
     language: row.language || "English",
+    propertyAccess: (row.property_access || "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean),
   };
 }
 
 export async function getUserByEmail(email: string): Promise<AppUser | null> {
   const row = await queryOne<UserRow>(
-    "select id, email, password_hash, name, role, active, organization_id, language from users where lower(email) = lower($1)",
+    "select id, email, password_hash, name, role, active, organization_id, language, property_access from users where lower(email) = lower($1)",
     [email]
   );
   return row ? fromRow(row) : null;
@@ -85,19 +92,21 @@ export async function upsertUser(input: {
   role?: Role;
   organizationId?: string;
   language?: string;
+  propertyAccess?: string[];
 }): Promise<AppUser> {
   const hash = await bcrypt.hash(input.password, 12);
   const organizationId = input.organizationId ?? (await getDefaultOrganizationId());
   const row = await queryOne<UserRow>(
-    `insert into users (email, password_hash, name, role, organization_id, language)
-     values ($1, $2, $3, $4, $5, $6)
+    `insert into users (email, password_hash, name, role, organization_id, language, property_access)
+     values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (email) do update set
        password_hash = excluded.password_hash,
        name = excluded.name,
        role = excluded.role,
        language = excluded.language,
+       property_access = excluded.property_access,
        active = true
-     returning id, email, password_hash, name, role, active, organization_id, language`,
+     returning id, email, password_hash, name, role, active, organization_id, language, property_access`,
     [
       input.email.toLowerCase(),
       hash,
@@ -105,6 +114,7 @@ export async function upsertUser(input: {
       input.role ?? "READ_ONLY",
       organizationId,
       input.language ?? "English",
+      input.propertyAccess && input.propertyAccess.length > 0 ? input.propertyAccess.join(",") : null,
     ]
   );
   if (!row) throw new Error("Failed to create user.");
@@ -116,7 +126,7 @@ export async function upsertUser(input: {
  * type (AppUser) but callers exposing this over HTTP must strip them. */
 export async function listUsers(organizationId: string): Promise<AppUser[]> {
   const rows = await query<UserRow>(
-    `select id, email, password_hash, name, role, active, organization_id, language
+    `select id, email, password_hash, name, role, active, organization_id, language, property_access
      from users where organization_id = $1
      order by role, lower(coalesce(name, email))`,
     [organizationId]
@@ -143,7 +153,14 @@ export async function setUserActive(userId: string, active: boolean, organizatio
 export async function updateUser(
   userId: string,
   organizationId: string,
-  fields: { email?: string; name?: string | null; password?: string; role?: Role; language?: string }
+  fields: {
+    email?: string;
+    name?: string | null;
+    password?: string;
+    role?: Role;
+    language?: string;
+    propertyAccess?: string[];
+  }
 ): Promise<AppUser | null> {
   const sets: string[] = [];
   const values: unknown[] = [userId, organizationId];
@@ -156,13 +173,15 @@ export async function updateUser(
   if (fields.name !== undefined) push("name", fields.name);
   if (fields.role !== undefined) push("role", fields.role);
   if (fields.language !== undefined) push("language", fields.language);
+  if (fields.propertyAccess !== undefined)
+    push("property_access", fields.propertyAccess.length > 0 ? fields.propertyAccess.join(",") : null);
   if (fields.password) push("password_hash", await bcrypt.hash(fields.password, 12));
   if (sets.length === 0) return null;
 
   const row = await queryOne<UserRow>(
     `update users set ${sets.join(", ")}
      where id = $1 and organization_id = $2
-     returning id, email, password_hash, name, role, active, organization_id, language`,
+     returning id, email, password_hash, name, role, active, organization_id, language, property_access`,
     values
   );
   return row ? fromRow(row) : null;
@@ -203,7 +222,7 @@ export async function createUserForSignup(input: {
     `insert into users (email, password_hash, name, role, organization_id)
      values ($1, $2, $3, $4, $5)
      on conflict (email) do nothing
-     returning id, email, password_hash, name, role, active, organization_id, language`,
+     returning id, email, password_hash, name, role, active, organization_id, language, property_access`,
     [input.email.toLowerCase(), hash, input.name ?? null, input.role, input.organizationId]
   );
   return row ? fromRow(row) : null;

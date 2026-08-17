@@ -1,4 +1,5 @@
-import { config, isEmailConfigured } from "./config";
+import { config, isEmailConfigured, isGmailSmtpConfigured } from "./config";
+import { sendViaGmail } from "./gmailSmtp";
 
 // Thin wrapper around Resend's REST API — same "call the provider's HTTP
 // API directly, no SDK" style as lib/whatsapp.ts's Meta Graph API calls.
@@ -17,14 +18,34 @@ export async function sendEmail({
   subject,
   html,
   text,
+  cc,
+  bcc,
 }: {
   to: string;
   subject: string;
   html: string;
   text?: string;
+  /** Copied recipients — used so Seni stays in the loop on team onboarding
+   * emails without those going to him alone (2026-08-17). */
+  cc?: string | string[];
+  /** Blind copy. Preferred over cc for team onboarding: a cc puts Seni's
+   * personal address in every recipient's headers, and onboarding batches go
+   * to several people at once, so each of them would also see the others.
+   * bcc keeps him in the loop without exposing anyone (2026-08-17). */
+  bcc?: string | string[];
 }): Promise<string> {
   if (!isEmailConfigured()) {
-    throw new EmailError("Email isn't configured — missing RESEND_API_KEY or REPORT_EMAIL_TO.");
+    throw new EmailError(
+      "Email isn't configured — set GMAIL_USER + GMAIL_APP_PASSWORD (preferred) or RESEND_API_KEY, plus REPORT_EMAIL_TO."
+    );
+  }
+
+  // Google Workspace SMTP wins when available: it can reach any recipient,
+  // whereas Resend on an unverified domain silently refuses everyone except
+  // the Resend account owner. Resend stays as the fallback so a missing or
+  // revoked app password degrades instead of breaking outright.
+  if (isGmailSmtpConfigured()) {
+    return sendViaGmail({ to, subject, html, text, cc, bcc });
   }
 
   const res = await fetch("https://api.resend.com/emails", {
@@ -39,6 +60,8 @@ export async function sendEmail({
       subject,
       html,
       ...(text ? { text } : {}),
+      ...(cc && cc.length ? { cc: Array.isArray(cc) ? cc : [cc] } : {}),
+      ...(bcc && bcc.length ? { bcc: Array.isArray(bcc) ? bcc : [bcc] } : {}),
     }),
   });
 

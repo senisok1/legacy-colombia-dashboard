@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBookings, getGuests } from "@/lib/ownerrez";
-import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { getCachedThreadSummaryLite, getCachedThreadMessages } from "@/lib/inbox";
 import { getCachedTranslations } from "@/lib/translate";
 import { resolveGuestName, buildGuestsById } from "@/lib/guestName";
 import { getPendingDraftByThreadId } from "@/lib/pendingDrafts";
 import { isMessagingConfigured } from "@/lib/config";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
 import type { Booking } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +55,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
   }
 
   const session = getSessionFromRequest(req);
-  const __groupId = normalizePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value);
+  const __groupId = effectivePropertyGroupId(
+    req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+    (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+  );
   const orgId = session?.organizationId;
   const { threadId: threadIdParam } = await params;
   const threadId = Number(threadIdParam);
@@ -62,7 +66,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
     return NextResponse.json({ error: "Invalid threadId." }, { status: 400 });
   }
 
-  const warm = await getCachedThreadSummaryLite(threadId, orgId);
+  const warm = await getCachedThreadSummaryLite(threadId, orgId, __groupId);
 
   const [messages, pendingDraft, coldLookup] = await Promise.all([
     getCachedThreadMessages(threadId, orgId),

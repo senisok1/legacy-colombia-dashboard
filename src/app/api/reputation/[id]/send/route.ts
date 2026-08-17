@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne } from "@/lib/db";
-import { sendWhatsAppText, WhatsAppError } from "@/lib/whatsapp";
+
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { getReviews } from "@/lib/ownerrez";
 import { getDefaultOrganizationId } from "@/lib/organizations";
 
@@ -36,32 +38,33 @@ export async function POST(
     }
 
     // Fetch all reviews to find the guest's phone/contact info
-    const reviews = await getReviews(organizationId);
+    const reviews = await getReviews(organizationId, effectivePropertyGroupId(
+    req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+    (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+  ));
     const review = reviews.find((r) => r.id === response.review_id);
 
     if (!review) {
       return NextResponse.json({ ok: false, error: "Review not found" }, { status: 404 });
     }
 
-    // Send via WhatsApp
-    // For now, we'll send a simple text message. In the future, this could include
-    // guest name and other context in the message.
+    // WhatsApp send REMOVED 2026-08-17 (Seni: WhatsApp is only for inquiries,
+    // guest messages and new bookings). This route used to push the approved
+    // response to his own phone purely so he could copy it into OwnerRez —
+    // OwnerRez has no write API for review replies. It now returns the
+    // composed text instead, which the Reputation tab shows for copying, so
+    // the feature still works without spending a WhatsApp message on it.
     const guestName = response.guest_name || review.guestName || "Guest";
     const message = `Hi ${guestName},\n\n${text}`;
 
-    await sendWhatsAppText(message);
-
     return NextResponse.json({
       ok: true,
-      message: `Sent to ${guestName} via WhatsApp`,
+      message: "Approved — copy the text below into OwnerRez's Quality Center.",
+      guestName,
+      responseText: message,
     });
   } catch (err) {
-    const message =
-      err instanceof WhatsAppError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : "Failed to send response";
+    const message = err instanceof Error ? err.message : "Failed to prepare response";
     console.error(`POST /api/reputation/${id}/send failed:`, message);
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }

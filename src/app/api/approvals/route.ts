@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { isMessagingConfigured } from "@/lib/config";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ drafts: [] });
   }
   const session = getSessionFromRequest(req);
-  const drafts = await getAllPendingDrafts(session?.organizationId);
+  const drafts = await getAllPendingDrafts(
+      session?.organizationId,
+      effectivePropertyGroupId(
+        req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+        (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+      )
+    );
   return NextResponse.json({ drafts });
 }

@@ -5,7 +5,13 @@ import { CurrencyProvider } from "@/components/CurrencyProvider";
 import { PwaRegister } from "@/components/PwaRegister";
 import { getServerSession } from "@/lib/session";
 import { cookies } from "next/headers";
-import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId } from "@/lib/propertyGroups";
+import {
+  PROPERTY_GROUP_COOKIE,
+  effectivePropertyGroupId,
+  allowedPropertyGroups,
+  DEFAULT_PROPERTY_GROUP_ID,
+} from "@/lib/propertyGroups";
+import { getUserByEmail } from "@/lib/users";
 import { getOrganizationById } from "@/lib/organizations";
 import { isDbConfigured } from "@/lib/config";
 import { getTheme } from "@/lib/themes";
@@ -66,7 +72,12 @@ export default async function RootLayout({
   // (no CRM/Messaging/Marketing/AI Activity/Reports — 2026-08-16 Seni's ask).
   const session = await getServerSession();
   const cookieStore = await cookies();
-  const propertyGroupId = normalizePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value);
+  // Property access (2026-08-16): the switcher only offers properties this
+  // login may see, and a disallowed cookie value falls back to their first
+  // allowed property.
+  const me = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const propertyGroupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, me?.propertyAccess);
+  const allowedGroups = allowedPropertyGroups(me?.propertyAccess).map((g) => ({ id: g.id, label: g.label }));
   return (
     <html lang="en" className="h-full antialiased" data-theme={theme.id}>
       {/* No hardcoded bg-neutral-50/dark:bg-neutral-950 here anymore — body's
@@ -76,8 +87,16 @@ export default async function RootLayout({
           light/dark preference. */}
       <body className="min-h-full flex flex-col">
         <PwaRegister />
-        <CurrencyProvider secondaryCurrency={secondaryCurrency}>
-          <NavBar role={session?.role} propertyGroupId={propertyGroupId} />
+        {/* USD→COP toggle is Legacy Colombia only (2026-08-17, Seni's ask:
+            "the USD to COP conversion toggle should only show on the Legacy
+            Colombia property page. All the other properties are USD only").
+            The org-level secondaryCurrency setting still drives WHETHER the
+            feature exists; this decides which property it applies to. Passing
+            null disables the toggle and renders every figure in USD. */}
+        <CurrencyProvider
+          secondaryCurrency={propertyGroupId === DEFAULT_PROPERTY_GROUP_ID ? secondaryCurrency : null}
+        >
+          <NavBar role={session?.role} propertyGroupId={propertyGroupId} propertyGroups={allowedGroups} />
           <StatusBanner />
           <main className="flex-1">{children}</main>
         </CurrencyProvider>

@@ -1,4 +1,4 @@
-import { query, queryOne } from "./db";
+import { query, queryOne, propertyGroupFilter } from "./db";
 import { config, isAiReplyConfigured } from "./config";
 import { GOOGLE_REVIEW_LINK } from "./googleReview";
 import { PROPERTY_FACTS } from "./propertyFacts";
@@ -154,11 +154,16 @@ function fromRow(row: CandidateRow): LifecycleCampaignCandidate {
   };
 }
 
-export async function listCampaignCandidates(organizationId?: string): Promise<LifecycleCampaignCandidate[]> {
+export async function listCampaignCandidates(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<LifecycleCampaignCandidate[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const rows = await query<CandidateRow>(
-    "select * from lifecycle_campaign_candidates where organization_id = $1 order by created_at desc",
-    [orgId]
+    `select * from lifecycle_campaign_candidates
+     where organization_id = $1${propertyGroupFilter(propertyGroupId, 2)}
+     order by created_at desc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
   );
   return rows.map(fromRow);
 }
@@ -327,12 +332,12 @@ async function insertCandidate(input: {
   draftMessage: string;
   draftMessageEnglish: string;
   language: string;
-}, organizationId: string): Promise<void> {
+}, organizationId: string, propertyGroupId?: string): Promise<void> {
   await query(
     `insert into lifecycle_campaign_candidates
        (organization_id, campaign_type, guest_id, guest_name, guest_email, guest_phone, booking_id, thread_id,
-        trigger_reason, draft_message, draft_message_english, language)
-     values ($1, $2::lifecycle_campaign_type, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        trigger_reason, draft_message, draft_message_english, language, property_group_id)
+     values ($1, $2::lifecycle_campaign_type, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
     [
       organizationId,
       input.campaignType,
@@ -346,6 +351,7 @@ async function insertCandidate(input: {
       input.draftMessage,
       input.draftMessageEnglish,
       input.language,
+      propertyGroupId ?? null,
     ]
   );
   await logAiActivity({
@@ -378,7 +384,10 @@ export type DetectionResult = {
 export async function detectCandidates(
   guests: Guest[],
   bookings: Booking[],
-  organizationId?: string
+  organizationId?: string,
+  // Stamped onto every candidate created in this pass so Marketing →
+  // Campaigns can filter by property (2026-08-17).
+  propertyGroupId?: string
 ): Promise<DetectionResult> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const result: DetectionResult = {
@@ -450,7 +459,7 @@ export async function detectCandidates(
             draftMessage: drafted.message,
             draftMessageEnglish: drafted.messageEnglish,
             language,
-          }, orgId);
+          }, orgId, propertyGroupId);
           result.winBack += 1;
         } catch (err) {
           console.error("[lifecycleMarketing] win_back draft failed (non-fatal)", err);
@@ -484,7 +493,7 @@ export async function detectCandidates(
             draftMessage: drafted.message,
             draftMessageEnglish: drafted.messageEnglish,
             language,
-          }, orgId);
+          }, orgId, propertyGroupId);
           result.referral += 1;
         } catch (err) {
           console.error("[lifecycleMarketing] referral draft failed (non-fatal)", err);
@@ -529,7 +538,7 @@ export async function detectCandidates(
             draftMessage: message,
             draftMessageEnglish: messageEnglish,
             language,
-          }, orgId);
+          }, orgId, propertyGroupId);
           result.reviewRequest += 1;
         } catch (err) {
           console.error("[lifecycleMarketing] review_request draft failed (non-fatal)", err);
@@ -582,7 +591,7 @@ export async function detectCandidates(
         draftMessage: drafted.message,
         draftMessageEnglish: drafted.messageEnglish,
         language,
-      }, orgId);
+      }, orgId, propertyGroupId);
       result.abandonedBooking += 1;
     } catch (err) {
       console.error("[lifecycleMarketing] abandoned_booking draft failed (non-fatal)", err);

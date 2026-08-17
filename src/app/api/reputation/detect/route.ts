@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isDbConfigured } from "@/lib/config";
 import { detectAndDraftResponses } from "@/lib/reputationManager";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -19,7 +21,10 @@ export async function POST(req: NextRequest) {
   }
   const session = getSessionFromRequest(req);
   try {
-    const result = await detectAndDraftResponses(session?.organizationId);
+    const result = await detectAndDraftResponses(session?.organizationId, effectivePropertyGroupId(
+      req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+      (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+    ));
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     return NextResponse.json(

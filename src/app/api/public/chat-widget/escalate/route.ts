@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendWhatsAppText, WhatsAppError } from "@/lib/whatsapp";
+import { detectLanguageAndTranslateToEnglish } from "@/lib/translate";
 import { isWhatsAppConfigured, isDbConfigured } from "@/lib/config";
 import { checkRateLimit, corsHeaders, getClientIp, handlePreflight, isAllowedOrigin } from "@/lib/publicApiGuard";
 import { createChatEscalation, linkChatEscalationWamid } from "@/lib/chatEscalations";
@@ -95,6 +96,16 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Detect the visitor's language and translate their question to English
+    // for Seni (2026-08-17). Stored on the escalation so his English "EDIT:"
+    // answer can be translated back before it reaches them. Non-fatal —
+    // detectLanguageAndTranslateToEnglish falls back to English + the
+    // original text on any failure.
+    const detected = await detectLanguageAndTranslateToEnglish(
+      question || "(no question captured)"
+    ).catch(() => ({ language: "English", english: question || "(no question captured)" }));
+    const isForeign = detected.language.trim().toLowerCase() !== "english";
+
     let aiDraftAnswer: string | undefined;
     try {
       aiDraftAnswer = await draftEscalationAnswerForApproval(
@@ -115,13 +126,21 @@ export async function POST(req: NextRequest) {
       visitorEmail,
       visitorPhone,
       aiDraftAnswer,
+      language: detected.language,
+      questionEnglish: isForeign ? detected.english : undefined,
     });
 
     const summaryLine = conversationSummary ? `\n\nConversation so far:\n${conversationSummary}` : "";
     const draftLine = aiDraftAnswer
       ? `\n\nSuggested answer:\n"${aiDraftAnswer}"\n\nReply YES to send this, NO to skip it, or EDIT: <your own answer> to send that instead.`
       : `\n\n(Couldn't draft a suggested answer — reply EDIT: <your answer> to send one, or NO to skip.)`;
-    const text = `🌐 Website chat — new question from ${visitorName} (${visitorEmail} / ${visitorPhone}):\n"${question || "(no question captured)"}"${draftLine}${summaryLine}`;
+    // Seni reads English: show the translation as the headline question and
+    // keep the visitor's own words underneath, rather than sending him text
+    // he can't read.
+    const questionLine = isForeign
+      ? `"${detected.english}"\n(${detected.language} original: "${question || "(no question captured)"}")`
+      : `"${question || "(no question captured)"}"`;
+    const text = `🌐 Website chat — new question from ${visitorName} (${visitorEmail} / ${visitorPhone}):\n${questionLine}${draftLine}${summaryLine}`;
 
     try {
       const wamid = await sendWhatsAppText(text);

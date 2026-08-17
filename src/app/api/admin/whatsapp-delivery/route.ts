@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { config } from "@/lib/config";
 import { redisGet } from "@/lib/redis";
-import { sendGuestReplyApprovalTemplate, sendWhatsAppText, WhatsAppError } from "@/lib/whatsapp";
+import {
+  sendGuestReplyApprovalTemplate,
+  sendWhatsAppText,
+  sendBookingNotificationTemplate,
+  sendDailySummaryTemplate,
+  WhatsAppError,
+} from "@/lib/whatsapp";
 
 // ADMIN_SECRET-gated delivery diagnostics for the WhatsApp channel.
 // GET  -> the rolling log of Meta delivery-status callbacks recorded by
@@ -17,6 +23,48 @@ export async function GET(req: NextRequest) {
   if (!config.adminSecret || secret !== config.adminSecret) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
+
+  // Lists the message templates that actually exist on the WhatsApp Business
+  // Account, with their status and category (2026-08-17). Added while
+  // diagnosing why the new-booking alert never arrived: the code assumed
+  // `booking_notification` existed, Meta returned 132001 "template name does
+  // not exist", and the caller silently fell back to a free-text send that
+  // the 24h window then blocked. Listing them removes the guesswork.
+  if (req.nextUrl.searchParams.get("templates") === "1") {
+    const wabaId = config.whatsappBusinessAccountId;
+    if (!wabaId || !config.whatsappAccessToken) {
+      return NextResponse.json(
+        { ok: false, error: "WHATSAPP_BUSINESS_ACCOUNT_ID / WHATSAPP_ACCESS_TOKEN not set." },
+        { status: 400 }
+      );
+    }
+    const res = await fetch(
+      `https://graph.facebook.com/v21.0/${wabaId}/message_templates?fields=name,status,category,language,components&limit=100`,
+      { headers: { Authorization: `Bearer ${config.whatsappAccessToken}` }, cache: "no-store" }
+    );
+    const json = (await res.json()) as {
+      data?: { name: string; status: string; category: string; language: string }[];
+      error?: unknown;
+    };
+    if (!res.ok) return NextResponse.json({ ok: false, error: json.error ?? "Unknown" }, { status: 502 });
+    return NextResponse.json({
+      ok: true,
+      configured: {
+        guestReplyApproval: config.whatsappGuestReplyApprovalTemplate,
+        bookingNotification: config.whatsappBookingNotificationTemplate,
+        dailySummary: config.whatsappDailySummaryTemplate,
+        sessionOpener: config.whatsappSessionOpenerTemplate,
+        templateLanguage: config.whatsappTemplateLanguage,
+      },
+      templates: (json.data ?? []).map((t) => ({
+        name: t.name,
+        status: t.status,
+        category: t.category,
+        language: t.language,
+      })),
+    });
+  }
+
   // ?discover=1 — enumerate phone numbers visible to the env access token
   // across candidate WABA ids. Built 2026-08-16: during the Neon DB outage
   // the env-var credential fallback kicked in, and its WHATSAPP_PHONE_NUMBER_ID
@@ -58,17 +106,41 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as { mode?: string };
-  const mode = body.mode === "text" ? "text" : "template";
+  // guestMessage/suggestedReply overridable (2026-08-17) so a REAL guest
+  // message — newlines and all — can be tested, not just a tidy one-liner.
+  // Meta rejects template body params containing newlines/tabs, which is the
+  // difference between this diagnostic passing and the live alert failing.
+  const body = (await req.json().catch(() => ({}))) as {
+    mode?: string;
+    guestMessage?: string;
+    suggestedReply?: string;
+  };
+  const mode = body.mode === "text" ? "text" : body.mode === "booking" ? "booking" : body.mode === "booking-live" ? "booking-live" : "template";
 
   try {
     const wamid =
-      mode === "template"
+      // Exercises the SAME rung the live booking alert now uses (see
+      // lib/bookingAlerts.ts) — daily_summary_alert carrying booking content,
+      // because booking_notification doesn't exist on the account.
+      mode === "booking-live"
+        ? await sendDailySummaryTemplate({
+            orgLabel: config.propertyName || "Legacy Colombia",
+            headline: "New booking — Delivery Diagnostic",
+            statsLine: "Sep 1 → Sep 5 (4 nights) · Airbnb · $2,400",
+          })
+        : mode === "booking"
+        ? await sendBookingNotificationTemplate({
+            guestName: "Delivery Diagnostic",
+            propertyName: config.propertyName || "Legacy Colombia",
+            dates: "Sep 1 → Sep 5 (4 nights)",
+          })
+        : mode === "template"
         ? await sendGuestReplyApprovalTemplate({
             guestName: "Delivery Diagnostic",
             propertyName: config.propertyName || "Legacy Colombia",
-            guestMessage: "This is a WhatsApp delivery diagnostic test.",
-            suggestedReply: "If you can read this on your phone, template delivery works.",
+            guestMessage: body.guestMessage ?? "This is a WhatsApp delivery diagnostic test.",
+            suggestedReply:
+              body.suggestedReply ?? "If you can read this on your phone, template delivery works.",
           })
         : await sendWhatsAppText(
             "WhatsApp delivery diagnostic (plain text). If you can read this, the 24h session window is open."

@@ -90,3 +90,30 @@ export async function withClient<T>(fn: (client: PoolClient) => Promise<T>): Pro
     client.release();
   }
 }
+
+/** SQL fragment restricting a table to one property group (2026-08-17).
+ *
+ * Returns something like:
+ *   "and (t.property_group_id = $3 or t.property_group_id is null)"
+ * — the `is null` branch is included ONLY for the default group, because
+ * every pre-multi-property row is NULL and belongs to Legacy Colombia. For
+ * any other group a NULL row is somebody else's data and must stay hidden.
+ *
+ * `paramIndex` is the $n position the caller will bind the group id at, so
+ * this composes with hand-written parameterised SQL without renumbering.
+ * Pass `undefined` for propertyGroupId to opt out of filtering entirely
+ * (used by cross-property admin/cron paths).
+ */
+export function propertyGroupFilter(
+  propertyGroupId: string | undefined,
+  paramIndex: number,
+  column = "property_group_id"
+): string {
+  if (!propertyGroupId) return "";
+  // Kept as a literal rather than importing propertyGroups.ts, so lib/db.ts
+  // stays dependency-free at the bottom of the import graph.
+  const isDefaultGroup = propertyGroupId === "legacy-colombia";
+  return isDefaultGroup
+    ? ` and (${column} = $${paramIndex} or ${column} is null)`
+    : ` and ${column} = $${paramIndex}`;
+}

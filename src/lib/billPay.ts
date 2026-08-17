@@ -1,4 +1,4 @@
-import { query, queryOne } from "./db";
+import { query, queryOne, propertyGroupFilter } from "./db";
 import { logAiActivity } from "./aiActivity";
 import { getDefaultOrganizationId } from "./organizations";
 import type { Bill, BillStatus, Vendor } from "./types";
@@ -54,9 +54,12 @@ function fromVendorRow(row: VendorRow): Vendor {
   };
 }
 
-export async function listVendors(organizationId?: string): Promise<Vendor[]> {
+export async function listVendors(organizationId?: string, propertyGroupId?: string): Promise<Vendor[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const rows = await query<VendorRow>("select * from vendors where organization_id = $1 order by name asc", [orgId]);
+  const rows = await query<VendorRow>(
+    `select * from vendors where organization_id = $1${propertyGroupFilter(propertyGroupId, 2)} order by name asc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
+  );
   return rows.map(fromVendorRow);
 }
 
@@ -77,12 +80,16 @@ export async function createVendor(
     defaultPropertyId?: string;
     notes?: string;
   },
-  organizationId?: string
+  organizationId?: string,
+  // Stamped so the vendor only appears under the property it was created
+  // for (2026-08-17). Undefined leaves it NULL = visible under the default
+  // group, matching every pre-existing row.
+  propertyGroupId?: string
 ): Promise<Vendor> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const row = await queryOne<VendorRow>(
-    `insert into vendors (organization_id, name, category, contact_name, contact_email, contact_phone, payment_notes, default_property_id, notes)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `insert into vendors (organization_id, name, category, contact_name, contact_email, contact_phone, payment_notes, default_property_id, notes, property_group_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      returning *`,
     [
       orgId,
@@ -94,6 +101,7 @@ export async function createVendor(
       input.paymentNotes ?? null,
       input.defaultPropertyId ?? null,
       input.notes ?? null,
+      propertyGroupId ?? null,
     ]
   );
   if (!row) throw new Error("Failed to create vendor.");
@@ -235,15 +243,15 @@ function fromBillRow(row: BillRow): Bill {
 
 /** Every bill, newest first, with the vendor name joined in so the UI never
  * needs a second round trip per row. */
-export async function listBills(organizationId?: string): Promise<Bill[]> {
+export async function listBills(organizationId?: string, propertyGroupId?: string): Promise<Bill[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const rows = await query<BillRow>(
     `select b.*, v.name as vendor_name
      from bills b
      join vendors v on v.id = b.vendor_id
-     where b.organization_id = $1
+     where b.organization_id = $1${propertyGroupFilter(propertyGroupId, 2, "b.property_group_id")}
      order by b.created_at desc`,
-    [orgId]
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
   );
   return rows.map(fromBillRow);
 }
@@ -305,7 +313,8 @@ export async function createBill(
     sourceReference?: string;
     attachmentUrl?: string;
   },
-  organizationId?: string
+  organizationId?: string,
+  propertyGroupId?: string
 ): Promise<Bill> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const duplicate = await findLikelyDuplicate(
@@ -330,8 +339,8 @@ export async function createBill(
     `insert into bills
        (organization_id, vendor_id, property_id, invoice_number, amount_cents, currency, category,
         invoice_date, due_date, source, source_reference, attachment_url,
-        status, duplicate_of_bill_id, flag_reason)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        status, duplicate_of_bill_id, flag_reason, property_group_id)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      returning *, (select name from vendors where id = $2) as vendor_name`,
     [
       orgId,
@@ -349,6 +358,7 @@ export async function createBill(
       status,
       duplicate?.id ?? null,
       flagReason,
+      propertyGroupId ?? null,
     ]
   );
   if (!row) throw new Error("Failed to create bill.");

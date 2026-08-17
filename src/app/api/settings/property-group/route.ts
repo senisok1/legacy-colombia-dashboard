@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, isValidPropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,15 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as { groupId?: string } | null;
   if (!isValidPropertyGroupId(body?.groupId)) {
     return NextResponse.json({ error: "Unknown property." }, { status: 400 });
+  }
+
+  // Property-level access (2026-08-16): a team member restricted to certain
+  // properties can't switch into one they aren't allowed to see, even by
+  // POSTing this endpoint directly. Empty list = all properties.
+  const me = await getUserByEmail(session.email).catch(() => null);
+  const allowed = me?.propertyAccess ?? [];
+  if (allowed.length > 0 && !allowed.includes(body!.groupId!)) {
+    return NextResponse.json({ error: "You don't have access to that property." }, { status: 403 });
   }
 
   const res = NextResponse.json({ ok: true, groupId: body!.groupId });

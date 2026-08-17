@@ -685,13 +685,16 @@ export async function getGuestById(id: number, organizationId?: string): Promise
   }
 }
 
-async function fetchReviews(organizationId?: string): Promise<Review[]> {
+async function fetchReviews(organizationId?: string, propertyGroupId?: string): Promise<Review[]> {
   const creds = await resolveOwnerRezCredentials(organizationId);
   if (!isLive(creds)) return demoReviews;
   try {
+    // Property scoping (2026-08-17) — without the group these two calls
+    // defaulted to Legacy Colombia, so Reputation showed Colombia's reviews
+    // on every property.
     const [properties, bookings] = await Promise.all([
-      getTargetProperties(organizationId),
-      getBookings(organizationId),
+      getTargetProperties(organizationId, propertyGroupId),
+      getBookings(organizationId, propertyGroupId),
     ]);
     const propertyIds = new Set(properties.map((p) => p.id));
     // getBookings() is already scoped to just our target properties (it
@@ -740,6 +743,9 @@ async function fetchReviews(organizationId?: string): Promise<Review[]> {
 
 // Reviews change rarely (a new one lands only when a guest actually leaves
 // one) — same caching rationale as getTargetProperty above.
+// NOTE: unstable_cache keys on the actual arguments, so adding
+// propertyGroupId as a real parameter above is what keeps Alva's and
+// Colombia's review sets in separate cache entries.
 export const getReviews = unstable_cache(fetchReviews, ["ownerrez-reviews-v2"], { revalidate: 300 });
 
 /**

@@ -118,6 +118,36 @@ async function postWhatsAppMessage(payload: Record<string, unknown>, creds: What
  * setting can be right for all of them. This wrapper tries the configured
  * code first, then the other common English codes — retrying ONLY on the
  * template-language error, so real failures still surface immediately. */
+/**
+ * Meta rejects any template BODY PARAMETER containing a newline, a tab, or
+ * more than four consecutive spaces — error 132018, "Param text cannot have
+ * new-line/tab characters or more than 4 consecutive spaces".
+ *
+ * ROOT CAUSE, found 2026-08-17: real guest messages are multi-line ("Hola!\n
+ * Quisiera saber…"), so every guest-reply approval alert containing one
+ * failed with 132018. The caller caught that and fell back to
+ * sendWhatsAppText(), which first sends a CONTENT-FREE session-opener
+ * template (delivered fine — this is the stream of "automated notifications"
+ * Seni was getting) and then the real free-text message, which failed with
+ * 131047 whenever the 24h window was shut. Net effect: a burst of
+ * meaningless pings, and the actual guest message plus its translation never
+ * arrived. The diagnostic test send passed the whole time because its
+ * sample text was a tidy single line.
+ *
+ * Collapsing whitespace here — at the single point where every template
+ * parameter is built — is the durable fix. The full untruncated text is
+ * always still in the CRM's Messaging/Approvals tabs; this only affects the
+ * one-line alert.
+ */
+function templateParam(value: string | number | null | undefined, maxLength = 350): string {
+  const text = value === null || value === undefined ? "" : String(value);
+  const collapsed = text
+    .replace(/[\r\n\t]+/g, " ") // newlines/tabs are hard-rejected by Meta
+    .replace(/\s{2,}/g, " ") // ">4 consecutive spaces" — collapse them all
+    .trim();
+  return collapsed.slice(0, maxLength);
+}
+
 function isTemplateLanguageError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes("132001") || msg.includes("does not exist in");
@@ -160,6 +190,21 @@ async function postTemplateWithLanguageFallback(
  * message from at least being attempted the old way.
  */
 async function sendSessionOpener(creds: WhatsAppCredentials): Promise<void> {
+  // DISABLED 2026-08-17. This fired a zero-content template — "This is an
+  // automated notification from your Legacy Colombia CRM Dashboard. New
+  // details follow in the next message." — before every free-text send, to
+  // reopen the 24h window. Two problems, both seen live today:
+  //   1. When the follow-up free text then failed with 131047 (window shut),
+  //      Seni received ONLY the meaningless opener. That's exactly the
+  //      "duplicate automated notifications" he reported: two openers landed,
+  //      both of their real payloads were rejected.
+  //   2. Every real alert now goes out as a proper Meta-approved TEMPLATE
+  //      (guest replies, bookings, inquiries), which reaches him regardless
+  //      of the window — so the opener buys nothing and costs a message.
+  // Left as a no-op rather than deleted so the call sites stay honest about
+  // the ordering constraint if free text is ever reinstated.
+  return;
+  // eslint-disable-next-line no-unreachable
   if (!isSessionOpenerConfigured(creds)) return;
   try {
     await postTemplateWithLanguageFallback(
@@ -249,10 +294,10 @@ export async function sendGuestReplyApprovalTemplate(
           {
             type: "body",
             parameters: [
-              { type: "text", text: params.guestName.slice(0, 60) || "Guest" },
-              { type: "text", text: params.propertyName.slice(0, 60) || "your property" },
-              { type: "text", text: params.guestMessage.slice(0, 350) },
-              { type: "text", text: params.suggestedReply.slice(0, 350) },
+              { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
+              { type: "text", text: templateParam(params.propertyName.slice(0, 60) || "your property") },
+              { type: "text", text: templateParam(params.guestMessage.slice(0, 350)) },
+              { type: "text", text: templateParam(params.suggestedReply.slice(0, 350)) },
             ],
           },
         ],
@@ -294,9 +339,9 @@ export async function sendDailySummaryTemplate(
           {
             type: "body",
             parameters: [
-              { type: "text", text: params.orgLabel.slice(0, 60) || "your property" },
-              { type: "text", text: params.headline.slice(0, 300) },
-              { type: "text", text: params.statsLine.slice(0, 300) },
+              { type: "text", text: templateParam(params.orgLabel.slice(0, 60) || "your property") },
+              { type: "text", text: templateParam(params.headline.slice(0, 300)) },
+              { type: "text", text: templateParam(params.statsLine.slice(0, 300)) },
             ],
           },
         ],
@@ -332,9 +377,9 @@ export async function sendBookingNotificationTemplate(
           {
             type: "body",
             parameters: [
-              { type: "text", text: params.guestName.slice(0, 60) || "Guest" },
-              { type: "text", text: params.propertyName.slice(0, 60) || "your property" },
-              { type: "text", text: params.dates.slice(0, 100) },
+              { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
+              { type: "text", text: templateParam(params.propertyName.slice(0, 60) || "your property") },
+              { type: "text", text: templateParam(params.dates.slice(0, 100)) },
             ],
           },
         ],
@@ -371,9 +416,9 @@ export async function sendAdminReplyNotificationTemplate(
           {
             type: "body",
             parameters: [
-              { type: "text", text: params.guestName.slice(0, 60) || "Guest" },
-              { type: "text", text: params.guestMessage.slice(0, 350) },
-              { type: "text", text: params.adminReply.slice(0, 350) },
+              { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
+              { type: "text", text: templateParam(params.guestMessage.slice(0, 350)) },
+              { type: "text", text: templateParam(params.adminReply.slice(0, 350)) },
             ],
           },
         ],
@@ -451,9 +496,9 @@ export async function notifyGabrielOfServiceRequest(
           {
             type: "body",
             parameters: [
-              { type: "text", text: params.propertyName },
-              { type: "text", text: params.guestName },
-              { type: "text", text: params.guestPhone },
+              { type: "text", text: templateParam(params.propertyName) },
+              { type: "text", text: templateParam(params.guestName) },
+              { type: "text", text: templateParam(params.guestPhone) },
               // Meta caps a template's total filled-in body at 1024 characters
               // across all placeholders combined (confirmed 2026-08-01). The
               // fixed template wording plus property name/guest name/phone
@@ -462,7 +507,7 @@ export async function notifyGabrielOfServiceRequest(
               // real multi-item request in full (Nyree Tanielian's 4-item jet
               // ski/breakfast/boat/pool message was 415 characters end to end
               // — this used to get cut off mid-sentence at the old 300 limit).
-              { type: "text", text: params.requestSummary.slice(0, 600) },
+              { type: "text", text: templateParam(params.requestSummary.slice(0, 600)) },
             ],
           },
         ],
@@ -510,10 +555,10 @@ export async function sendChatWidgetAnswerViaWhatsApp(
           {
             type: "body",
             parameters: [
-              { type: "text", text: params.visitorName },
+              { type: "text", text: templateParam(params.visitorName) },
               // Same 1024-char combined-body cap as the Gabriel template — see
               // its comment above. 600 leaves headroom for a full answer.
-              { type: "text", text: params.answer.slice(0, 600) },
+              { type: "text", text: templateParam(params.answer.slice(0, 600)) },
             ],
           },
         ],
@@ -564,11 +609,11 @@ export async function notifyVendorOfWorkOrder(
           {
             type: "body",
             parameters: [
-              { type: "text", text: params.vendorName },
-              { type: "text", text: params.propertyName },
+              { type: "text", text: templateParam(params.vendorName) },
+              { type: "text", text: templateParam(params.propertyName) },
               { type: "text", text: `${params.workOrderTitle} (${params.priority})` },
               // Same 1024-char combined-body cap as the other templates above.
-              { type: "text", text: (params.workOrderDescription || "No further details provided.").slice(0, 600) },
+              { type: "text", text: templateParam((params.workOrderDescription || "No further details provided.").slice(0, 600)) },
             ],
           },
         ],

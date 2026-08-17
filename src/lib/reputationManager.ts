@@ -4,6 +4,12 @@ import { getReviews, getTargetProperty } from "./ownerrez";
 import { PROPERTY_FACTS } from "./propertyFacts";
 import { logAiActivity } from "./aiActivity";
 import { sendWhatsAppText, WhatsAppError } from "./whatsapp";
+
+// WhatsApp is reserved for inquiries, guest messages and new bookings
+// (2026-08-17, Seni's ask). Newly drafted review responses still surface in
+// the Reputation tab and the daily email summary — they just don't ping the
+// phone. Flip to true to restore the ping.
+const NOTIFY_NEW_REVIEWS_VIA_WHATSAPP = false;
 import { getDefaultOrganizationId } from "./organizations";
 import { resolveAnthropicApiKey } from "./credentials";
 import type { Review, ReputationEntry, ReputationResponse, ReputationResponseStatus } from "./types";
@@ -109,9 +115,12 @@ async function listResponsesByReviewId(organizationId: string): Promise<Map<numb
 /** The Reputation tab's main read: every live OwnerRez review joined with
  * whatever draft/decision state exists for it, newest review first. Safe to
  * call with no DB configured — every entry just comes back with no response. */
-export async function listReputationEntries(organizationId?: string): Promise<ReputationEntry[]> {
+export async function listReputationEntries(organizationId?: string, propertyGroupId?: string): Promise<ReputationEntry[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const [reviews, responsesByReviewId] = await Promise.all([getReviews(orgId), listResponsesByReviewId(orgId)]);
+  const [reviews, responsesByReviewId] = await Promise.all([
+    getReviews(orgId, propertyGroupId),
+    listResponsesByReviewId(orgId),
+  ]);
   const entries: ReputationEntry[] = reviews.map((review) => ({
     review,
     response: responsesByReviewId.get(review.id),
@@ -129,9 +138,9 @@ export type ReputationSummary = {
 
 /** Feeds the daily executive report — avg rating and how much is sitting in
  * Seni's queue, without pulling every review's full text. */
-export async function getReputationSummary(organizationId?: string): Promise<ReputationSummary> {
+export async function getReputationSummary(organizationId?: string, propertyGroupId?: string): Promise<ReputationSummary> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const entries = await listReputationEntries(orgId);
+  const entries = await listReputationEntries(orgId, propertyGroupId);
   const rated = entries.map((e) => e.review.rating).filter((r): r is number => typeof r === "number");
   const avgRating = rated.length > 0 ? rated.reduce((sum, r) => sum + r, 0) / rated.length : null;
   const pendingResponseCount = entries.filter((e) => e.response?.status === "pending_review").length;
@@ -251,12 +260,16 @@ export type DetectionResult = { drafted: number; skipped: number; capped: boolea
  * guest-reply approval flow's WhatsApp webhook parsing (see
  * lib/pendingDrafts.ts). The actual approve/reject/edit happens in the
  * Reputation dashboard tab, not over WhatsApp. Safe to call repeatedly. */
-export async function detectAndDraftResponses(organizationId?: string): Promise<DetectionResult> {
+export async function detectAndDraftResponses(organizationId?: string,
+  propertyGroupId?: string): Promise<DetectionResult> {
   const result: DetectionResult = { drafted: 0, skipped: 0, capped: false };
   if (!isDbConfigured()) return result;
   const orgId = organizationId ?? (await getDefaultOrganizationId());
 
-  const [entries, property] = await Promise.all([listReputationEntries(orgId), getTargetProperty(orgId)]);
+  const [entries, property] = await Promise.all([
+    listReputationEntries(orgId, propertyGroupId),
+    getTargetProperty(orgId),
+  ]);
   const dbPropertyId = await getOrCreateDbPropertyId(property.id, property.name);
 
   const needsDraft = entries.filter((e) => !e.review.hostResponse && e.review.visible !== false && !e.response);
@@ -284,8 +297,11 @@ export async function detectAndDraftResponses(organizationId?: string): Promise<
     ]
       .filter(Boolean)
       .join(" ");
+    // WhatsApp ping removed 2026-08-17 (Seni: WhatsApp is only for inquiries,
+    // guest messages and new bookings). Drafted review responses still appear
+    // in the Reputation tab and in the daily email summary.
     try {
-      await sendWhatsAppText(summary);
+      if (NOTIFY_NEW_REVIEWS_VIA_WHATSAPP) await sendWhatsAppText(summary);
     } catch (err) {
       const message = err instanceof WhatsAppError ? err.message : err instanceof Error ? err.message : "Unknown error.";
       console.error("[reputationManager] WhatsApp notify failed (non-fatal)", message);

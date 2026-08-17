@@ -1,4 +1,15 @@
-import { downloadWhatsAppMedia, sendWhatsAppText, WhatsAppError } from "./whatsapp";
+import { downloadWhatsAppMedia, WhatsAppError } from "./whatsapp";
+
+// Confirmation replies REMOVED 2026-08-17 (Seni: WhatsApp is only for
+// inquiries, guest messages and new bookings). Forwarding a bill photo still
+// reads it and files it in Bill Pay exactly as before — it just doesn't
+// message back. Outcomes, including failures, are recorded in the AI
+// Activity log and the bill itself appears in the Bill Pay tab, so nothing
+// is lost, it's just no longer chatty. reply() keeps the call sites intact
+// so restoring this is a one-line change.
+async function reply(_text: string): Promise<void> {
+  // intentionally silent — see note above
+}
 import { extractBillFromMedia, BillExtractError } from "./billExtract";
 import { createBill, findOrCreateVendorByName } from "./billPay";
 import { logAiActivity } from "./aiActivity";
@@ -23,7 +34,7 @@ export async function handleBillForward(
   msg: Extract<IncomingWhatsAppMessage, { type: "image" } | { type: "document" }>
 ): Promise<void> {
   if (!isAiReplyConfigured()) {
-    await sendWhatsAppText(
+    await reply(
       "Got your file, but bill-reading isn't set up yet (missing ANTHROPIC_API_KEY) — add it in the Bill Pay tab manually for now."
     ).catch(() => {});
     return;
@@ -34,7 +45,7 @@ export async function handleBillForward(
     const extracted = await extractBillFromMedia({ bytes, mimeType });
 
     if (extracted.confidence === "low" || !extracted.vendorName || extracted.amount === null) {
-      await sendWhatsAppText(
+      await reply(
         `Couldn't read that clearly enough to log automatically${extracted.notes ? ` (${extracted.notes})` : ""} — add it in the Bill Pay tab manually, or try a clearer photo.`
       ).catch(() => {});
       await logAiActivity({
@@ -83,7 +94,7 @@ export async function handleBillForward(
     const vendorNote = vendorCreated ? ` (new vendor "${vendor.name}" created — double-check the name)` : "";
     const uncertainNote = extracted.confidence === "medium" ? " Double-check the amount/details before approving." : "";
 
-    await sendWhatsAppText(
+    await reply(
       `Got it — ${amountText} from ${vendor.name}${vendorNote}${statusNote}${uncertainNote}`
     ).catch(() => {});
   } catch (err) {
@@ -91,7 +102,7 @@ export async function handleBillForward(
       err instanceof WhatsAppError || err instanceof BillExtractError || err instanceof Error
         ? err.message
         : "Unknown error.";
-    await sendWhatsAppText(`That file didn't process: ${message.slice(0, 200)} — try again or enter it manually.`).catch(
+    await reply(`That file didn't process: ${message.slice(0, 200)} — try again or enter it manually.`).catch(
       () => {}
     );
     await logAiActivity({

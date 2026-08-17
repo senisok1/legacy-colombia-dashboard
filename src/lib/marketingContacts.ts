@@ -1,4 +1,4 @@
-import { query, queryOne } from "./db";
+import { query, queryOne, propertyGroupFilter } from "./db";
 import { getDefaultOrganizationId } from "./organizations";
 
 // Marketing contacts audience list (migration 0010) — a bulk external
@@ -49,11 +49,14 @@ function fromRow(row: MarketingContactRow): MarketingContact {
   };
 }
 
-export async function listMarketingContacts(organizationId?: string): Promise<MarketingContact[]> {
+export async function listMarketingContacts(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<MarketingContact[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const rows = await query<MarketingContactRow>(
-    "select * from marketing_contacts where organization_id = $1 order by created_at desc",
-    [orgId]
+    `select * from marketing_contacts where organization_id = $1${propertyGroupFilter(propertyGroupId, 2)} order by created_at desc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
   );
   return rows.map(fromRow);
 }
@@ -63,11 +66,16 @@ export type MarketingContactStats = {
   bySource: { source: string; count: number }[];
 };
 
-export async function getMarketingContactStats(organizationId?: string): Promise<MarketingContactStats> {
+export async function getMarketingContactStats(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<MarketingContactStats> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const rows = await query<{ source: string; count: string }>(
-    "select source, count(*)::text as count from marketing_contacts where organization_id = $1 group by source order by count(*) desc",
-    [orgId]
+    `select source, count(*)::text as count from marketing_contacts
+     where organization_id = $1${propertyGroupFilter(propertyGroupId, 2)}
+     group by source order by count(*) desc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
   );
   const bySource = rows.map((r) => ({ source: r.source, count: Number(r.count) }));
   const total = bySource.reduce((sum, r) => sum + r.count, 0);

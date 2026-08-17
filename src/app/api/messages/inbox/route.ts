@@ -3,7 +3,8 @@ import { getAllThreadSummaries, fetchAllThreadSummaries, getSnapshotThreadSummar
 import type { ThreadSummary } from "@/lib/inbox";
 import { isMessagingConfigured } from "@/lib/config";
 import { getSessionFromRequest } from "@/lib/session";
-import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId } from "@/lib/propertyGroups";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 // Increased to 120s to handle queue backlog when cron runs simultaneously.
@@ -29,7 +30,10 @@ export async function GET(req: NextRequest) {
   }
 
   const session = getSessionFromRequest(req);
-  const groupId = normalizePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value);
+  const groupId = effectivePropertyGroupId(
+    req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+    (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+  );
   const fresh = req.nextUrl.searchParams.get("fresh") === "1";
   const limit = req.nextUrl.searchParams.get("limit")
     ? parseInt(req.nextUrl.searchParams.get("limit")!)

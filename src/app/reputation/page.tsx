@@ -1,5 +1,8 @@
 import { listReputationEntries } from "@/lib/reputationManager";
 import { getServerSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { ReputationExplorer } from "@/components/ReputationExplorer";
 
@@ -8,7 +11,10 @@ export const dynamic = "force-dynamic";
 export default async function ReputationPage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
-  const entries = await listReputationEntries(session?.organizationId);
+  const cookieStore = await cookies();
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
+  const entries = await listReputationEntries(session?.organizationId, groupId);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">

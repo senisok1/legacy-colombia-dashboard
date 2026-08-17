@@ -1,10 +1,13 @@
 import { isDbConfigured } from "@/lib/config";
 import { listLeads } from "@/lib/leads";
 import { getServerSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { SalesPipelineExplorer } from "@/components/SalesPipelineExplorer";
 import { PageHeader } from "@/components/PageHeader";
-import { CRM_GROUP_TABS } from "@/lib/navGroups";
+import { MARKETING_GROUP_TABS } from "@/lib/navGroups";
 
 export const dynamic = "force-dynamic";
 
@@ -21,15 +24,18 @@ export default async function SalesPipelinePage() {
 
   const session = await getServerSession();
   await enforceBillingLock(session);
-  const leads = await listLeads(session?.organizationId);
+  const cookieStore = await cookies();
+  const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
+  const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
+  const leads = await listLeads(session?.organizationId, groupId);
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <PageHeader
-        eyebrow="CRM"
+        eyebrow="Marketing"
         title="Pipeline"
         subtitle="Inquiries that haven't (yet) turned into a booking — new → contacted → qualified → proposal → deposit → booked, or lost/nurture."
-        tabs={CRM_GROUP_TABS}
+        tabs={MARKETING_GROUP_TABS}
       />
 
       <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">

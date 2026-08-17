@@ -123,6 +123,17 @@ export function proxy(req: NextRequest) {
         "/reports",
         "/revenue-management",
         "/api/messages",
+        // Added 2026-08-17 with Seni's explicit tab list for team members:
+        // Bill Pay and the admin-only Settings pages are owner territory.
+        // NOTE: "/settings" itself is deliberately NOT blocked — the team
+        // needs /settings and /settings/account (their own password).
+        "/bill-pay",
+        "/api/bill-pay",
+        "/settings/team",
+        "/api/settings/users",
+        "/billing",
+        "/vendors",
+        "/maintenance",
       ];
       if (TEAM_BLOCKED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
         if (pathname.startsWith("/api/")) {
@@ -144,8 +155,25 @@ export function proxy(req: NextRequest) {
         // Per-stay event flag + date (see api/management/booking-ops) —
         // same on-site coordination scope as activities/notes.
         pathname === "/api/management/booking-ops" ||
+        // Paid extras per stay (2026-08-17, see api/management/extras).
+        // Gabriel is the one who actually arranges chefs/massages/jet skis,
+        // so he has to be able to record them or they never get logged.
+        // NOTE this means a team member enters the two figures his own
+        // commission is derived from. Every row is stamped with created_by /
+        // updated_by and the whole list is visible to the owner, so it's
+        // auditable rather than blind — but if that trade stops being
+        // acceptable, remove this line and extras become admin-only entry.
+        pathname === "/api/management/extras" ||
         // Property-view switcher (a cookie-only view preference).
         pathname === "/api/settings/property-group" ||
+        // Their OWN password (api/settings/password resolves the target user
+        // from the session cookie, never from the body — a team member can
+        // only ever change their own).
+        pathname === "/api/settings/password" ||
+        // Team Expense Requests (2026-08-17): the team raises them (POST)
+        // and marks them completed (PUT). Approval is PATCH, which is NOT
+        // allowlisted — and the route independently requires a CEO role.
+        (pathname === "/api/team-expenses" && (req.method === "POST" || req.method === "PUT")) ||
         // Translation is a POST but modifies nothing — the team needs it to
         // read Spanish guest threads.
         pathname === "/api/translate";

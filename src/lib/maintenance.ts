@@ -1,4 +1,4 @@
-import { query, queryOne } from "./db";
+import { query, queryOne, propertyGroupFilter } from "./db";
 import { logAiActivity } from "./aiActivity";
 import { getDefaultOrganizationId } from "./organizations";
 import type { WorkOrder, WorkOrderPriority, WorkOrderStatus } from "./types";
@@ -76,11 +76,18 @@ const SELECT_WITH_VENDOR = `select w.*, v.name as assigned_vendor_name
 
 /** Every work order, newest first — the Maintenance tab groups these by
  * status client-side, same pattern as CrmCampaignsExplorer/BillPayExplorer. */
-export async function listWorkOrders(organizationId?: string): Promise<WorkOrder[]> {
+export async function listWorkOrders(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<WorkOrder[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const rows = await query<WorkOrderRow>(
-    `${SELECT_WITH_VENDOR} where w.organization_id = $1 order by w.created_at desc`,
-    [orgId]
+    `${SELECT_WITH_VENDOR} where w.organization_id = $1${propertyGroupFilter(
+      propertyGroupId,
+      2,
+      "w.property_group_id"
+    )} order by w.created_at desc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
   );
   return rows.map(fromRow);
 }

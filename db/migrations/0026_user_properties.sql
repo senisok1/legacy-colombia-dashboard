@@ -1,0 +1,11 @@
+-- Per-user property access (2026-08-16, Seni's ask: "identify which
+-- properties this team member should have access to since I will be adding
+-- additional properties I own in the future" — e.g. Gabriel sees Legacy
+-- Colombia but not Legacy Alva).
+--
+-- Stored as a comma-separated list of property-GROUP ids (see
+-- src/lib/propertyGroups.ts), e.g. 'legacy-colombia' or
+-- 'legacy-colombia,legacy-alva'. NULL/empty means ALL properties — which
+-- keeps every existing login (and every admin) working exactly as before
+-- with no backfill.
+alter table users add column if not exists property_access text;

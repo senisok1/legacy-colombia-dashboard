@@ -1,6 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { deleteUser, getUserByEmail, listUsers, setUserActive, updateUser, upsertUser } from "@/lib/users";
+import { PROPERTY_GROUPS, allowedPropertyGroups } from "@/lib/propertyGroups";
+import { buildWelcomeEmail } from "@/lib/teamWelcomeEmail";
+import { sendEmail } from "@/lib/email";
+import { isEmailSendConfigured } from "@/lib/config";
+
+// Per-login property access (2026-08-17, Seni's ask: "Gabriel should only
+// have access to Legacy Colombia and not Legacy Alva"). Stored as a list of
+// property-group ids; an EMPTY list deliberately means ALL properties, so
+// every login that existed before this feature keeps working unchanged and
+// future properties are visible by default unless explicitly restricted.
+function sanitizePropertyAccess(input: unknown): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const valid = new Set(PROPERTY_GROUPS.map((g) => g.id));
+  const ids = [...new Set(input.filter((x): x is string => typeof x === "string").map((x) => x.trim()))].filter((x) =>
+    valid.has(x)
+  );
+  // "All properties" is the only meaning an empty selection can have.
+  return ids.length === PROPERTY_GROUPS.length ? [] : ids;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +50,7 @@ export async function GET(req: NextRequest) {
         name: u.name,
         role: u.role,
         language: u.language,
+        propertyAccess: u.propertyAccess,
         active: u.active,
         isYou: u.email.toLowerCase() === session.email.toLowerCase(),
       })),
@@ -40,12 +60,57 @@ export async function GET(req: NextRequest) {
   }
 }
 
+// Welcome email (2026-08-17, Seni's ask). Best-effort by design: the login
+// is already created and usable by the time this runs, so a Resend outage
+// must not fail the request — the response carries emailSent/emailError so
+// the admin knows to hand the details over manually instead.
+async function sendWelcome(
+  req: NextRequest,
+  user: { email: string; name: string | null; role: string; language: string; propertyAccess: string[] },
+  password: string,
+  overrideTo?: string
+): Promise<{ emailSent: boolean; emailError?: string }> {
+  if (!isEmailSendConfigured()) {
+    return { emailSent: false, emailError: "Email isn't configured (missing RESEND_API_KEY)." };
+  }
+  try {
+    const origin = req.nextUrl.origin.includes("localhost")
+      ? "https://crm.legacyestaterentals.com"
+      : req.nextUrl.origin;
+    const { subject, html, text } = buildWelcomeEmail({
+      name: user.name,
+      email: user.email,
+      password,
+      language: user.language,
+      isAdmin: user.role === "CEO",
+      properties:
+        user.propertyAccess.length > 0 ? allowedPropertyGroups(user.propertyAccess).map((g) => g.label) : [],
+      loginUrl: `${origin}/login`,
+    });
+    await sendEmail({ to: overrideTo || user.email, subject, html, text });
+    return { emailSent: true };
+  } catch (err) {
+    return { emailSent: false, emailError: err instanceof Error ? err.message : "Unknown email error." };
+  }
+}
+
 export async function POST(req: NextRequest) {
   const { session, error } = requireCeo(req);
   if (error) return error;
 
   const body = (await req.json().catch(() => null)) as
-    | { email?: string; name?: string; password?: string; role?: string; language?: string }
+    | {
+        email?: string;
+        name?: string;
+        password?: string;
+        role?: string;
+        language?: string;
+        propertyAccess?: string[];
+        /** Set false to create the login without emailing them. */
+        sendWelcomeEmail?: boolean;
+        /** Send the welcome email to this address instead (for a test send). */
+        welcomeEmailTo?: string;
+      }
     | null;
 
   const email = body?.email?.trim().toLowerCase();
@@ -85,11 +150,26 @@ export async function POST(req: NextRequest) {
       name: body.name?.trim() || undefined,
       role,
       language,
+      propertyAccess: sanitizePropertyAccess(body.propertyAccess) ?? [],
       organizationId: session.organizationId,
     });
+    const mail =
+      body.sendWelcomeEmail === false
+        ? { emailSent: false }
+        : await sendWelcome(req, user, body.password, body.welcomeEmailTo?.trim() || undefined);
+
     return NextResponse.json({
       ok: true,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, language: user.language, active: user.active },
+      ...mail,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        language: user.language,
+        propertyAccess: user.propertyAccess,
+        active: user.active,
+      },
       reset: Boolean(existing),
     });
   } catch (err) {
@@ -129,7 +209,15 @@ export async function PUT(req: NextRequest) {
   if (error) return error;
 
   const body = (await req.json().catch(() => null)) as
-    | { userId?: string; email?: string; name?: string; password?: string; role?: string; language?: string }
+    | {
+        userId?: string;
+        email?: string;
+        name?: string;
+        password?: string;
+        role?: string;
+        language?: string;
+        propertyAccess?: string[];
+      }
     | null;
   if (!body?.userId) return NextResponse.json({ error: "userId is required." }, { status: 400 });
 
@@ -144,6 +232,7 @@ export async function PUT(req: NextRequest) {
   const ALLOWED = ["English", "Spanish", "Portuguese"];
   const language = body.language && ALLOWED.includes(body.language) ? body.language : undefined;
   const role = body.role === "CEO" ? ("CEO" as const) : body.role === "READ_ONLY" ? ("READ_ONLY" as const) : undefined;
+  const propertyAccess = sanitizePropertyAccess(body.propertyAccess);
 
   try {
     const users = await listUsers(session.organizationId);
@@ -167,6 +256,7 @@ export async function PUT(req: NextRequest) {
       ...(body.password ? { password: body.password } : {}),
       ...(role ? { role } : {}),
       ...(language ? { language } : {}),
+      ...(propertyAccess !== undefined ? { propertyAccess } : {}),
     });
     if (!updated) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
 
@@ -178,6 +268,7 @@ export async function PUT(req: NextRequest) {
         name: updated.name,
         role: updated.role,
         language: updated.language,
+        propertyAccess: updated.propertyAccess,
         active: updated.active,
       },
       // A changed email/password invalidates nothing server-side, but the

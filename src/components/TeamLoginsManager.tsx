@@ -1,6 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
+
+// Properties picker (2026-08-17, Seni's ask: "identify which properties this
+// team member should have access to … Gabriel should only have access to
+// Legacy Colombia and not Legacy Alva"). Selecting every property — or none
+// — stores an empty list, which the server reads as ALL properties, so a
+// login stays valid for properties added later unless it was deliberately
+// restricted.
 
 // Settings → "Team logins" (2026-08-16): CEO-only self-serve management of
 // the org's logins. Admin (CEO) logins get full access; Team member
@@ -14,9 +22,45 @@ type ManagedUser = {
   name: string | null;
   role: string;
   language?: string;
+  propertyAccess?: string[];
   active: boolean;
   isYou: boolean;
 };
+
+function PropertiesPicker({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const all = value.length === 0 || value.length === PROPERTY_GROUPS.length;
+  return (
+    <div className="text-xs text-black/60 dark:text-white/60">
+      Properties
+      <div className="mt-0.5 flex flex-wrap items-center gap-2 rounded-md border border-black/15 dark:border-white/15 px-2 py-1.5">
+        {PROPERTY_GROUPS.map((g) => {
+          const checked = all || value.includes(g.id);
+          return (
+            <label key={g.id} className="flex items-center gap-1 text-sm">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(e) => {
+                  const base = all ? PROPERTY_GROUPS.map((x) => x.id) : value;
+                  const next = e.target.checked ? [...new Set([...base, g.id])] : base.filter((id) => id !== g.id);
+                  onChange(next);
+                }}
+              />
+              {g.label}
+            </label>
+          );
+        })}
+        {all && <span className="text-[11px] text-black/40 dark:text-white/40">(all properties)</span>}
+      </div>
+    </div>
+  );
+}
 
 export function TeamLoginsManager() {
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
@@ -25,10 +69,15 @@ export function TeamLoginsManager() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+  const [formProperties, setFormProperties] = useState<string[]>([]);
+  // Welcome email (2026-08-17): on by default — a new teammate gets their
+  // login details plus plain-language instructions for every tab.
+  const [sendWelcomeEmail, setSendWelcomeEmail] = useState(true);
   // Inline edit (2026-08-16): change a teammate's email/password/name/
   // language/access without deleting and recreating the login.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+  const [editProperties, setEditProperties] = useState<string[]>([]);
 
   function startEdit(u: ManagedUser) {
     setEditingId(u.id);
@@ -40,6 +89,7 @@ export function TeamLoginsManager() {
       role: u.role,
       language: u.language || "English",
     });
+    setEditProperties(u.propertyAccess ?? []);
   }
 
   async function saveEdit(e: React.FormEvent) {
@@ -51,7 +101,7 @@ export function TeamLoginsManager() {
       const res = await fetch("/api/settings/users", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: editingId, ...editForm }),
+        body: JSON.stringify({ userId: editingId, ...editForm, propertyAccess: editProperties }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -109,16 +159,22 @@ export function TeamLoginsManager() {
       const res = await fetch("/api/settings/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, propertyAccess: formProperties, sendWelcomeEmail }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const mailNote = json.emailSent
+        ? ` A welcome email with their login and instructions was sent to ${json.user.email}.`
+        : sendWelcomeEmail
+          ? ` Couldn't send the welcome email${json.emailError ? ` (${json.emailError})` : ""} — share the details manually.`
+          : "";
       setNotice(
-        json.reset
+        (json.reset
           ? `Updated ${json.user.email} — new password is set.`
-          : `Created ${json.user.email}. Share the email + password with them.`
+          : `Created ${json.user.email}.`) + mailNote
       );
       setForm({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+      setFormProperties([]);
       setError(null);
       await load();
     } catch (err) {
@@ -205,6 +261,13 @@ export function TeamLoginsManager() {
                   {u.language}
                 </span>
               )}
+              {u.propertyAccess && u.propertyAccess.length > 0 && u.propertyAccess.length < PROPERTY_GROUPS.length && (
+                <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs text-black/60 dark:text-white/60">
+                  {u.propertyAccess
+                    .map((id) => PROPERTY_GROUPS.find((g) => g.id === id)?.label ?? id)
+                    .join(", ")}
+                </span>
+              )}
               {u.isYou && <span className="text-xs text-black/40 dark:text-white/40">(you)</span>}
               {!u.active && <span className="text-xs text-red-500">deactivated</span>}
               <span className="ml-auto flex gap-1.5">
@@ -275,6 +338,7 @@ export function TeamLoginsManager() {
                       <option value="CEO">Admin (full access)</option>
                     </select>
                   </label>
+                  <PropertiesPicker value={editProperties} onChange={setEditProperties} />
                   <label className="text-xs text-black/60 dark:text-white/60">
                     Language
                     <select
@@ -344,6 +408,7 @@ export function TeamLoginsManager() {
             <option value="CEO">Admin (full access)</option>
           </select>
         </label>
+        <PropertiesPicker value={formProperties} onChange={setFormProperties} />
         <label className="text-xs text-black/60 dark:text-white/60">
           Language
           <select
@@ -355,6 +420,14 @@ export function TeamLoginsManager() {
             <option value="Spanish">Spanish (Español)</option>
             <option value="Portuguese">Portuguese (Português)</option>
           </select>
+        </label>
+        <label className="flex items-center gap-1.5 pb-1.5 text-xs text-black/60 dark:text-white/60">
+          <input
+            type="checkbox"
+            checked={sendWelcomeEmail}
+            onChange={(e) => setSendWelcomeEmail(e.target.checked)}
+          />
+          Email them their login + instructions
         </label>
         <button
           type="submit"

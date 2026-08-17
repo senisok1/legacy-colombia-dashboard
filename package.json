@@ -11,10 +11,12 @@
     "stripe:create-prices": "node scripts/create-stripe-prices.mjs"
   },
   "dependencies": {
+    "@types/nodemailer": "^8.0.1",
     "bcryptjs": "^3.0.3",
     "date-fns": "^4.4.0",
     "dotenv": "^17.4.2",
     "next": "16.2.12",
+    "nodemailer": "^9.0.5",
     "pg": "^8.22.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",

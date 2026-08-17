@@ -1,6 +1,6 @@
 import { getBookings } from "./ownerrez";
 import { summaryStats, revPar, directBookingShare, occupancyRate, adr, bookingPace, isRevenueCounting, netAmount, lastMinuteDiscount, LAST_MINUTE_LEAD_DAYS, ADVANCE_LEAD_DAYS, cancellationRate, repeatGuestRate, type CancellationSummary, type RepeatGuestSummary } from "./finance";
-import { config, isDbConfigured, isRedisConfigured, isWhatsAppConfigured, isEmailConfigured } from "./config";
+import { config, isDbConfigured, isRedisConfigured, isWhatsAppConfigured } from "./config";
 import { listWorkOrders } from "./maintenance";
 import { listBills } from "./billPay";
 import { listLeads } from "./leads";
@@ -8,10 +8,19 @@ import { listCampaignCandidates } from "./lifecycleMarketing";
 import { listContentPieces } from "./contentMarketing";
 import { getAllPendingDrafts, getRecentResponseTimes } from "./pendingDrafts";
 import { getWeekdayWeekendRates, getRateComparisonSummary, type RateComparisonSummary } from "./revenueManager";
+import { listBookingExtras, EXTRAS_PROPERTY_GROUP_ID } from "./bookingExtras";
+import {
+  summarizeExtras,
+  yearStartIso,
+  monthStartIso,
+  EMPTY_EXTRAS_SUMMARY,
+  type ExtrasSummary,
+} from "./extrasAnalytics";
 import { getReputationSummary, type ReputationSummary } from "./reputationManager";
 import { getCooBriefing, type CooBriefing } from "./cooBriefing";
 import { logAiActivity } from "./aiActivity";
 import { sendWhatsAppText, sendDailySummaryTemplate } from "./whatsapp";
+import { propertyGroupById } from "./propertyGroups";
 import { sendEmail } from "./email";
 import { getDefaultOrganizationId } from "./organizations";
 
@@ -97,6 +106,23 @@ export type LastMinuteDiscountSummary = {
 
 export type ExecutiveReport = {
   generatedAt: string;
+  /** How long this property has actually been operating, derived from its
+   * own booking history (2026-08-17, Seni: "take into account this is a
+   * brand new property that has only been in service for about 2 months").
+   * Judging a two-month-old listing against a stabilised one produces
+   * misleading commentary — soft forward pace is normal during ramp-up. Null
+   * when there are no bookings to measure from. */
+  propertyTenure?: {
+    firstBookingDate: string | null;
+    monthsInService: number | null;
+    isNewProperty: boolean; // under 6 months of operating history
+    totalBookingsAllTime: number;
+  };
+  /** Which property this report covers, e.g. "Legacy Alva" (2026-08-17).
+   * Every heading, email subject and WhatsApp label reads from this instead
+   * of a hardcoded "Legacy Colombia", so a report can't be mislabelled as
+   * another property's. */
+  propertyLabel?: string;
   // Cross-agent synthesis, generated AFTER every other field below is
   // computed (see the end of buildExecutiveReport()) — null when
   // ANTHROPIC_API_KEY isn't configured or the AI COO call itself failed.
@@ -112,6 +138,15 @@ export type ExecutiveReport = {
   revenueMtdGross: number;
   revenueTodayGross: number;
   revenueTodayNet: number;
+  // Paid extras (2026-08-17) — Legacy Colombia only; EMPTY_EXTRAS_SUMMARY
+  // elsewhere. extrasHouseRevenue* is the HOUSE share only and is the sole
+  // extras figure added to revenue; the guest total also contains Gabriel's
+  // commission, which never belonged to the house. Deliberately excluded
+  // from ADR / RevPAR / occupancy above — see lib/extrasAnalytics.ts.
+  extrasYtd: ExtrasSummary;
+  extrasMtd: ExtrasSummary;
+  totalRevenueYtdGross: number; // revenueYtdGross + extrasYtd.houseRevenue
+  totalRevenueMtdGross: number;
   bookingPace: { d30: BookingPaceSummary; d90: BookingPaceSummary; d365: BookingPaceSummary };
   inquiries: InquiryFunnel;
   guestResponseTime: GuestResponseTime;
@@ -135,15 +170,32 @@ export type ExecutiveReport = {
   dataGaps: string[];
 };
 
-export async function buildExecutiveReport(organizationId?: string): Promise<ExecutiveReport> {
+export async function buildExecutiveReport(
+  organizationId?: string,
+  propertyGroupId?: string
+): Promise<ExecutiveReport> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const bookings = await getBookings(orgId);
+  const bookings = await getBookings(orgId, propertyGroupId);
   const stats = summaryStats(bookings);
   // adr/revPar/occupancyRate all share the same stay-date-clipped accrual
   // basis (see lib/finance.ts) so RevPAR = ADR x Occupancy holds — using
   // stats.avgNightlyRate (a YTD average) here instead would silently mix a
   // full-year figure into a "30d" report and make the three numbers
   // internally inconsistent.
+  // Paid extras (2026-08-17) — one query, two windows. Skipped entirely on
+  // properties that don't run extras, so their report is byte-identical to
+  // before rather than carrying zero-filled sections.
+  const extrasByBooking =
+    (propertyGroupId ?? EXTRAS_PROPERTY_GROUP_ID) === EXTRAS_PROPERTY_GROUP_ID
+      ? await listBookingExtras(orgId).catch(() => new Map())
+      : new Map();
+  const extrasYtd = extrasByBooking.size
+    ? summarizeExtras(bookings, extrasByBooking, yearStartIso())
+    : EMPTY_EXTRAS_SUMMARY;
+  const extrasMtd = extrasByBooking.size
+    ? summarizeExtras(bookings, extrasByBooking, monthStartIso())
+    : EMPTY_EXTRAS_SUMMARY;
+
   const adr30 = adr(bookings, 30);
   const revPar30 = revPar(bookings, 30);
   const direct30 = directBookingShare(bookings, 30);
@@ -184,32 +236,32 @@ export async function buildExecutiveReport(organizationId?: string): Promise<Exe
   // Weekday vs. weekend rate — live OwnerRez quotes on a small near-future
   // sample, cached; see revenueManager.ts's getWeekdayWeekendRates for why
   // this can't come from rate_snapshots yet.
-  const weekdayWeekendRates = await getWeekdayWeekendRates(orgId);
+  const weekdayWeekendRates = await getWeekdayWeekendRates(orgId, propertyGroupId);
 
   // AI vs. PriceLabs vs. actual live OwnerRez rate, averaged across every
   // upcoming tracked date — Seni's explicit ask (2026-08-01) so he can watch
   // this trend daily rather than only when he opens the Revenue Management
   // tab. See revenueManager.ts's getRateComparisonSummary().
-  const rateComparison = await getRateComparisonSummary(orgId);
+  const rateComparison = await getRateComparisonSummary(orgId, propertyGroupId);
 
   // Reputation Manager (Agent #9) — avg rating + how much is sitting in
   // Seni's response queue. Reads live OwnerRez reviews either way; the
   // pending-draft count is 0 (not wrong, just empty) if the DB isn't
   // connected, since drafts live in reputation_responses.
-  const reputation = await getReputationSummary(orgId);
+  const reputation = await getReputationSummary(orgId, propertyGroupId);
 
   const dbAvailable = isDbConfigured();
   const [workOrders, bills, leads, campaignCandidates, contentPieces] = dbAvailable
     ? await Promise.all([
-        listWorkOrders(orgId),
-        listBills(orgId),
-        listLeads(orgId),
-        listCampaignCandidates(orgId),
-        listContentPieces(orgId),
+        listWorkOrders(orgId, propertyGroupId),
+        listBills(orgId, propertyGroupId),
+        listLeads(orgId, propertyGroupId),
+        listCampaignCandidates(orgId, propertyGroupId),
+        listContentPieces(orgId, propertyGroupId),
       ])
     : [[], [], [], [], []];
 
-  const pendingDrafts = isRedisConfigured() ? await getAllPendingDrafts() : [];
+  const pendingDrafts = isRedisConfigured() ? await getAllPendingDrafts(orgId, propertyGroupId) : [];
   const approvalsPending = pendingDrafts.length;
   const staleCutoff = new Date(now.getTime() - STALE_DRAFT_HOURS * 60 * 60 * 1000);
   const staleGuestReplies = pendingDrafts.filter((d) => new Date(d.createdAt) <= staleCutoff).length;
@@ -265,7 +317,9 @@ export async function buildExecutiveReport(organizationId?: string): Promise<Exe
   // Guest response-time SLA — see pendingDrafts.ts's recordResponseTime for
   // why this reads from a small rolling log rather than Redis's normal
   // pending-drafts index (which can't look backward at resolved drafts).
-  const recentResponseTimes = isRedisConfigured() ? await getRecentResponseTimes(RESPONSE_TIME_WINDOW_DAYS, orgId) : [];
+  const recentResponseTimes = isRedisConfigured()
+    ? await getRecentResponseTimes(RESPONSE_TIME_WINDOW_DAYS, orgId, propertyGroupId)
+    : [];
   const sortedMinutes = recentResponseTimes.map((r) => r.minutes).sort((a, b) => a - b);
   const guestResponseTime: GuestResponseTime = {
     windowDays: RESPONSE_TIME_WINDOW_DAYS,
@@ -392,7 +446,29 @@ export async function buildExecutiveReport(organizationId?: string): Promise<Exe
     );
   }
 
+  // Operating history, measured from the earliest real booking this property
+  // has. Uses arrival dates (not created_utc) because that's when the
+  // property actually started hosting guests.
+  const realBookings = bookings.filter((b) => !b.isBlock && b.status !== "Cancelled" && b.arrival);
+  const firstArrival = realBookings
+    .map((b) => b.arrival.slice(0, 10))
+    .sort()
+    .find(Boolean) ?? null;
+  const monthsInService = firstArrival
+    ? Math.max(
+        0,
+        Math.round(((Date.now() - new Date(`${firstArrival}T00:00:00Z`).getTime()) / (1000 * 60 * 60 * 24 * 30.44)) * 10) / 10
+      )
+    : null;
+
   const report: ExecutiveReport = {
+    propertyLabel: propertyGroupById(propertyGroupId).label,
+    propertyTenure: {
+      firstBookingDate: firstArrival,
+      monthsInService,
+      isNewProperty: monthsInService !== null && monthsInService < 6,
+      totalBookingsAllTime: realBookings.length,
+    },
     generatedAt: new Date().toISOString(),
     cooBriefing: null, // filled in below, after every other field exists to synthesize over
     occupancy30d: occupancyRate(bookings, 30),
@@ -406,6 +482,10 @@ export async function buildExecutiveReport(organizationId?: string): Promise<Exe
     revenueMtdGross,
     revenueTodayGross,
     revenueTodayNet,
+    extrasYtd,
+    extrasMtd,
+    totalRevenueYtdGross: Math.round((stats.ytdRevenue + extrasYtd.houseRevenue) * 100) / 100,
+    totalRevenueMtdGross: Math.round((revenueMtdGross + extrasMtd.houseRevenue) * 100) / 100,
     bookingPace: {
       d30: { daysOut: pace30.daysOut, nightsBooked: pace30.nightsBooked, nightsAvailable: pace30.nightsAvailable, pct: pace30.pct },
       d90: { daysOut: pace90.daysOut, nightsBooked: pace90.nightsBooked, nightsAvailable: pace90.nightsAvailable, pct: pace90.pct },
@@ -448,7 +528,7 @@ export async function buildExecutiveReport(organizationId?: string): Promise<Exe
   // Generated last, over the fully-assembled report above — see
   // cooBriefing.ts's header comment for why this reads across every other
   // agent's numbers instead of computing anything new itself.
-  report.cooBriefing = await getCooBriefing(report, orgId);
+  report.cooBriefing = await getCooBriefing(report, orgId, propertyGroupId);
 
   return report;
 }
@@ -458,7 +538,7 @@ export async function buildExecutiveReport(organizationId?: string): Promise<Exe
  * app/reports/page.tsx); this is the pushed daily digest. */
 export function formatReportForWhatsApp(report: ExecutiveReport): string {
   const lines: string[] = [];
-  lines.push("📊 Daily summary — Legacy Colombia");
+  lines.push(`📊 Daily summary — ${report.propertyLabel ?? "Legacy Colombia"}`);
   if (report.urgentApprovals.total > 0) {
     lines.push(`🔴 ${report.urgentApprovals.total} urgent approval${report.urgentApprovals.total === 1 ? "" : "s"} need your decision today`);
   }
@@ -477,6 +557,15 @@ export function formatReportForWhatsApp(report: ExecutiveReport): string {
   lines.push(`Revenue YTD: $${report.revenueYtdGross.toFixed(0)} gross / $${report.revenueYtdNet.toFixed(0)} net`);
   lines.push(`Revenue MTD: $${report.revenueMtdGross.toFixed(0)}`);
   lines.push(`Revenue today (new bookings): $${report.revenueTodayGross.toFixed(0)}`);
+  // Extras (2026-08-17) — only when there are any, and always the HOUSE
+  // share, so this line can be added to the revenue figures above without
+  // double-counting Gabriel's commission.
+  if (report.extrasYtd.count > 0) {
+    lines.push(
+      `Extras YTD (house share): $${report.extrasYtd.houseRevenue.toFixed(0)} · attach rate ${report.extrasYtd.attachRatePct}%`
+    );
+    lines.push(`Total revenue YTD: $${report.totalRevenueYtdGross.toFixed(0)} (stays + extras)`);
+  }
   lines.push("");
   lines.push(
     `Booking pace: 30d ${report.bookingPace.d30.pct}% · 90d ${report.bookingPace.d90.pct}% · 12mo ${report.bookingPace.d365.pct}% on the books`
@@ -582,7 +671,7 @@ export function formatReportForEmailHtml(report: ExecutiveReport): string {
 
   return `
     <div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#171717;">
-      <h2 style="margin-bottom:4px;">📊 Daily executive summary — Legacy Colombia</h2>
+      <h2 style="margin-bottom:4px;">📊 Daily executive summary — ${report.propertyLabel ?? "Legacy Colombia"}</h2>
       <p style="color:#737373;font-size:13px;margin-top:0;">Generated ${new Date(report.generatedAt).toLocaleString("en-US", { timeZone: "America/New_York" })} ET</p>
 
       ${urgentBanner}
@@ -617,6 +706,18 @@ export function formatReportForEmailHtml(report: ExecutiveReport): string {
           <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;">Revenue today (new bookings)</td>
           <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${money(report.revenueTodayGross)}</td>
         </tr>
+        ${
+          report.extrasYtd.count > 0
+            ? `<tr>
+          <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;">Extras YTD (house share)</td>
+          <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${money(report.extrasYtd.houseRevenue)}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 0;border-bottom:2px solid #333;"><strong>Total revenue YTD</strong></td>
+          <td style="padding:8px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${money(report.totalRevenueYtdGross)}</td>
+        </tr>`
+            : ""
+        }
         <tr>
           <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;">Booking pace (30d / 90d / 12mo)</td>
           <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${report.bookingPace.d30.pct}% / ${report.bookingPace.d90.pct}% / ${report.bookingPace.d365.pct}%</td>
@@ -686,7 +787,50 @@ export function formatReportForEmailHtml(report: ExecutiveReport): string {
             : ""
         }
       </table>
-
+${
+  report.extrasYtd.count > 0
+    ? `
+      <h3 style="margin-bottom:2px;">Extras &amp; ancillary revenue (YTD)</h3>
+      <p style="margin:0 0 6px;color:#737373;font-size:12px;">
+        Manually recorded on the Team Management tab. Only the house share counts as revenue &mdash;
+        the guest total also contains Gabriel&rsquo;s commission, which passes through.
+      </p>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;">
+        <tr style="color:#737373;font-size:12px;text-align:left;">
+          <th style="padding:4px 0;font-weight:500;">Extra</th>
+          <th style="padding:4px 0;font-weight:500;text-align:right;">Sold</th>
+          <th style="padding:4px 0;font-weight:500;text-align:right;">Guest paid</th>
+          <th style="padding:4px 0;font-weight:500;text-align:right;">House share</th>
+          <th style="padding:4px 0;font-weight:500;text-align:right;">Commission</th>
+        </tr>
+        ${report.extrasYtd.byKind
+          .map(
+            (r) => `<tr>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;">${r.label}</td>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;">${r.count}</td>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;color:#737373;">${money(r.guestPaid)}</td>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${money(r.houseRevenue)}</td>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;color:#737373;">${money(r.commission)}</td>
+        </tr>`
+          )
+          .join("")}
+        <tr>
+          <td style="padding:6px 0;border-bottom:2px solid #333;font-weight:700;">Total</td>
+          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${report.extrasYtd.count}</td>
+          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${money(report.extrasYtd.guestPaid)}</td>
+          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${money(report.extrasYtd.houseRevenue)}</td>
+          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${money(report.extrasYtd.commission)}</td>
+        </tr>
+      </table>
+      <p style="margin:6px 0 0;color:#737373;font-size:13px;">
+        Attach rate <strong>${report.extrasYtd.attachRatePct}%</strong>
+        (${report.extrasYtd.staysWithExtras} of ${report.extrasYtd.totalStays} stays)
+        &middot; ${money(report.extrasYtd.houseRevenuePerStay)} house share per stay
+        &middot; MTD house share ${money(report.extrasMtd.houseRevenue)}
+      </p>
+`
+    : ""
+}
       <h3 style="margin-bottom:6px;">Needs your attention</h3>
       <ul style="padding-left:18px;margin-top:0;">${attentionRows}</ul>
 
@@ -698,6 +842,12 @@ export function formatReportForEmailHtml(report: ExecutiveReport): string {
   `;
 }
 
+// WhatsApp is deliberately reserved for the three things Seni wants in the
+// moment — inquiries, guest messages, new bookings (2026-08-17). Recaps and
+// digests go by EMAIL only. Flipping this to true restores the WhatsApp leg
+// without touching any other code.
+const SEND_RECAPS_TO_WHATSAPP = false;
+
 export type DeliveryResult = { attempted: boolean; sent: boolean; error?: string };
 
 /** Sends the report over every configured channel independently — a
@@ -708,13 +858,26 @@ export type DeliveryResult = { attempted: boolean; sent: boolean; error?: string
 export async function deliverExecutiveReport(
   report: ExecutiveReport,
   trigger: string,
-  organizationId?: string
+  organizationId?: string,
+  // Who this copy goes to (2026-08-17, Seni: "send one daily summary specific
+  // for each property to each admin/owner ONLY based on the properties that
+  // that specific admin/owner has access to"). Falls back to the account-wide
+  // REPORT_EMAIL_TO when omitted, which is what the old single-recipient
+  // behaviour did.
+  recipientEmail?: string
 ): Promise<{ whatsapp: DeliveryResult; email: DeliveryResult }> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const whatsapp: DeliveryResult = { attempted: false, sent: false };
   const email: DeliveryResult = { attempted: false, sent: false };
 
-  if (isWhatsAppConfigured()) {
+  // WhatsApp delivery of this recap was REMOVED 2026-08-17 at Seni's request:
+  // "I don't need the daily recap sent to my whatsapp any longer because I get
+  // them emailed to me." WhatsApp is now reserved for the three things that
+  // need him in the moment — inquiries, guest messages, and new bookings.
+  // The EMAIL delivery below is untouched and remains the channel for this.
+  // The whatsapp result object is kept (attempted:false) so the cron's
+  // response shape and its logged activity record don't change.
+  if (SEND_RECAPS_TO_WHATSAPP && isWhatsAppConfigured()) {
     whatsapp.attempted = true;
     try {
       // DURABLE FIX (2026-08-07): try the real Meta-approved template first
@@ -729,7 +892,7 @@ export async function deliverExecutiveReport(
       const headline = `${urgentNote}${report.cooBriefing?.narrative ?? "See full report for details."}`;
       const statsLine = `Occupancy (30d): ${report.occupancy30d}% · ADR: $${report.adrGross.toFixed(0)} · RevPAR: $${report.revParGross.toFixed(0)} · Direct: ${report.directBookingPct}% · Revenue MTD: $${report.revenueMtdGross.toFixed(0)} · Pace: 30d ${report.bookingPace.d30.pct}% / 90d ${report.bookingPace.d90.pct}% / 12mo ${report.bookingPace.d365.pct}%`;
       try {
-        await sendDailySummaryTemplate({ orgLabel: "Legacy Colombia", headline, statsLine }, orgId);
+        await sendDailySummaryTemplate({ orgLabel: report.propertyLabel ?? "Legacy Colombia", headline, statsLine }, orgId);
       } catch {
         await sendWhatsAppText(formatReportForWhatsApp(report), orgId);
       }
@@ -739,12 +902,13 @@ export async function deliverExecutiveReport(
     }
   }
 
-  if (isEmailConfigured()) {
+  const emailTo = recipientEmail?.trim() || config.reportEmailTo;
+  if (emailTo && config.resendApiKey) {
     email.attempted = true;
     try {
       await sendEmail({
-        to: config.reportEmailTo,
-        subject: `Daily summary — Legacy Colombia (${new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" })})`,
+        to: emailTo,
+        subject: `Daily summary — ${report.propertyLabel ?? "Legacy Colombia"} (${new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" })})`,
         html: formatReportForEmailHtml(report),
       });
       email.sent = true;

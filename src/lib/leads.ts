@@ -1,4 +1,4 @@
-import { query, queryOne } from "./db";
+import { query, queryOne, propertyGroupFilter } from "./db";
 import { logAiActivity } from "./aiActivity";
 import { getDefaultOrganizationId } from "./organizations";
 import type { Lead, LeadStage } from "./types";
@@ -64,11 +64,12 @@ function fromLeadRow(row: LeadRow): Lead {
 
 /** Every lead, newest first — the Sales Pipeline tab groups these by stage
  * client-side rather than needing separate queries per stage. */
-export async function listLeads(organizationId?: string): Promise<Lead[]> {
+export async function listLeads(organizationId?: string, propertyGroupId?: string): Promise<Lead[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
-  const rows = await query<LeadRow>("select * from leads where organization_id = $1 order by created_at desc", [
-    orgId,
-  ]);
+  const rows = await query<LeadRow>(
+    `select * from leads where organization_id = $1${propertyGroupFilter(propertyGroupId, 2)} order by created_at desc`,
+    propertyGroupId ? [orgId, propertyGroupId] : [orgId]
+  );
   return rows.map(fromLeadRow);
 }
 

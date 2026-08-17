@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isDbConfigured } from "@/lib/config";
 import { createBill, listBills } from "@/lib/billPay";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +13,10 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   if (!isDbConfigured()) return NextResponse.json({ bills: [] });
   const session = getSessionFromRequest(req);
-  const bills = await listBills(session?.organizationId);
+  const bills = await listBills(session?.organizationId, effectivePropertyGroupId(
+      req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+      (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+    ));
   return NextResponse.json({ bills });
 }
 
@@ -24,6 +29,10 @@ export async function POST(req: NextRequest) {
   if (!body?.vendorId || typeof body.amountCents !== "number" || body.amountCents <= 0) {
     return NextResponse.json({ error: "vendorId and a positive amountCents are required." }, { status: 400 });
   }
-  const bill = await createBill(body, session?.organizationId);
+  const bill = await createBill(body, session?.organizationId, await (async () =>
+    effectivePropertyGroupId(
+      req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+      (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+    ))());
   return NextResponse.json({ bill });
 }

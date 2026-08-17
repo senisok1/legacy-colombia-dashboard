@@ -4,6 +4,7 @@ import { getBookings, getGuests, getThreadMessages } from "@/lib/ownerrez";
 import { getGlobalHostStyleExamples, getCachedThreadMessages } from "@/lib/inbox";
 import { resolveGuestName, resolveGuestPhone, buildGuestsById } from "@/lib/guestName";
 import { draftGuestReply } from "@/lib/aiReply";
+import { translateText } from "@/lib/translate";
 import { sendWhatsAppText, sendGuestReplyApprovalTemplate } from "@/lib/whatsapp";
 import {
   createPendingDraft,
@@ -12,6 +13,7 @@ import {
   linkWhatsAppMessageId,
   getPendingDraftByThreadId,
   getLastCheckedAtMany,
+  alreadyAlertedRecently,
   setLastCheckedAt,
 } from "@/lib/pendingDrafts";
 import { logAiActivity } from "@/lib/aiActivity";
@@ -397,6 +399,29 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
           organizationId: orgId,
         });
 
+        // GUARANTEED ENGLISH FOR THE ALERT (2026-08-17). draftGuestReply asks
+        // Claude for guest_message_english / reply_english as part of the
+        // drafting call, but when the model omits them (returns "") the
+        // parser falls back to the ORIGINAL text — so a Spanish conversation
+        // produced a Spanish WhatsApp alert Seni couldn't read. That's what
+        // happened today. Belt-and-braces: if the guest didn't write in
+        // English and we don't have a genuine translation, translate
+        // explicitly here. Failure is non-fatal — worst case we're back to
+        // the original text rather than losing the alert.
+        const wroteInEnglish = (draftReply.language || "English").toLowerCase() === "english";
+        let englishGuestMessage = draftReply.guestMessageEnglish;
+        let englishReply = draftReply.replyEnglish;
+        if (!wroteInEnglish) {
+          if (!englishGuestMessage || englishGuestMessage === guestMessageBody) {
+            const t = await translateText(guestMessageBody, "en", orgId).catch(() => null);
+            if (t?.ok && t.text.trim()) englishGuestMessage = t.text.trim();
+          }
+          if (!englishReply || englishReply === draftReply.reply) {
+            const t = await translateText(draftReply.reply, "en", orgId).catch(() => null);
+            if (t?.ok && t.text.trim()) englishReply = t.text.trim();
+          }
+        }
+
         draft = await createPendingDraft(
           {
             threadId,
@@ -406,8 +431,8 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
             guestMessage: guestMessageBody,
             draftReply: draftReply.reply,
             language: draftReply.language,
-            guestMessageEnglish: draftReply.guestMessageEnglish,
-            replyEnglish: draftReply.replyEnglish,
+            guestMessageEnglish: englishGuestMessage,
+            replyEnglish: englishReply,
             isServiceRequest: draftReply.isServiceRequest,
             guestPhone: draftReply.isServiceRequest
               ? resolveGuestPhone(booking, guestsById)
@@ -443,7 +468,13 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
       // approval text to Seni is always English, regardless of what
       // language the guest wrote in; the reply that actually gets sent to
       // the guest on approval (draft.draftReply) stays in their language.
-      if (!draft.wamid) {
+      // Content-level duplicate guard — see alreadyAlertedRecently's comment
+      // for the two ways one guest message could alert twice.
+      if (!draft.wamid && (await alreadyAlertedRecently(orgId, guestMessageBody))) {
+        console.warn(
+          `[check-messages] suppressed duplicate alert for thread ${threadId} — same guest text already alerted within the window`
+        );
+      } else if (!draft.wamid) {
         const isNonEnglish = Boolean(draft.language) && draft.language !== "English";
         const languageNote = isNonEnglish ? ` [written in ${draft.language}]` : "";
         const customReplyNote = isNonEnglish

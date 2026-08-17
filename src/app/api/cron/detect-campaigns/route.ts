@@ -3,6 +3,7 @@ import { config, isDbConfigured } from "@/lib/config";
 import { getBookings, getGuests } from "@/lib/ownerrez";
 import { detectCandidates } from "@/lib/lifecycleMarketing";
 import { listActiveOrganizations } from "@/lib/organizations";
+import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
 
 // Daily scan for new lifecycle-marketing candidates (win-back, referral,
 // abandoned-booking) — see lib/lifecycleMarketing.ts's header comment. Runs
@@ -15,7 +16,11 @@ import { listActiveOrganizations } from "@/lib/organizations";
 // the single default org, so each tenant's own OwnerRez data gets scanned
 // with their own credentials. One org's failure is isolated and reported
 // per-org rather than aborting the whole run.
-export const maxDuration = 60;
+// Raised from 60s 2026-08-17: this now runs detection for EVERY property
+// rather than once for the default one, and each pass does live OwnerRez
+// fetches plus AI drafting per candidate. At 60s a five-property run would
+// have been cut off partway, silently leaving later properties undetected.
+export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
   // Vercel signs its own cron requests with this header when CRON_SECRET is
@@ -36,9 +41,30 @@ export async function GET(req: NextRequest) {
 
   for (const org of orgs) {
     try {
-      const [guests, bookings] = await Promise.all([getGuests(org.id), getBookings(org.id)]);
-      const result = await detectCandidates(guests, bookings, org.id);
-      results[org.slug] = { ok: true, ...result };
+      // PER-PROPERTY DETECTION (2026-08-17). This previously ran once per
+      // organization with unscoped getGuests/getBookings — which defaulted to
+      // Legacy Colombia — and wrote candidates with no property tag, so the
+      // Campaigns tab showed Colombia's past guests under every property.
+      // Now each property is detected separately and its candidates are
+      // stamped with that property, so a new property with few past guests
+      // correctly shows few candidates.
+      const perProperty: Record<string, unknown> = {};
+      for (const group of PROPERTY_GROUPS) {
+        try {
+          const [guests, bookings] = await Promise.all([
+            getGuests(org.id, group.id),
+            getBookings(org.id, group.id),
+          ]);
+          perProperty[group.id] = await detectCandidates(guests, bookings, org.id, group.id);
+        } catch (groupErr) {
+          // One property failing shouldn't stop the others being detected.
+          console.error(`[cron/detect-campaigns] ${org.slug}/${group.id} failed`, groupErr);
+          perProperty[group.id] = {
+            error: groupErr instanceof Error ? groupErr.message : "Unknown error.",
+          };
+        }
+      }
+      results[org.slug] = { ok: true, perProperty };
     } catch (err) {
       console.error(`[cron/detect-campaigns] failed for org ${org.slug}`, err);
       results[org.slug] = { ok: false, error: err instanceof Error ? err.message : "Unknown error." };

@@ -4,8 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
-  CRM_GROUP_TABS,
-  BILL_PAY_GROUP_TABS,
+  MARKETING_GROUP_TABS,
   MESSAGING_GROUP_TABS,
   REPORTS_GROUP_TABS,
   SETTINGS_GROUP_TABS,
@@ -13,6 +12,8 @@ import {
 } from "@/lib/navGroups";
 import { useCurrency } from "@/components/CurrencyProvider";
 import { PROPERTY_GROUPS, propertyGroupById } from "@/lib/propertyGroups";
+
+type NavPropertyGroup = { id: string; label: string };
 
 // Nav structure — a flat list of either a single link or a "group" (a
 // dropdown of related sub-pages). Consolidated 2026-08-05 (Seni's ask,
@@ -32,13 +33,18 @@ const navEntries: NavEntry[] = [
   // Management (2026-08-16): the on-site team's central tab — upcoming
   // stays, paid-extras/event notes, team activity log. Also the home base
   // for the READ_ONLY team login (see src/proxy.ts's role gate).
-  { type: "link", href: "/management", label: "Management" },
-  { type: "group", label: "CRM", tabs: CRM_GROUP_TABS },
+  { type: "link", href: "/management", label: "Team Management" },
+  // Team Expense Request (2026-08-17) — the on-site team asks for spend, the
+  // owner approves, whoever buys it marks it completed.
+  { type: "link", href: "/team-expenses", label: "Team Expense Request" },
+  // Team Activity Log sits to the RIGHT of Team Expense Request (2026-08-17,
+  // Seni's ask) — it was briefly the other way round.
+  { type: "link", href: "/team-log", label: "Team Activity Log" },
   { type: "group", label: "Messaging", tabs: MESSAGING_GROUP_TABS },
-  { type: "group", label: "Bill Pay", tabs: BILL_PAY_GROUP_TABS },
-  { type: "link", href: "/marketing", label: "Marketing" },
-  { type: "link", href: "/activity", label: "AI Activity" },
+  { type: "group", label: "Marketing", tabs: MARKETING_GROUP_TABS },
   { type: "group", label: "Reports", tabs: REPORTS_GROUP_TABS },
+  // Bill Pay sits between Reports and Settings (2026-08-17, Seni's ask).
+  { type: "link", href: "/bill-pay", label: "Bill Pay" },
   { type: "group", label: "Settings", tabs: SETTINGS_GROUP_TABS },
 ];
 
@@ -130,12 +136,17 @@ function Badge({ count, active }: { count: number; active: boolean }) {
 // members see Dashboard, Management, Bill Pay, and Settings only. Admins
 // keep everything. Display-layer only; the real enforcement is the proxy's
 // role gate (a team member typing /messaging still can't change anything).
-const TEAM_HIDDEN_LABELS = new Set(["CRM", "Messaging", "Marketing", "AI Activity", "Reports"]);
+// Team members (READ_ONLY) see EXACTLY these tabs (2026-08-17, Seni's spec):
+// Dashboard, Team Management, Team Expense Request, Team Activity Log, and a
+// plain Settings link (no Settings dropdown — no Add a Team Member, no
+// Billing). Everything else is hidden here AND blocked in src/proxy.ts, so
+// typing the URL doesn't get around it.
+const TEAM_HIDDEN_LABELS = new Set(["Messaging", "Marketing", "Reports", "Bill Pay"]);
 
 // Wordmark property switcher (2026-08-16, Seni's ask): clicking the brand
 // opens a dropdown of the account's property views; picking one sets the
 // lc_property_group cookie and reloads, re-scoping the whole dashboard.
-function PropertySwitcher({ activeGroupId }: { activeGroupId: string }) {
+function PropertySwitcher({ activeGroupId, groups }: { activeGroupId: string; groups: NavPropertyGroup[] }) {
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   // position:fixed dropdown, same fix as the nav group panels: the header's
@@ -191,7 +202,7 @@ function PropertySwitcher({ activeGroupId }: { activeGroupId: string }) {
             style={{ position: "fixed", top: menuPos.top, left: menuPos.left }}
             className="z-50 min-w-[12rem] rounded-lg border border-black/10 dark:border-white/15 bg-white dark:bg-neutral-900 p-1 shadow-lg"
           >
-            {PROPERTY_GROUPS.map((g) => (
+            {groups.map((g) => (
               <button
                 key={g.id}
                 onClick={() => void choose(g.id)}
@@ -209,9 +220,22 @@ function PropertySwitcher({ activeGroupId }: { activeGroupId: string }) {
   );
 }
 
-export function NavBar({ role, propertyGroupId }: { role?: string; propertyGroupId?: string }) {
+export function NavBar({
+  role,
+  propertyGroupId,
+  propertyGroups,
+}: {
+  role?: string;
+  propertyGroupId?: string;
+  propertyGroups?: NavPropertyGroup[];
+}) {
   const visibleEntries =
-    role === "READ_ONLY" ? navEntries.filter((e) => !TEAM_HIDDEN_LABELS.has(e.label)) : navEntries;
+    role === "READ_ONLY"
+      ? navEntries
+          .filter((e) => !TEAM_HIDDEN_LABELS.has(e.label))
+          // Settings collapses from a dropdown to a single link for the team.
+          .map((e): NavEntry => (e.label === "Settings" ? { type: "link", href: "/settings", label: "Settings" } : e))
+      : navEntries;
   const pathname = usePathname();
   const router = useRouter();
   const [pendingCount, setPendingCount] = useState(0);
@@ -382,7 +406,10 @@ export function NavBar({ role, propertyGroupId }: { role?: string; propertyGroup
           if the window is ever genuinely too narrow for that, the nav
           scrolls horizontally (overflow-x-auto) instead of squeezing. */}
       <div className="mx-auto max-w-[100rem] px-6 py-3 flex items-center justify-between gap-4">
-        <PropertySwitcher activeGroupId={propertyGroupId ?? "legacy-colombia"} />
+        <PropertySwitcher
+          activeGroupId={propertyGroupId ?? "legacy-colombia"}
+          groups={propertyGroups && propertyGroups.length > 0 ? propertyGroups : PROPERTY_GROUPS}
+        />
         {/* overflow-x-auto here was silently clipping the CRM/Bill Pay
             dropdown panels: per the CSS Overflow spec, an element can't
             have overflow-x:auto and overflow-y:visible at once — the
