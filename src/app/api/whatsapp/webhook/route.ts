@@ -246,20 +246,48 @@ async function recordStatusCallbacks(body: unknown): Promise<void> {
 // app secret, in the X-Hub-Signature-256 header. Verifying it is the only
 // way to know a payload actually came from Meta.
 //
-// Requires WHATSAPP_APP_SECRET (Meta for Developers -> App -> Settings ->
-// Basic -> App Secret). Until it is set this stays open but logs loudly —
-// same reasoning as the OwnerRez webhook: silently rejecting all real guest
-// traffic would be a worse failure than the one being fixed.
+// TWO WAYS TO SATISFY THIS, either is sufficient:
+//
+//   1. WHATSAPP_APP_SECRET — the real HMAC check (Meta for Developers ->
+//      App -> Settings -> Basic -> App Secret). Strongest, because the
+//      signature covers the payload itself, so it also rejects a replayed
+//      or tampered body. Revealing the App Secret in Meta requires
+//      re-entering the account password.
+//
+//   2. WHATSAPP_WEBHOOK_SECRET — a shared secret carried in the callback
+//      URL's query string, exactly like the OwnerRez webhook fix. Meta
+//      preserves query params on the callback URL and sends them back on
+//      every POST. Weaker than the HMAC (it authenticates the CALLER, not
+//      the payload, and anyone who can read the URL can replay it) but it
+//      needs no password to set up, and it closes the actual hole here:
+//      an anonymous forged POST approving a draft and messaging a guest.
+//
+// Prefer #1 when both are set. With NEITHER set this stays open and logs
+// loudly on every request — silently rejecting all real guest traffic would
+// be a worse failure than the one being fixed.
+function hasValidUrlSecret(req: NextRequest): boolean {
+  const expected = (process.env.WHATSAPP_WEBHOOK_SECRET || "").trim();
+  if (!expected) return false;
+  const supplied = req.nextUrl.searchParams.get("secret") ?? "";
+  return supplied.length === expected.length && supplied === expected;
+}
+
 async function verifyMetaSignature(req: NextRequest, rawBody: string): Promise<boolean> {
   const appSecret = (process.env.WHATSAPP_APP_SECRET || "").trim();
+  const urlSecretConfigured = Boolean((process.env.WHATSAPP_WEBHOOK_SECRET || "").trim());
+
   if (!appSecret) {
+    if (urlSecretConfigured) return hasValidUrlSecret(req);
     console.warn(
-      "[whatsapp webhook] WHATSAPP_APP_SECRET is not set — accepting UNVERIFIED payloads. A forged POST could approve a draft and message a guest. Set it in Vercel."
+      "[whatsapp webhook] Neither WHATSAPP_APP_SECRET nor WHATSAPP_WEBHOOK_SECRET is set — accepting UNVERIFIED payloads. A forged POST could approve a draft and message a guest."
     );
     return true;
   }
   const header = req.headers.get("x-hub-signature-256") ?? "";
-  if (!header.startsWith("sha256=")) return false;
+  // A valid URL secret is accepted alongside the HMAC rather than instead of
+  // it: both are secrets only Meta and this app know, and accepting either
+  // means rotating one can't take guest messaging down.
+  if (!header.startsWith("sha256=")) return hasValidUrlSecret(req);
   const { createHmac, timingSafeEqual } = await import("node:crypto");
   const expected = createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
   const supplied = header.slice("sha256=".length);
@@ -272,7 +300,9 @@ async function verifyMetaSignature(req: NextRequest, rawBody: string): Promise<b
   // request into a 500, which Meta retry-storms, instead of a clean 401.
   // Both strings are fixed-length hex here, so a byte-wise compare over the
   // ASCII is equivalent and can't throw.
-  return timingSafeEqual(Buffer.from(supplied, "ascii"), Buffer.from(expected, "ascii"));
+  return (
+    timingSafeEqual(Buffer.from(supplied, "ascii"), Buffer.from(expected, "ascii")) || hasValidUrlSecret(req)
+  );
 }
 
 export async function POST(req: NextRequest) {
