@@ -107,6 +107,34 @@ export function proxy(req: NextRequest) {
     // be forged: it lives inside the HMAC-signed session token verified
     // above (a tampered payload fails signature verification and never
     // reaches this branch).
+    // Hard block (2026-08-16, Seni's ask): the admin-only areas aren't just
+    // hidden from the team nav — a READ_ONLY session can't open them at all.
+    // Pages bounce to /management; their APIs return 403.
+    if (session!.role === "READ_ONLY") {
+      const TEAM_BLOCKED_PREFIXES = [
+        "/guests",
+        "/crm-campaigns",
+        "/sales-pipeline",
+        "/messaging",
+        "/approvals",
+        "/reputation",
+        "/marketing",
+        "/activity",
+        "/reports",
+        "/revenue-management",
+        "/api/messages",
+      ];
+      if (TEAM_BLOCKED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json(
+            { error: "This area is admin-only — team accounts can't access it." },
+            { status: 403 }
+          );
+        }
+        return NextResponse.redirect(new URL("/management", req.url));
+      }
+    }
+
     if (session!.role === "READ_ONLY" && !["GET", "HEAD", "OPTIONS"].includes(req.method) && pathname.startsWith("/api/")) {
       const readOnlyWriteAllowlist =
         pathname === "/api/logout" ||
