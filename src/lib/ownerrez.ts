@@ -1,5 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { config, isRedisConfigured } from "./config";
+import { propertyGroupById, DEFAULT_PROPERTY_GROUP_ID } from "./propertyGroups";
 import { demoBookings, demoGuests, demoProperty, demoReviews } from "./demoData";
 import type { Booking, BookingStatus, Guest, Property, Review, ThreadMessage } from "./types";
 import { getDefaultOrganizationId } from "./organizations";
@@ -374,9 +375,29 @@ async function fetchAdditionalProperties(creds: OwnerRezCredentials): Promise<Pr
 // other data read below (bookings, guests derived from them, reviews) merges
 // across this full set, so it doesn't matter which listing a guest actually
 // booked or messaged through — the dashboard shows one combined picture.
-async function fetchTargetProperties(organizationId?: string): Promise<Property[]> {
+async function fetchTargetProperties(organizationId?: string, propertyGroupId?: string): Promise<Property[]> {
   const creds = await resolveOwnerRezCredentials(organizationId);
   if (!isLive(creds)) return [demoProperty];
+
+  // Property-group switching (2026-08-16): non-default groups resolve by
+  // case-insensitive name match against the account's full property list
+  // (e.g. "Legacy Alva" -> "Legacy Alva Waterfront Farm Estate Pool,
+  // Theater, Kayaks"). The default group keeps the original config-driven
+  // resolution below untouched.
+  const group = propertyGroupById(propertyGroupId);
+  if (group.id !== DEFAULT_PROPERTY_GROUP_ID && group.nameMatch) {
+    const items = await orFetchAllPages<Record<string, unknown>>("/properties", {}, creds);
+    const needle = group.nameMatch.toLowerCase();
+    const matches = items
+      .map(normalizeProperty)
+      .filter((prop) => prop.name.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      throw new OwnerRezApiError(
+        `No OwnerRez property matches "${group.nameMatch}" for the ${group.label} view.`
+      );
+    }
+    return matches;
+  }
 
   const primary = await getTargetProperty(organizationId);
   const additional = await fetchAdditionalProperties(creds);
@@ -409,11 +430,20 @@ async function fetchTargetProperties(organizationId?: string): Promise<Property[
 const TARGET_PROPERTIES_FALLBACK_KEY = "ownerrez:target-properties-fallback";
 const TARGET_PROPERTIES_FALLBACK_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-async function fetchTargetPropertiesWithFallback(organizationId?: string): Promise<Property[]> {
+function targetPropertiesFallbackKeyFor(propertyGroupId?: string): string {
+  // Default group keeps the ORIGINAL key so the existing warm fallback
+  // stays valid; other groups get their own namespaced copy.
+  return propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID
+    ? `${TARGET_PROPERTIES_FALLBACK_KEY}:${propertyGroupId}`
+    : TARGET_PROPERTIES_FALLBACK_KEY;
+}
+
+async function fetchTargetPropertiesWithFallback(organizationId?: string, propertyGroupId?: string): Promise<Property[]> {
+  const fallbackKey = targetPropertiesFallbackKeyFor(propertyGroupId);
   try {
-    const properties = await fetchTargetProperties(organizationId);
+    const properties = await fetchTargetProperties(organizationId, propertyGroupId);
     if (isRedisConfigured()) {
-      await redisSet(TARGET_PROPERTIES_FALLBACK_KEY, JSON.stringify(properties), {
+      await redisSet(fallbackKey, JSON.stringify(properties), {
         exSeconds: TARGET_PROPERTIES_FALLBACK_TTL_SECONDS,
       }).catch(() => {}); // best-effort — never let a Redis hiccup break the happy path
     }
@@ -421,7 +451,7 @@ async function fetchTargetPropertiesWithFallback(organizationId?: string): Promi
   } catch (err) {
     if (isRedisConfigured()) {
       try {
-        const raw = await redisGet(TARGET_PROPERTIES_FALLBACK_KEY);
+        const raw = await redisGet(fallbackKey);
         if (raw) {
           console.error(
             "[ownerrez] getTargetProperties failed live, serving Redis fallback copy:",
@@ -517,11 +547,11 @@ async function fetchBookingsForProperty(
   }
 }
 
-async function fetchBookings(organizationId?: string): Promise<Booking[]> {
+async function fetchBookings(organizationId?: string, propertyGroupId?: string): Promise<Booking[]> {
   const creds = await resolveOwnerRezCredentials(organizationId);
   if (!isLive(creds)) return demoBookings;
 
-  const properties = await getTargetProperties(organizationId);
+  const properties = await getTargetProperties(organizationId, propertyGroupId);
   const results = await Promise.all(
     properties.map((p) => fetchBookingsForProperty(p.id, p.name, creds, organizationId))
   );
@@ -599,17 +629,20 @@ function guestsFallbackKey(organizationId?: string): string {
   return `${GUESTS_FALLBACK_KEY_PREFIX}${organizationId ?? "default"}`;
 }
 
-async function fetchGuests(organizationId?: string): Promise<Guest[]> {
+async function fetchGuests(organizationId?: string, propertyGroupId?: string): Promise<Guest[]> {
   const creds = await resolveOwnerRezCredentials(organizationId);
   if (!isLive(creds)) return demoGuests;
 
-  const bookings = await getBookings(organizationId);
+  const bookings = await getBookings(organizationId, propertyGroupId);
   const guestIds = Array.from(
     new Set(bookings.map((b) => b.guestId).filter((id): id is number => id !== null))
   );
   const guests = await fetchGuestsByIds(guestIds, organizationId);
 
-  const fallbackKey = guestsFallbackKey(organizationId);
+  const fallbackKey =
+    propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID
+      ? `${guestsFallbackKey(organizationId)}:${propertyGroupId}`
+      : guestsFallbackKey(organizationId);
   const lookedDegraded = guestIds.length > 0 && guests.length < guestIds.length * GUESTS_DEGRADED_THRESHOLD;
 
   if (lookedDegraded && isRedisConfigured()) {

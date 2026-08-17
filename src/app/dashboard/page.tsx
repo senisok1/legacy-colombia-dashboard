@@ -4,6 +4,8 @@ import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { UpcomingArrivals } from "@/components/UpcomingArrivals";
 import { summaryStats, revenueBySource, isRevenueCounting } from "@/lib/finance";
 import { getServerSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId, propertyGroupById } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { StatCard } from "@/components/StatCard";
 import { Money } from "@/components/Money";
@@ -16,12 +18,14 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
+  const cookieStore = await cookies();
+  const groupId = normalizePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value);
   const [bookings, guests] = await Promise.all([
-    getBookings(session?.organizationId),
+    getBookings(session?.organizationId, groupId),
     // Guest records — many channel bookings carry no name on the booking
     // itself; resolveGuestName fills it from the guest profile (2026-08-16,
     // Seni's ask: names were showing as "—" under Upcoming arrivals).
-    getGuests(session?.organizationId).catch(() => []),
+    getGuests(session?.organizationId, groupId).catch(() => []),
   ]);
   const guestsById = buildGuestsById(guests);
   // READ_ONLY team logins get an ops-focused dashboard: no revenue boxes,
@@ -54,7 +58,7 @@ export default async function DashboardPage() {
       <div>
         <h1 className="text-xl font-semibold">Dashboard</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
-          Live snapshot of bookings, occupancy, and revenue for Legacy Colombia.
+          Live snapshot of bookings, occupancy, and revenue for {propertyGroupById(groupId).label}.
         </p>
       </div>
 

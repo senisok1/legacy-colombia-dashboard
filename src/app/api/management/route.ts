@@ -5,6 +5,7 @@ import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { listBookingOps, listTeamActivities } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
 import { redisGet, redisSet } from "@/lib/redis";
+import { PROPERTY_GROUP_COOKIE, DEFAULT_PROPERTY_GROUP_ID, normalizePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -46,14 +47,15 @@ function isProxyPhone(phone: string): boolean {
 // every note/flag write.
 const SNAPSHOT_TTL_SECONDS = 6 * 60 * 60;
 
-function snapshotKey(orgId: string): string {
-  return `management:board:${orgId}`;
+function snapshotKey(orgId: string, groupId: string): string {
+  // Default group keeps the original key (existing warm snapshot stays valid).
+  return groupId !== DEFAULT_PROPERTY_GROUP_ID ? `management:board:${orgId}:${groupId}` : `management:board:${orgId}`;
 }
 
-async function buildBoard(orgId: string) {
+async function buildBoard(orgId: string, groupId: string) {
   const [bookings, guests, drafts, activities] = await Promise.all([
-    getBookings(orgId),
-    getGuests(orgId).catch(() => []),
+    getBookings(orgId, groupId),
+    getGuests(orgId, groupId).catch(() => []),
     getAllPendingDrafts(orgId).catch(() => []),
     listTeamActivities(orgId).catch(() => []),
   ]);
@@ -108,9 +110,9 @@ async function buildBoard(orgId: string) {
   };
 }
 
-async function buildAndStore(orgId: string) {
-  const board = await buildBoard(orgId);
-  await redisSet(snapshotKey(orgId), JSON.stringify(board), { exSeconds: SNAPSHOT_TTL_SECONDS }).catch(() => {});
+async function buildAndStore(orgId: string, groupId: string) {
+  const board = await buildBoard(orgId, groupId);
+  await redisSet(snapshotKey(orgId, groupId), JSON.stringify(board), { exSeconds: SNAPSHOT_TTL_SECONDS }).catch(() => {});
   return board;
 }
 
@@ -119,19 +121,20 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const orgId = session.organizationId;
+  const groupId = normalizePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value);
   const fresh = req.nextUrl.searchParams.get("fresh") === "1";
 
   try {
     if (!fresh) {
-      const cached = await redisGet(snapshotKey(orgId)).catch(() => null);
+      const cached = await redisGet(snapshotKey(orgId, groupId)).catch(() => null);
       if (cached) {
         // Serve the snapshot instantly; refresh it in the background so the
         // client's follow-up ?fresh=1 (and the next visitor) get current data.
-        after(buildAndStore(orgId).catch(() => {}));
+        after(buildAndStore(orgId, groupId).catch(() => {}));
         return NextResponse.json(JSON.parse(cached));
       }
     }
-    return NextResponse.json(await buildAndStore(orgId));
+    return NextResponse.json(await buildAndStore(orgId, groupId));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/management failed:", message);

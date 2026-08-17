@@ -3,6 +3,7 @@ import { getAllThreadSummaries, fetchAllThreadSummaries, getSnapshotThreadSummar
 import type { ThreadSummary } from "@/lib/inbox";
 import { isMessagingConfigured } from "@/lib/config";
 import { getSessionFromRequest } from "@/lib/session";
+import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 // Increased to 120s to handle queue backlog when cron runs simultaneously.
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
   }
 
   const session = getSessionFromRequest(req);
+  const groupId = normalizePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value);
   const fresh = req.nextUrl.searchParams.get("fresh") === "1";
   const limit = req.nextUrl.searchParams.get("limit")
     ? parseInt(req.nextUrl.searchParams.get("limit")!)
@@ -65,7 +67,9 @@ export async function GET(req: NextRequest) {
     // background after the response flushes, so a losing race still ends
     // with a warm cache for the next request instead of racing and losing
     // forever.
-    const summariesPromise = getAllThreadSummaries(session?.organizationId);
+    const summariesPromise = fresh
+      ? fetchAllThreadSummaries(session?.organizationId, limit, groupId)
+      : getAllThreadSummaries(session?.organizationId, undefined, groupId);
     after(summariesPromise.then(() => {}).catch(() => {}));
 
     // INSTANT-LOAD FIX (2026-08-16): the race used to resolve to [] on a
@@ -73,7 +77,7 @@ export async function GET(req: NextRequest) {
     // finished. Now the timeout path resolves to the last known-good Redis
     // snapshot (started in parallel, ~tens of ms) so the first paint always
     // has real conversations; the client's ?fresh=1 follow-up updates it.
-    const snapshotPromise = getSnapshotThreadSummaries(session?.organizationId).catch(() => null);
+    const snapshotPromise = getSnapshotThreadSummaries(session?.organizationId, groupId).catch(() => null);
     const timeoutPromise = new Promise<ThreadSummary[]>((resolve) =>
       setTimeout(async () => resolve(((await snapshotPromise) ?? []).slice(0, limit)), 900)
     );

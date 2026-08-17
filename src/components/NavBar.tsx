@@ -12,6 +12,7 @@ import {
   type NavTab,
 } from "@/lib/navGroups";
 import { useCurrency } from "@/components/CurrencyProvider";
+import { PROPERTY_GROUPS, propertyGroupById } from "@/lib/propertyGroups";
 
 // Nav structure — a flat list of either a single link or a "group" (a
 // dropdown of related sub-pages). Consolidated 2026-08-05 (Seni's ask,
@@ -131,7 +132,67 @@ function Badge({ count, active }: { count: number; active: boolean }) {
 // role gate (a team member typing /messaging still can't change anything).
 const TEAM_HIDDEN_LABELS = new Set(["CRM", "Messaging", "Marketing", "AI Activity", "Reports"]);
 
-export function NavBar({ role }: { role?: string }) {
+// Wordmark property switcher (2026-08-16, Seni's ask): clicking the brand
+// opens a dropdown of the account's property views; picking one sets the
+// lc_property_group cookie and reloads, re-scoping the whole dashboard.
+function PropertySwitcher({ activeGroupId }: { activeGroupId: string }) {
+  const [open, setOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const active = propertyGroupById(activeGroupId);
+
+  async function choose(groupId: string) {
+    if (groupId === activeGroupId || switching) {
+      setOpen(false);
+      return;
+    }
+    setSwitching(true);
+    try {
+      const res = await fetch("/api/settings/property-group", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupId }),
+      });
+      if (res.ok) window.location.reload();
+      else setSwitching(false);
+    } catch {
+      setSwitching(false);
+    }
+  }
+
+  return (
+    <div className="relative shrink-0 whitespace-nowrap">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="font-semibold tracking-tight flex items-center gap-2 hover:opacity-80"
+        title="Switch property"
+      >
+        <span className="w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden />
+        {switching ? "Switching…" : active.label}
+        <span className="text-xs opacity-60">▾</span>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute left-0 top-full z-50 mt-1 min-w-[12rem] rounded-lg border border-black/10 dark:border-white/15 bg-white dark:bg-neutral-900 p-1 shadow-lg">
+            {PROPERTY_GROUPS.map((g) => (
+              <button
+                key={g.id}
+                onClick={() => void choose(g.id)}
+                className={`block w-full rounded-md px-3 py-1.5 text-left text-sm hover:bg-black/5 dark:hover:bg-white/10 ${
+                  g.id === activeGroupId ? "font-semibold text-[var(--accent)]" : ""
+                }`}
+              >
+                {g.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function NavBar({ role, propertyGroupId }: { role?: string; propertyGroupId?: string }) {
   const visibleEntries =
     role === "READ_ONLY" ? navEntries.filter((e) => !TEAM_HIDDEN_LABELS.has(e.label)) : navEntries;
   const pathname = usePathname();
@@ -304,10 +365,7 @@ export function NavBar({ role }: { role?: string }) {
           if the window is ever genuinely too narrow for that, the nav
           scrolls horizontally (overflow-x-auto) instead of squeezing. */}
       <div className="mx-auto max-w-[100rem] px-6 py-3 flex items-center justify-between gap-4">
-        <div className="font-semibold tracking-tight flex items-center gap-2 shrink-0 whitespace-nowrap">
-          <span className="w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden />
-          Legacy Colombia
-        </div>
+        <PropertySwitcher activeGroupId={propertyGroupId ?? "legacy-colombia"} />
         {/* overflow-x-auto here was silently clipping the CRM/Bill Pay
             dropdown panels: per the CSS Overflow spec, an element can't
             have overflow-x:auto and overflow-y:visible at once — the

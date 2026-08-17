@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBookings, getGuests } from "@/lib/ownerrez";
+import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId } from "@/lib/propertyGroups";
 import { getCachedThreadSummaryLite, getCachedThreadMessages } from "@/lib/inbox";
 import { getCachedTranslations } from "@/lib/translate";
 import { resolveGuestName, buildGuestsById } from "@/lib/guestName";
@@ -53,6 +54,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
   }
 
   const session = getSessionFromRequest(req);
+  const __groupId = normalizePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value);
   const orgId = session?.organizationId;
   const { threadId: threadIdParam } = await params;
   const threadId = Number(threadIdParam);
@@ -65,7 +67,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
   const [messages, pendingDraft, coldLookup] = await Promise.all([
     getCachedThreadMessages(threadId, orgId),
     getPendingDraftByThreadId(threadId, orgId),
-    warm ? Promise.resolve(null) : Promise.all([getBookings(orgId), getGuests(orgId)]),
+    warm ? Promise.resolve(null) : Promise.all([getBookings(orgId, __groupId), getGuests(orgId, __groupId)]),
   ]);
 
   let booking: Booking | null;

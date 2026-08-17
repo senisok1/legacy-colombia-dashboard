@@ -144,6 +144,8 @@ export function proxy(req: NextRequest) {
         // Per-stay event flag + date (see api/management/booking-ops) —
         // same on-site coordination scope as activities/notes.
         pathname === "/api/management/booking-ops" ||
+        // Property-view switcher (a cookie-only view preference).
+        pathname === "/api/settings/property-group" ||
         // Translation is a POST but modifies nothing — the team needs it to
         // read Spanish guest threads.
         pathname === "/api/translate";

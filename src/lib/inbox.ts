@@ -3,6 +3,7 @@ import { getBookings, getGuests, getThreadMessages } from "./ownerrez";
 import { resolveGuestName, buildGuestsById } from "./guestName";
 import { redisGet, redisSet } from "./redis";
 import { isRedisConfigured } from "./config";
+import { DEFAULT_PROPERTY_GROUP_ID } from "./propertyGroups";
 import type { Booking, ThreadMessage } from "./types";
 
 export type ThreadSummary = {
@@ -117,10 +118,10 @@ const THREAD_SUMMARIES_FALLBACK_TTL_SECONDS = 7 * 24 * 60 * 60;
  * real conversations; ThreadInbox's existing after-paint ?fresh=1 call and
  * 45s polling keep it current, and every healthy recompute rewrites the
  * snapshot. */
-export async function getSnapshotThreadSummaries(organizationId?: string): Promise<ThreadSummary[] | null> {
+export async function getSnapshotThreadSummaries(organizationId?: string, propertyGroupId?: string): Promise<ThreadSummary[] | null> {
   if (!isRedisConfigured()) return null;
   try {
-    const raw = await redisGet(threadSummariesFallbackKey(organizationId));
+    const raw = await redisGet(threadSummariesFallbackKey(organizationId, propertyGroupId));
     if (!raw) return null;
     return JSON.parse(raw) as ThreadSummary[];
   } catch {
@@ -128,8 +129,11 @@ export async function getSnapshotThreadSummaries(organizationId?: string): Promi
   }
 }
 
-function threadSummariesFallbackKey(organizationId?: string): string {
-  return `${THREAD_SUMMARIES_FALLBACK_KEY_PREFIX}${organizationId ?? "default"}`;
+function threadSummariesFallbackKey(organizationId?: string, propertyGroupId?: string): string {
+  // Default group keeps the ORIGINAL key so the existing warm snapshot
+  // stays valid; other property groups get their own namespaced copy.
+  const base = `${THREAD_SUMMARIES_FALLBACK_KEY_PREFIX}${organizationId ?? "default"}`;
+  return propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID ? `${base}:${propertyGroupId}` : base;
 }
 
 // ROOT CAUSE FIX (2026-08-10, Seni's ask: "conversations are taking a long
@@ -214,8 +218,11 @@ export const getCachedThreadMessages = unstable_cache(
   { revalidate: THREAD_MESSAGES_CACHE_SECONDS }
 );
 
-async function fetchAllThreadSummaries(organizationId?: string, limit: number = INBOX_PAGE_SIZE): Promise<ThreadSummary[]> {
-  const [bookings, guests] = await Promise.all([getBookings(organizationId), getGuests(organizationId)]);
+async function fetchAllThreadSummaries(organizationId?: string, limit: number = INBOX_PAGE_SIZE, propertyGroupId?: string): Promise<ThreadSummary[]> {
+  const [bookings, guests] = await Promise.all([
+    getBookings(organizationId, propertyGroupId),
+    getGuests(organizationId, propertyGroupId),
+  ]);
   const guestsById = buildGuestsById(guests);
 
   const candidates = bookings.filter((b) => !b.isBlock && b.threadIds.length > 0 && isRecentEnough(b));
@@ -325,7 +332,7 @@ async function fetchAllThreadSummaries(organizationId?: string, limit: number = 
   // — serve the last known-good full snapshot instead.
   const withAnyMessages = withMessages.filter((w) => w.messages.length > 0).length;
   const summariesLookedDegraded = candidates.length >= 3 && withAnyMessages < candidates.length * 0.5;
-  const fallbackKey = threadSummariesFallbackKey(organizationId);
+  const fallbackKey = threadSummariesFallbackKey(organizationId, propertyGroupId);
 
   let sortable = withMessages;
   if (summariesLookedDegraded && isRedisConfigured()) {

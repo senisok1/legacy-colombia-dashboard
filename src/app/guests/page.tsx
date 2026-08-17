@@ -1,4 +1,6 @@
 import { getBookings, getGuests } from "@/lib/ownerrez";
+import { cookies } from "next/headers";
+import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId } from "@/lib/propertyGroups";
 import { buildGuestsWithStats } from "@/lib/guests";
 import { getServerSession } from "@/lib/session";
 import { enforceBillingLock } from "@/lib/billingGate";
@@ -12,7 +14,9 @@ export default async function GuestsPage() {
   const session = await getServerSession();
   await enforceBillingLock(session);
   const orgId = session?.organizationId;
-  const [guests, bookings] = await Promise.all([getGuests(orgId), getBookings(orgId)]);
+  const cookieStore = await cookies();
+  const groupId = normalizePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value);
+  const [guests, bookings] = await Promise.all([getGuests(orgId, groupId), getBookings(orgId, groupId)]);
   const guestsWithStats = await buildGuestsWithStats(guests, bookings, orgId);
 
   const repeatCount = guestsWithStats.filter((g) => g.isRepeat).length;

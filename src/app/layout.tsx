@@ -4,6 +4,8 @@ import { StatusBanner } from "@/components/StatusBanner";
 import { CurrencyProvider } from "@/components/CurrencyProvider";
 import { PwaRegister } from "@/components/PwaRegister";
 import { getServerSession } from "@/lib/session";
+import { cookies } from "next/headers";
+import { PROPERTY_GROUP_COOKIE, normalizePropertyGroupId } from "@/lib/propertyGroups";
 import { getOrganizationById } from "@/lib/organizations";
 import { isDbConfigured } from "@/lib/config";
 import { getTheme } from "@/lib/themes";
@@ -63,6 +65,8 @@ export default async function RootLayout({
   // Role drives nav visibility: READ_ONLY team logins get a simplified nav
   // (no CRM/Messaging/Marketing/AI Activity/Reports — 2026-08-16 Seni's ask).
   const session = await getServerSession();
+  const cookieStore = await cookies();
+  const propertyGroupId = normalizePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value);
   return (
     <html lang="en" className="h-full antialiased" data-theme={theme.id}>
       {/* No hardcoded bg-neutral-50/dark:bg-neutral-950 here anymore — body's
@@ -73,7 +77,7 @@ export default async function RootLayout({
       <body className="min-h-full flex flex-col">
         <PwaRegister />
         <CurrencyProvider secondaryCurrency={secondaryCurrency}>
-          <NavBar role={session?.role} />
+          <NavBar role={session?.role} propertyGroupId={propertyGroupId} />
           <StatusBanner />
           <main className="flex-1">{children}</main>
         </CurrencyProvider>
