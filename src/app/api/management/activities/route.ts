@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createTeamActivity } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
+import { translateToLanguage } from "@/lib/translate";
 
 export const dynamic = "force-dynamic";
 
@@ -33,13 +34,35 @@ export async function POST(req: NextRequest) {
     // own login with a display name on the user row; resolve it here so
     // entries read "Gabriel" instead of an email address.
     const user = await getUserByEmail(session.email).catch(() => null);
+
+    // Language support (2026-08-16, Seni's ask): a team member set up in
+    // Spanish/Portuguese writes in their own language; we store the English
+    // translation as `body` (what an English-reading admin sees) plus the
+    // original text, so nothing they wrote is ever lost. Translation failure
+    // is non-fatal — we keep the original as the body rather than dropping
+    // the note.
+    const authorLanguage = user?.language || "English";
+    let englishBody = text;
+    let bodyOriginal: string | null = null;
+    if (authorLanguage.toLowerCase() !== "english") {
+      bodyOriginal = text;
+      try {
+        englishBody = await translateToLanguage(text, "English", session.organizationId);
+      } catch (err) {
+        console.error("[management/activities] translation to English failed:", err);
+        englishBody = text;
+      }
+    }
+
     const activity = await createTeamActivity({
       organizationId: session.organizationId,
       bookingId,
       authorEmail: session.email,
       authorName: user?.name ?? null,
       kind,
-      body: text,
+      body: englishBody,
+      bodyOriginal,
+      authorLanguage,
     });
     return NextResponse.json({ ok: true, activity });
   } catch (err) {

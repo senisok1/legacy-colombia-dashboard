@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
         email: u.email,
         name: u.name,
         role: u.role,
+        language: u.language,
         active: u.active,
         isYou: u.email.toLowerCase() === session.email.toLowerCase(),
       })),
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
   if (error) return error;
 
   const body = (await req.json().catch(() => null)) as
-    | { email?: string; name?: string; password?: string; role?: string }
+    | { email?: string; name?: string; password?: string; role?: string; language?: string }
     | null;
 
   const email = body?.email?.trim().toLowerCase();
@@ -55,6 +56,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
   }
   const role = body.role === "CEO" ? ("CEO" as const) : ("READ_ONLY" as const);
+  // Team-member language (2026-08-16): they read the Management tab and
+  // write notes in this language; notes are auto-translated to English for
+  // admins (see api/management/activities).
+  const ALLOWED_LANGUAGES = ["English", "Spanish", "Portuguese"] as const;
+  const language = (ALLOWED_LANGUAGES as readonly string[]).includes(body.language ?? "")
+    ? (body.language as string)
+    : "English";
 
   // Lockout guard: an admin editing their OWN account can't demote
   // themselves out of admin access.
@@ -76,11 +84,12 @@ export async function POST(req: NextRequest) {
       password: body.password,
       name: body.name?.trim() || undefined,
       role,
+      language,
       organizationId: session.organizationId,
     });
     return NextResponse.json({
       ok: true,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, active: user.active },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, language: user.language, active: user.active },
       reset: Boolean(existing),
     });
   } catch (err) {

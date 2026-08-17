@@ -7,7 +7,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // refetches. Deliberately dependency-free and simple — the audience is the
 // on-site team on their phones.
 
-type StayNote = { id: string; body: string; author: string; at: string };
+// body is ALWAYS English (translated on write); bodyOriginal holds what a
+// Spanish/Portuguese-speaking teammate actually typed. Each viewer sees the
+// version in their own language (2026-08-16, Seni's ask).
+type StayNote = {
+  id: string;
+  body: string;
+  bodyOriginal?: string | null;
+  authorLanguage?: string | null;
+  author: string;
+  at: string;
+};
 type Stay = {
   bookingId: number;
   guestName: string;
@@ -43,9 +53,24 @@ function stayDates(arrival?: string, departure?: string): string[] {
   }
   return out;
 }
-type LogEntry = { id: string; body: string; author: string; at: string };
+type LogEntry = StayNote;
 type CalendarStay = { bookingId: number; guestName: string; arrival?: string; departure?: string };
-type BoardData = { stays: Stay[]; calendarStays?: CalendarStay[]; activityLog: LogEntry[]; viewerRole?: string };
+type BoardData = {
+  stays: Stay[];
+  calendarStays?: CalendarStay[];
+  activityLog: LogEntry[];
+  viewerRole?: string;
+  viewerLanguage?: string;
+};
+
+/** Text to show a given viewer: their own language when we have it. */
+function textFor(entry: { body: string; bodyOriginal?: string | null; authorLanguage?: string | null }, viewerLanguage?: string): string {
+  const viewer = (viewerLanguage || "English").toLowerCase();
+  if (viewer !== "english" && entry.authorLanguage && entry.authorLanguage.toLowerCase() === viewer && entry.bodyOriginal) {
+    return entry.bodyOriginal; // same language as the author — show the original
+  }
+  return entry.body; // English (translated on write when needed)
+}
 
 function fmtDate(iso?: string): string {
   if (!iso) return "TBD";
@@ -502,7 +527,7 @@ export function ManagementBoard() {
                       key={n.id}
                       className="rounded bg-red-500/10 px-2 py-1 text-sm font-medium text-red-600 dark:text-red-400"
                     >
-                      {n.body}
+                      {textFor(n, data.viewerLanguage)}
                       <span className="ml-2 text-xs font-normal text-red-500/70">
                         — {n.author}, {fmtWhen(n.at)}
                       </span>
@@ -571,7 +596,7 @@ export function ManagementBoard() {
           <ul className="space-y-1">
             {data.activityLog.map((a) => (
               <li key={a.id} className="rounded bg-black/5 dark:bg-white/5 px-2 py-1 text-sm">
-                {a.body}
+                {textFor(a, data.viewerLanguage)}
                 <span className="ml-2 text-xs text-black/40 dark:text-white/40">
                   — {a.author}, {fmtWhen(a.at)}
                 </span>

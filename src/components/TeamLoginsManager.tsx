@@ -13,6 +13,7 @@ type ManagedUser = {
   email: string;
   name: string | null;
   role: string;
+  language?: string;
   active: boolean;
   isYou: boolean;
 };
@@ -23,7 +24,7 @@ export function TeamLoginsManager() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
 
   const load = useCallback(async () => {
     try {
@@ -73,7 +74,7 @@ export function TeamLoginsManager() {
           ? `Updated ${json.user.email} — new password is set.`
           : `Created ${json.user.email}. Share the email + password with them.`
       );
-      setForm({ name: "", email: "", password: "", role: "READ_ONLY" });
+      setForm({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
       setError(null);
       await load();
     } catch (err) {
@@ -155,6 +156,11 @@ export function TeamLoginsManager() {
               >
                 {u.role === "CEO" ? "Admin" : "Team member"}
               </span>
+              {u.language && u.language !== "English" && (
+                <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs text-black/60 dark:text-white/60">
+                  {u.language}
+                </span>
+              )}
               {u.isYou && <span className="text-xs text-black/40 dark:text-white/40">(you)</span>}
               {!u.active && <span className="text-xs text-red-500">deactivated</span>}
               {!u.isYou && (
@@ -221,6 +227,18 @@ export function TeamLoginsManager() {
           >
             <option value="READ_ONLY">Team member (view only)</option>
             <option value="CEO">Admin (full access)</option>
+          </select>
+        </label>
+        <label className="text-xs text-black/60 dark:text-white/60">
+          Language
+          <select
+            className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.language}
+            onChange={(e) => setForm((f) => ({ ...f, language: e.target.value }))}
+          >
+            <option value="English">English</option>
+            <option value="Spanish">Spanish (Español)</option>
+            <option value="Portuguese">Portuguese (Português)</option>
           </select>
         </label>
         <button

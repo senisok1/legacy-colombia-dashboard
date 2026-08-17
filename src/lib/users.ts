@@ -28,6 +28,8 @@ export type AppUser = {
   role: Role;
   active: boolean;
   organizationId: string;
+  /** Interface/notes language — 'English' | 'Spanish' | 'Portuguese'. */
+  language: string;
 };
 
 type UserRow = {
@@ -38,6 +40,7 @@ type UserRow = {
   role: Role;
   active: boolean;
   organization_id: string;
+  language?: string | null;
 };
 
 function fromRow(row: UserRow): AppUser {
@@ -49,12 +52,13 @@ function fromRow(row: UserRow): AppUser {
     role: row.role,
     active: row.active,
     organizationId: row.organization_id,
+    language: row.language || "English",
   };
 }
 
 export async function getUserByEmail(email: string): Promise<AppUser | null> {
   const row = await queryOne<UserRow>(
-    "select id, email, password_hash, name, role, active, organization_id from users where lower(email) = lower($1)",
+    "select id, email, password_hash, name, role, active, organization_id, language from users where lower(email) = lower($1)",
     [email]
   );
   return row ? fromRow(row) : null;
@@ -80,19 +84,28 @@ export async function upsertUser(input: {
   name?: string;
   role?: Role;
   organizationId?: string;
+  language?: string;
 }): Promise<AppUser> {
   const hash = await bcrypt.hash(input.password, 12);
   const organizationId = input.organizationId ?? (await getDefaultOrganizationId());
   const row = await queryOne<UserRow>(
-    `insert into users (email, password_hash, name, role, organization_id)
-     values ($1, $2, $3, $4, $5)
+    `insert into users (email, password_hash, name, role, organization_id, language)
+     values ($1, $2, $3, $4, $5, $6)
      on conflict (email) do update set
        password_hash = excluded.password_hash,
        name = excluded.name,
        role = excluded.role,
+       language = excluded.language,
        active = true
-     returning id, email, password_hash, name, role, active, organization_id`,
-    [input.email.toLowerCase(), hash, input.name ?? null, input.role ?? "READ_ONLY", organizationId]
+     returning id, email, password_hash, name, role, active, organization_id, language`,
+    [
+      input.email.toLowerCase(),
+      hash,
+      input.name ?? null,
+      input.role ?? "READ_ONLY",
+      organizationId,
+      input.language ?? "English",
+    ]
   );
   if (!row) throw new Error("Failed to create user.");
   return fromRow(row);
@@ -103,7 +116,7 @@ export async function upsertUser(input: {
  * type (AppUser) but callers exposing this over HTTP must strip them. */
 export async function listUsers(organizationId: string): Promise<AppUser[]> {
   const rows = await query<UserRow>(
-    `select id, email, password_hash, name, role, active, organization_id
+    `select id, email, password_hash, name, role, active, organization_id, language
      from users where organization_id = $1
      order by role, lower(coalesce(name, email))`,
     [organizationId]
@@ -156,7 +169,7 @@ export async function createUserForSignup(input: {
     `insert into users (email, password_hash, name, role, organization_id)
      values ($1, $2, $3, $4, $5)
      on conflict (email) do nothing
-     returning id, email, password_hash, name, role, active, organization_id`,
+     returning id, email, password_hash, name, role, active, organization_id, language`,
     [input.email.toLowerCase(), hash, input.name ?? null, input.role, input.organizationId]
   );
   return row ? fromRow(row) : null;

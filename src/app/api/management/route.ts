@@ -4,6 +4,7 @@ import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { listBookingOps, listTeamActivities } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
+import { getUserByEmail } from "@/lib/users";
 import { redisGet, redisSet } from "@/lib/redis";
 import { PROPERTY_GROUP_COOKIE, DEFAULT_PROPERTY_GROUP_ID, normalizePropertyGroupId } from "@/lib/propertyGroups";
 
@@ -135,11 +136,25 @@ async function buildBoard(orgId: string, groupId: string) {
       eventGuestCount: opsByBookingId.get(b.id)?.eventGuestCount ?? null,
       notes: notes
         .filter((n) => n.bookingId === b.id)
-        .map((n) => ({ id: n.id, body: n.body, author: n.authorName || n.authorEmail, at: n.createdAt })),
+        .map((n) => ({
+          id: n.id,
+          body: n.body,
+          bodyOriginal: n.bodyOriginal,
+          authorLanguage: n.authorLanguage,
+          author: n.authorName || n.authorEmail,
+          at: n.createdAt,
+        })),
     })),
     activityLog: log
       .slice(0, 100)
-      .map((a) => ({ id: a.id, body: a.body, author: a.authorName || a.authorEmail, at: a.createdAt })),
+      .map((a) => ({
+        id: a.id,
+        body: a.body,
+        bodyOriginal: a.bodyOriginal,
+        authorLanguage: a.authorLanguage,
+        author: a.authorName || a.authorEmail,
+        at: a.createdAt,
+      })),
   };
 }
 
@@ -156,6 +171,11 @@ export async function GET(req: NextRequest) {
   const orgId = session.organizationId;
   const groupId = normalizePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value);
   const fresh = req.nextUrl.searchParams.get("fresh") === "1";
+  // Viewer's own language — the client uses it to show each note in the
+  // reader's language (2026-08-16). Cheap single-row lookup, outside the
+  // shared board snapshot since it differs per user.
+  const viewer = await getUserByEmail(session.email).catch(() => null);
+  const viewerLanguage = viewer?.language || "English";
 
   try {
     if (!fresh) {
@@ -164,17 +184,17 @@ export async function GET(req: NextRequest) {
         // Serve the snapshot instantly; refresh it in the background so the
         // client's follow-up ?fresh=1 (and the next visitor) get current data.
         after(buildAndStore(orgId, groupId).catch(() => {}));
-        return NextResponse.json(JSON.parse(cached));
+        return NextResponse.json({ ...JSON.parse(cached), viewerLanguage });
       }
     }
-    return NextResponse.json(await buildAndStore(orgId, groupId));
+    return NextResponse.json({ ...(await buildAndStore(orgId, groupId)), viewerLanguage });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/management failed:", message);
     // Last resort: even a failed FRESH build should serve the snapshot
     // rather than erroring — stale stays beat a "failed to fetch" banner.
     const cached = await redisGet(snapshotKey(orgId, groupId)).catch(() => null);
-    if (cached) return NextResponse.json(JSON.parse(cached));
+    if (cached) return NextResponse.json({ ...JSON.parse(cached), viewerLanguage });
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

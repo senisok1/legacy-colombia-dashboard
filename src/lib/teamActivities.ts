@@ -11,7 +11,13 @@ export type TeamActivity = {
   authorEmail: string;
   authorName: string | null;
   kind: "note" | "activity";
+  /** ALWAYS English — translated on write when the author writes in
+   * another language, so an English-reading admin never sees a language
+   * they can't read (2026-08-16, Seni's ask). */
   body: string;
+  /** What the author actually typed, when that wasn't English. */
+  bodyOriginal: string | null;
+  authorLanguage: string | null;
   createdAt: string;
 };
 
@@ -22,6 +28,8 @@ type Row = {
   author_name: string | null;
   kind: string;
   body: string;
+  body_original: string | null;
+  author_language: string | null;
   created_at: string;
 };
 
@@ -33,13 +41,15 @@ function fromRow(r: Row): TeamActivity {
     authorName: r.author_name,
     kind: r.kind === "note" ? "note" : "activity",
     body: r.body,
+    bodyOriginal: r.body_original,
+    authorLanguage: r.author_language,
     createdAt: r.created_at,
   };
 }
 
 export async function listTeamActivities(organizationId: string, limit = 200): Promise<TeamActivity[]> {
   const rows = await query<Row>(
-    `select id, booking_id, author_email, author_name, kind, body, created_at
+    `select id, booking_id, author_email, author_name, kind, body, body_original, author_language, created_at
      from team_activities
      where organization_id = $1
      order by created_at desc
@@ -125,11 +135,13 @@ export async function createTeamActivity(input: {
   authorName?: string | null;
   kind: "note" | "activity";
   body: string;
+  bodyOriginal?: string | null;
+  authorLanguage?: string | null;
 }): Promise<TeamActivity> {
   const rows = await query<Row>(
-    `insert into team_activities (organization_id, booking_id, author_email, author_name, kind, body)
-     values ($1, $2, $3, $4, $5, $6)
-     returning id, booking_id, author_email, author_name, kind, body, created_at`,
+    `insert into team_activities (organization_id, booking_id, author_email, author_name, kind, body, body_original, author_language)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
+     returning id, booking_id, author_email, author_name, kind, body, body_original, author_language, created_at`,
     [
       input.organizationId,
       input.bookingId ?? null,
@@ -137,6 +149,8 @@ export async function createTeamActivity(input: {
       input.authorName ?? null,
       input.kind,
       input.body,
+      input.bodyOriginal ?? null,
+      input.authorLanguage ?? null,
     ]
   );
   return fromRow(rows[0]);
