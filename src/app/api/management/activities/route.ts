@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createTeamActivity } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
-import { translateToLanguage } from "@/lib/translate";
+import { translateText } from "@/lib/translate";
 
 export const dynamic = "force-dynamic";
 
@@ -46,8 +46,13 @@ export async function POST(req: NextRequest) {
     let bodyOriginal: string | null = null;
     if (authorLanguage.toLowerCase() !== "english") {
       bodyOriginal = text;
+      // NOTE: translateToLanguage() deliberately no-ops when the target is
+      // English (it exists to translate INTO a guest's language), so this
+      // uses translateText(..., "en") — the guest-message EN/ES helper —
+      // which actually performs the into-English translation.
       try {
-        englishBody = await translateToLanguage(text, "English", session.organizationId);
+        const res = await translateText(text, "en", session.organizationId);
+        if (res.ok && res.text.trim()) englishBody = res.text.trim();
       } catch (err) {
         console.error("[management/activities] translation to English failed:", err);
         englishBody = text;
