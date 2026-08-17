@@ -328,7 +328,7 @@ export function ManagementBoard() {
                     onChange={(e) => void setEvent(s, e.target.checked, e.target.checked ? (s.eventDate ?? null) : null)}
                     className="h-6 w-6 cursor-pointer accent-red-600"
                   />
-                  Event paid &amp; scheduled during stay
+                  Event deposit paid &amp; scheduled during stay
                 </label>
                 {s.eventScheduled && (
                   <select
