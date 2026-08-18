@@ -94,6 +94,45 @@ function fmtDate(iso?: string): string {
     : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/** Days-until-arrival countdown (2026-08-18, Seni's ask: "a countdown box
+ * of # of days until the stay begins," next to the balance-owed badge).
+ * Whole calendar days, UTC-anchored like stayDates() above so it can't
+ * drift a day off depending on the visitor's own timezone. Visible to
+ * every role — arrival/departure aren't financial data. */
+function CountdownBadge({ arrival, departure }: { arrival?: string; departure?: string }) {
+  if (!arrival) return null;
+  const arrivalDay = new Date(`${arrival.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(arrivalDay.getTime())) return null;
+  const todayUtc = new Date();
+  const todayDay = new Date(Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), todayUtc.getUTCDate()));
+  const daysUntil = Math.round((+arrivalDay - +todayDay) / 86_400_000);
+
+  let label: string;
+  let className: string;
+  if (daysUntil > 0) {
+    label = `${daysUntil} day${daysUntil === 1 ? "" : "s"} to arrival`;
+    className =
+      daysUntil <= 3
+        ? "bg-red-500/15 text-red-600 dark:text-red-400"
+        : daysUntil <= 7
+          ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+          : "bg-black/10 dark:bg-white/10 text-black/60 dark:text-white/60";
+  } else if (daysUntil === 0) {
+    label = "Arrives today";
+    className = "bg-red-500/15 text-red-600 dark:text-red-400";
+  } else {
+    // Already arrived — still "in house" until departure passes too.
+    const departureDay = departure ? new Date(`${departure.slice(0, 10)}T00:00:00Z`) : null;
+    const stillInHouse = departureDay && !Number.isNaN(departureDay.getTime()) && +departureDay >= +todayDay;
+    label = stillInHouse ? "In house" : "Departed";
+    className = stillInHouse
+      ? "bg-[var(--accent)]/15 text-[var(--accent)]"
+      : "bg-black/10 dark:bg-white/10 text-black/40 dark:text-white/40";
+  }
+
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>{label}</span>;
+}
+
 function fmtWhen(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -483,6 +522,7 @@ export function ManagementBoard() {
                   </span>
                 )}
                 <TransactionsHover stay={s} />
+                <CountdownBadge arrival={s.arrival} departure={s.departure} />
               </div>
               <div className="text-xs text-black/50 dark:text-white/50">
                 {s.propertyName}
