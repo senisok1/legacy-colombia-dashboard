@@ -239,6 +239,21 @@ function normalizeBooking(raw: Record<string, unknown>, propertyName?: string): 
     // (computed on demand in lib/finance.ts's netAmount(), not stored here,
     // so it can never drift out of sync with totalAmount).
     hostFee: Number(pick(raw, "total_host_fees", "host_fee", "commission") ?? 0),
+    // Team Management "transactions on hover" feature (2026-08-18). Confirmed
+    // live against a real booking 2026-08-18: OwnerRez's BookingModel really
+    // does carry `total_paid` as a computed field right on the booking, and
+    // `charges` as an itemized line-item array (rent, discounts, cleaning
+    // fee, taxes...) — there is NO separate /bookings/{id}/transactions
+    // endpoint (confirmed 404 on OwnerRez's live API that same day). This is
+    // the full financial picture the API actually exposes per booking.
+    totalPaid: pick(raw, "total_paid") !== undefined ? Number(pick(raw, "total_paid")) : undefined,
+    charges: Array.isArray(raw["charges"])
+      ? (raw["charges"] as Record<string, unknown>[]).map((c) => ({
+          description: String(pick(c, "description") ?? pick(c, "type") ?? "Charge"),
+          amount: Number(pick(c, "amount") ?? 0),
+          type: String(pick(c, "type") ?? ""),
+        }))
+      : undefined,
     createdAt: pick(raw, "created_utc", "created_at") as string | undefined,
     updatedAt: pick(raw, "updated_utc", "updated_at") as string | undefined,
     // OwnerRez v2 "type" is one of booking/block/quote_hold/linked_availability/owner.

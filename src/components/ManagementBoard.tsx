@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { StayExtras } from "./StayExtras";
 import type { BookingExtra } from "@/lib/bookingExtrasShared";
+import { useCurrency } from "@/components/CurrencyProvider";
 
 // Client half of the Management tab (see app/management/page.tsx). One
 // fetch renders everything; posting a note/activity optimistically
@@ -35,6 +36,12 @@ type Stay = {
   children?: number;
   source?: string;
   totalAmount?: number;
+  // Team Management "transactions on hover" (2026-08-18, Seni's ask,
+  // Admin/Owner only). All three come back undefined for non-CEO viewers —
+  // api/management/route.ts strips them server-side, not just hidden here.
+  totalPaid?: number;
+  balanceOwed?: number;
+  charges?: { description: string; amount: number; type: string }[];
   extrasRequested: boolean;
   eventScheduled?: boolean;
   eventDate?: string | null;
@@ -286,6 +293,64 @@ function EventsList({ stays }: { stays: Stay[] }) {
   );
 }
 
+/** Hover badge showing balance owed + itemized charges (2026-08-18, Seni's
+ * ask: "add a transactions tab in each box where when you hover over you
+ * can see financials included the balance owed... pull this data from the
+ * ownerrez transactions section"). Admin/Owner only — the API already
+ * strips totalPaid/balanceOwed/charges for non-CEO viewers, so this simply
+ * doesn't render when they're absent. OwnerRez's v2 API has no separate
+ * transactions endpoint (confirmed live 2026-08-18); total_paid and the
+ * itemized `charges` line items right on the booking are the real
+ * equivalent, so that's what this shows. */
+function TransactionsHover({ stay }: { stay: Stay }) {
+  const { format: formatMoney } = useCurrency();
+  if (stay.balanceOwed === undefined || stay.totalPaid === undefined || stay.totalAmount === undefined) return null;
+  const owed = stay.balanceOwed;
+  return (
+    <span className="group relative inline-flex">
+      <span
+        className={`cursor-default rounded-full px-2 py-0.5 text-xs font-medium ${
+          owed > 0.01
+            ? "bg-red-500/15 text-red-600 dark:text-red-400"
+            : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+        }`}
+      >
+        {owed > 0.01 ? `Balance owed: ${formatMoney(owed)}` : "Paid in full"}
+      </span>
+      <span
+        className="pointer-events-none absolute left-0 top-full z-10 mt-1 hidden w-64 rounded-lg border border-black/10 bg-white p-3 text-xs shadow-lg group-hover:block dark:border-white/10 dark:bg-neutral-900"
+      >
+        <div className="mb-1.5 space-y-0.5">
+          <div className="flex justify-between">
+            <span className="text-black/50 dark:text-white/50">Total</span>
+            <span className="font-medium">{formatMoney(stay.totalAmount)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-black/50 dark:text-white/50">Paid</span>
+            <span className="font-medium">{formatMoney(stay.totalPaid)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-black/50 dark:text-white/50">Balance owed</span>
+            <span className={`font-medium ${owed > 0.01 ? "text-red-600 dark:text-red-400" : ""}`}>
+              {formatMoney(owed)}
+            </span>
+          </div>
+        </div>
+        {stay.charges && stay.charges.length > 0 && (
+          <div className="space-y-0.5 border-t border-black/10 pt-1.5 dark:border-white/10">
+            {stay.charges.map((c, i) => (
+              <div key={i} className="flex justify-between gap-2 text-black/60 dark:text-white/60">
+                <span className="truncate">{c.description}</span>
+                <span className="shrink-0">{formatMoney(c.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </span>
+    </span>
+  );
+}
+
 export function ManagementBoard() {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -417,6 +482,7 @@ export function ManagementBoard() {
                     Paid extras requested
                   </span>
                 )}
+                <TransactionsHover stay={s} />
               </div>
               <div className="text-xs text-black/50 dark:text-white/50">
                 {s.propertyName}

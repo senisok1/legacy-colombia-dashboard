@@ -144,6 +144,14 @@ async function buildBoard(orgId: string, groupId: string) {
       children: b.children,
       source: b.source,
       totalAmount: b.totalAmount,
+      // Team Management "transactions on hover" (2026-08-18, Seni's ask,
+      // Admin/Owner only — see GET below for where this actually gets
+      // stripped for non-CEO viewers). balanceOwed computed here rather
+      // than stored, same convention as netAmount() in lib/finance.ts, so
+      // it can never drift out of sync with totalAmount/totalPaid.
+      totalPaid: b.totalPaid,
+      balanceOwed: b.totalPaid !== undefined ? Math.round((b.totalAmount - b.totalPaid) * 100) / 100 : undefined,
+      charges: b.charges,
       extrasRequested: extrasByBookingId.has(b.id),
       eventScheduled: opsByBookingId.get(b.id)?.eventScheduled ?? false,
       eventDate: opsByBookingId.get(b.id)?.eventDate ?? null,
@@ -179,6 +187,26 @@ async function buildAndStore(orgId: string, groupId: string) {
   return board;
 }
 
+// Team Management "transactions on hover" (2026-08-18, Seni's explicit
+// choice: "Admin/Owner only"). The board itself is a single Redis snapshot
+// SHARED across every viewer of a property (see snapshotKey above) — so
+// role-gating can't happen inside buildBoard()/the cache, or a READ_ONLY
+// viewer could get a CEO-warmed cache entry (or vice versa). Instead the
+// financial fields are always computed into the cached stays (cheap, and
+// keeps the cache viewer-agnostic) and stripped here, per response, based
+// on the ACTUAL requester's session role — never trust a cached copy's
+// shape to already be correctly redacted.
+function redactFinancialsForNonAdmins<T extends { stays?: unknown[] }>(board: T, viewerRole: string): T {
+  if (viewerRole === "CEO" || !Array.isArray(board.stays)) return board;
+  return {
+    ...board,
+    stays: board.stays.map((s) => {
+      const { totalPaid: _totalPaid, balanceOwed: _balanceOwed, charges: _charges, ...rest } = s as Record<string, unknown>;
+      return rest;
+    }),
+  };
+}
+
 export async function GET(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
@@ -206,17 +234,31 @@ export async function GET(req: NextRequest) {
         // Serve the snapshot instantly; refresh it in the background so the
         // client's follow-up ?fresh=1 (and the next visitor) get current data.
         after(buildAndStore(orgId, groupId).catch(() => {}));
-        return NextResponse.json({ ...JSON.parse(cached), viewerLanguage, viewerRole });
+        return NextResponse.json({
+          ...redactFinancialsForNonAdmins(JSON.parse(cached), viewerRole),
+          viewerLanguage,
+          viewerRole,
+        });
       }
     }
-    return NextResponse.json({ ...(await buildAndStore(orgId, groupId)), viewerLanguage, viewerRole });
+    return NextResponse.json({
+      ...redactFinancialsForNonAdmins(await buildAndStore(orgId, groupId), viewerRole),
+      viewerLanguage,
+      viewerRole,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/management failed:", message);
     // Last resort: even a failed FRESH build should serve the snapshot
     // rather than erroring — stale stays beat a "failed to fetch" banner.
     const cached = await redisGet(snapshotKey(orgId, groupId)).catch(() => null);
-    if (cached) return NextResponse.json({ ...JSON.parse(cached), viewerLanguage, viewerRole });
+    if (cached) {
+      return NextResponse.json({
+        ...redactFinancialsForNonAdmins(JSON.parse(cached), viewerRole),
+        viewerLanguage,
+        viewerRole,
+      });
+    }
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

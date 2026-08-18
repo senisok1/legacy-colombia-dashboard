@@ -41,6 +41,19 @@ export type Booking = {
   totalAmount: number;
   hostFee?: number;
   payoutAmount?: number;
+  // What the guest has actually paid so far, straight from OwnerRez's own
+  // computed BookingModel.total_paid field (2026-08-18, Team Management
+  // "transactions on hover" feature). balanceOwed = totalAmount - totalPaid
+  // (computed on demand, not stored, so it can never drift — same
+  // convention as lib/finance.ts's netAmount()). OwnerRez's v2 API has no
+  // separate transactions/payments endpoint (confirmed live 2026-08-18 —
+  // GET /bookings/{id}/transactions 404s); this total_paid field plus the
+  // itemized `charges` line items below is everything the API actually
+  // exposes for a booking's financials.
+  totalPaid?: number;
+  // Itemized charge lines (rent, discounts, cleaning fee, taxes, etc.) —
+  // OwnerRez's real per-booking "transactions" in the sense Seni meant.
+  charges?: { description: string; amount: number; type: string }[];
   createdAt?: string;
   updatedAt?: string;
   // True for calendar blocks / channel-imported "not available" placeholders
