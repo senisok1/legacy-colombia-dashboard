@@ -2,7 +2,13 @@ import { isDbConfigured, isPostizConfigured } from "@/lib/config";
 import { listContentPieces, listContentCampaigns, listPiecesForCampaign } from "@/lib/contentMarketing";
 import { getPushableChannels } from "@/lib/postiz";
 import { listMarketingContacts, getMarketingContactStats } from "@/lib/marketingContacts";
-import { getSearchConsolePerformance, getGa4Overview, gscSiteUrlFor, ga4PropertyIdFor } from "@/lib/searchAnalytics";
+import {
+  getSearchConsolePerformance,
+  getGa4Overview,
+  gscSiteUrlFor,
+  ga4PropertyIdFor,
+  displaySiteDomain,
+} from "@/lib/searchAnalytics";
 import { getServerSession } from "@/lib/session";
 import { cookies } from "next/headers";
 import { getUserByEmail } from "@/lib/users";
@@ -60,6 +66,18 @@ export default async function MarketingPage() {
     campaigns.map(async (campaign) => ({ campaign, pieces: await listPiecesForCampaign(campaign.id, orgId) }))
   );
 
+  // Site label for the Search & Site Performance panel (2026-08-18, Seni:
+  // the panel said "legacycolombia.com" under every property). Prefer the
+  // configured GSC domain; if only GA4 is connected for this property, fall
+  // back to the property's own label rather than leaving it blank.
+  const propertyLabel = propertyGroupById(groupId).label;
+  const siteUrlForGroup = gscSiteUrlFor(groupId);
+  const siteLabel = siteUrlForGroup
+    ? displaySiteDomain(siteUrlForGroup)
+    : ga4PropertyIdFor(groupId)
+      ? propertyLabel
+      : "";
+
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       {/* Section strip added 2026-08-17 when Campaigns + Pipeline moved
@@ -72,7 +90,7 @@ export default async function MarketingPage() {
       />
 
       <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-        <SearchAnalyticsPanel gsc={gsc} ga4={ga4} />
+        <SearchAnalyticsPanel gsc={gsc} ga4={ga4} siteLabel={siteLabel} propertyLabel={propertyLabel} />
       </div>
 
       <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">

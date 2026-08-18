@@ -45,6 +45,20 @@ export function ga4PropertyIdFor(propertyGroupId?: string): string {
   return (process.env[`GA4_PROPERTY_ID_${envSuffix(propertyGroupId)}`] || "").trim();
 }
 
+/** Turns a raw Search Console site identifier ("sc-domain:legacycolombia.com",
+ * "https://www.legacyalva.com/") into a plain domain for display
+ * ("legacycolombia.com", "legacyalva.com"). Used by SearchAnalyticsPanel so
+ * the "scoped only to ___" line actually names the property being viewed
+ * instead of a string baked in at Colombia's original launch (2026-08-18,
+ * Seni: the panel said "legacycolombia.com" under every property). */
+export function displaySiteDomain(siteUrl: string): string {
+  return siteUrl
+    .replace(/^sc-domain:/, "")
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+}
+
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
 const GA4_SCOPE = "https://www.googleapis.com/auth/analytics.readonly";

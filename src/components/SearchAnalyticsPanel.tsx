@@ -3,11 +3,21 @@
 import type { SearchConsolePerformance, Ga4Overview } from "@/lib/searchAnalytics";
 
 // Real Search Console + GA4 numbers (task #172) — not AI-drafted, not
-// estimated. Pulled server-side via a Google service account scoped only to
-// the legacycolombia.com / Legacy Colombia properties (see
-// lib/searchAnalytics.ts's header comment). If GA4 shows all zeros, that's
-// because tracking isn't installed on the site yet (task #175 — deferred at
-// Seni's request), not because traffic is actually zero.
+// estimated. Pulled server-side via a Google service account scoped to
+// whichever property's site/GA4 property is configured for the currently
+// selected property group (see lib/searchAnalytics.ts's gscSiteUrlFor() /
+// ga4PropertyIdFor()) — NOT hardcoded to Legacy Colombia. If GA4 shows all
+// zeros, that's because tracking isn't installed on the site yet (task #175
+// — deferred at Seni's request), not because traffic is actually zero.
+//
+// PROPERTY-SCOPING FIX (2026-08-18, Seni: this panel said "scoped only to
+// legacycolombia.com" under every property, including Legacy Alva). The
+// subtitle used to be a hardcoded string; it now derives from the actual
+// resolved site for the property being viewed, passed in as `siteLabel`
+// from marketing/page.tsx. When neither Search Console nor GA4 is
+// configured for a property, the empty-state message names that property
+// instead of a generic line, so "not connected" is never confused with
+// "Colombia's numbers shown everywhere".
 
 type GscResult = SearchConsolePerformance | { error: string } | null;
 type Ga4Result = Ga4Overview | { error: string } | null;
@@ -24,19 +34,35 @@ function formatPos(n: number): string {
   return n.toFixed(1);
 }
 
-export function SearchAnalyticsPanel({ gsc, ga4 }: { gsc: GscResult; ga4: Ga4Result }) {
+export function SearchAnalyticsPanel({
+  gsc,
+  ga4,
+  siteLabel,
+  propertyLabel,
+}: {
+  gsc: GscResult;
+  ga4: Ga4Result;
+  /** Plain domain for the currently-viewed property's connected site, e.g.
+   * "legacyalva.com" — "" when nothing is connected for this property. */
+  siteLabel: string;
+  /** Property group label, e.g. "Legacy Alva" — used only in the
+   * not-connected empty state. */
+  propertyLabel: string;
+}) {
   return (
     <div className="space-y-4">
       <div>
         <h2 className="text-sm font-semibold">Search &amp; site performance</h2>
         <p className="text-xs text-black/40 dark:text-white/40">
-          Live data from Google Search Console{ga4 ? " and GA4" : ""} — scoped only to legacycolombia.com.
+          {siteLabel
+            ? `Live data from Google Search Console${ga4 ? " and GA4" : ""} — scoped only to ${siteLabel}.`
+            : `No Search Console / GA4 site is connected for ${propertyLabel} yet.`}
         </p>
       </div>
 
       {gsc === null && ga4 === null && (
         <p className="text-sm text-black/50 dark:text-white/50">
-          Search Console / GA4 access isn&rsquo;t configured yet.
+          Search Console / GA4 access isn&rsquo;t configured for {propertyLabel} yet.
         </p>
       )}
 
