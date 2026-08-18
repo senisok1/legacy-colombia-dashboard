@@ -361,6 +361,10 @@ export async function proxy(req: NextRequest) {
         // READ_ONLY session can reach the route at all.
         (pathname === "/api/team-requests" &&
           (req.method === "POST" || req.method === "PATCH" || req.method === "PUT")) ||
+        // Team Request Notes (2026-08-18): the back-and-forth discussion
+        // thread on a request — open to any team member, same posture as
+        // the request lifecycle itself.
+        (pathname === "/api/team-requests/notes" && req.method === "POST") ||
         // Translation is a POST but modifies nothing — the team needs it to
         // read Spanish guest threads.
         pathname === "/api/translate";

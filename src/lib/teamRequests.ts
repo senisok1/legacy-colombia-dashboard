@@ -292,3 +292,98 @@ export async function deleteTeamRequest(organizationId: string, id: string): Pro
   );
   return rows.length > 0;
 }
+
+// ---- Notes (migration 0038, 2026-08-18): a threaded back-and-forth per
+// request, separate from the accept/deny decision itself — "each team
+// member can put in their notes back and forth," timestamped and
+// attributed. Same language handling as the request's own description:
+// non-English authors get translated to English for storage, with the
+// original kept alongside for same-language readers. ----
+
+export type TeamRequestNote = {
+  id: string;
+  requestId: string;
+  authorEmail: string;
+  authorName: string | null;
+  body: string;
+  bodyOriginal: string | null;
+  authorLanguage: string | null;
+  createdAt: string;
+};
+
+type NoteRow = {
+  id: string;
+  request_id: string;
+  author_email: string;
+  author_name: string | null;
+  body: string;
+  body_original: string | null;
+  author_language: string | null;
+  created_at: string | Date;
+};
+
+function fromNoteRow(r: NoteRow): TeamRequestNote {
+  return {
+    id: r.id,
+    requestId: r.request_id,
+    authorEmail: r.author_email,
+    authorName: r.author_name,
+    body: r.body,
+    bodyOriginal: r.body_original,
+    authorLanguage: r.author_language,
+    createdAt: iso(r.created_at)!,
+  };
+}
+
+/** Every note for a batch of requests in one query, oldest first within
+ * each thread — the GET route uses this to attach `notes` to each request
+ * card without an N+1 query per request. */
+export async function listNotesForRequests(
+  organizationId: string,
+  requestIds: string[]
+): Promise<Map<string, TeamRequestNote[]>> {
+  const byRequest = new Map<string, TeamRequestNote[]>();
+  if (requestIds.length === 0) return byRequest;
+  const rows = await query<NoteRow>(
+    `select id, request_id, author_email, author_name, body, body_original, author_language, created_at
+     from team_request_notes
+     where organization_id = $1 and request_id = any($2::uuid[])
+     order by created_at asc`,
+    [organizationId, requestIds]
+  );
+  for (const row of rows) {
+    const note = fromNoteRow(row);
+    const list = byRequest.get(note.requestId);
+    if (list) list.push(note);
+    else byRequest.set(note.requestId, [note]);
+  }
+  return byRequest;
+}
+
+export async function addTeamRequestNote(input: {
+  organizationId: string;
+  requestId: string;
+  authorEmail: string;
+  authorName?: string | null;
+  body: string;
+  bodyOriginal?: string | null;
+  authorLanguage?: string | null;
+}): Promise<TeamRequestNote> {
+  const row = await queryOne<NoteRow>(
+    `insert into team_request_notes
+       (request_id, organization_id, author_email, author_name, body, body_original, author_language)
+     values ($1,$2,$3,$4,$5,$6,$7)
+     returning id, request_id, author_email, author_name, body, body_original, author_language, created_at`,
+    [
+      input.requestId,
+      input.organizationId,
+      input.authorEmail,
+      input.authorName ?? null,
+      input.body.trim(),
+      input.bodyOriginal?.trim() || null,
+      input.authorLanguage ?? null,
+    ]
+  );
+  if (!row) throw new Error("Failed to save the note.");
+  return fromNoteRow(row);
+}

@@ -12,6 +12,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 type TeamMember = { email: string; name: string | null; isYou: boolean };
 
+// Threaded back-and-forth on a request (2026-08-18, Seni's ask: "add a
+// notes section where each team member can put in their notes back and
+// forth... make sure each note is time stamped identifying the team member
+// that enters it"). See api/team-requests/notes/route.ts.
+type TeamRequestNoteEntry = {
+  id: string;
+  requestId: string;
+  authorEmail: string;
+  authorName: string | null;
+  body: string;
+  bodyOriginal: string | null;
+  authorLanguage: string | null;
+  createdAt: string;
+};
+
 type TeamRequestEntry = {
   id: string;
   title: string;
@@ -32,6 +47,7 @@ type TeamRequestEntry = {
   completed: boolean;
   completedByName: string | null;
   completedAt: string | null;
+  notes: TeamRequestNoteEntry[];
 };
 
 function textFor(descriptionOriginal: string | null, authorLanguage: string | null, description: string | null, viewerLanguage?: string): string | null {
@@ -76,6 +92,8 @@ export function TeamRequests() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ title: "", description: "", neededBy: "", taggedEmail: "" });
   const [creating, setCreating] = useState(false);
+  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  const [postingNoteId, setPostingNoteId] = useState<string | null>(null);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -174,6 +192,28 @@ export function TeamRequests() {
       setError(err instanceof Error ? err.message : "Failed to update.");
     } finally {
       setBusyId(null);
+    }
+  }
+
+  async function addNote(requestId: string) {
+    const body = (noteDrafts[requestId] ?? "").trim();
+    if (!body || postingNoteId) return;
+    setPostingNoteId(requestId);
+    setError(null);
+    try {
+      const res = await fetch("/api/team-requests/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId, body }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setNoteDrafts((d) => ({ ...d, [requestId]: "" }));
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to post the note.");
+    } finally {
+      setPostingNoteId(null);
     }
   }
 
@@ -356,6 +396,47 @@ export function TeamRequests() {
                       Remove
                     </button>
                   )}
+                </div>
+
+                {/* Notes back-and-forth (2026-08-18, Seni's ask): open to any
+                    team member, not just the requester/tagged person —
+                    each note timestamped and attributed below. */}
+                <div className="mt-1.5 space-y-1.5 border-t border-black/10 pt-1.5 dark:border-white/10">
+                  {r.notes.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {r.notes.map((n) => (
+                        <li key={n.id} className="rounded-md bg-black/[0.03] px-2 py-1.5 text-xs dark:bg-white/[0.04]">
+                          <p className="text-black/80 dark:text-white/80">
+                            {textFor(n.bodyOriginal, n.authorLanguage, n.body, viewerLanguage)}
+                          </p>
+                          <p className="mt-0.5 text-black/40 dark:text-white/40">
+                            {n.authorName || n.authorEmail} — {fmtWhen(n.createdAt)}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void addNote(r.id);
+                    }}
+                    className="flex gap-1.5"
+                  >
+                    <input
+                      className="flex-1 rounded-md border border-black/15 bg-transparent px-2 py-1 text-xs dark:border-white/15"
+                      placeholder="Add a note…"
+                      value={noteDrafts[r.id] ?? ""}
+                      onChange={(e) => setNoteDrafts((d) => ({ ...d, [r.id]: e.target.value }))}
+                    />
+                    <button
+                      type="submit"
+                      disabled={postingNoteId === r.id || !(noteDrafts[r.id] ?? "").trim()}
+                      className="rounded-md bg-black/80 px-2.5 py-1 text-xs text-white disabled:opacity-40 dark:bg-white/80 dark:text-black"
+                    >
+                      {postingNoteId === r.id ? "Posting…" : "Post"}
+                    </button>
+                  </form>
                 </div>
               </li>
             );

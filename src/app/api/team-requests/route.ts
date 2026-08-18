@@ -7,6 +7,7 @@ import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyG
 import {
   createTeamRequest,
   deleteTeamRequest,
+  listNotesForRequests,
   listTeamRequests,
   setCompleted,
   setDecision,
@@ -64,8 +65,16 @@ export async function GET(req: NextRequest) {
       listTeamRequests(session.organizationId, groupId),
       listUsers(session.organizationId),
     ]);
+    // Notes (2026-08-18, Seni's ask: "a notes section where each team
+    // member can put in their notes back and forth"). One batched query for
+    // every request on this board rather than N+1 — see
+    // listNotesForRequests's own comment.
+    const notesByRequest = await listNotesForRequests(
+      session.organizationId,
+      requests.map((r) => r.id)
+    );
     return NextResponse.json({
-      requests,
+      requests: requests.map((r) => ({ ...r, notes: notesByRequest.get(r.id) ?? [] })),
       // Any active login is taggable — not just CEOs — since a team member
       // can tag another team member (e.g. Gabriel asking Ahmed).
       teamMembers: allUsers
