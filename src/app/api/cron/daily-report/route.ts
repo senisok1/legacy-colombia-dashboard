@@ -33,7 +33,23 @@ import { PROPERTY_GROUPS, allowedPropertyGroups } from "@/lib/propertyGroups";
 export const maxDuration = 300;
 
 export async function GET(req: NextRequest) {
-  if (config.cronSecret) {
+  // CRON AUTH — FAIL CLOSED IN PRODUCTION (2026-08-17 audit). This used to be
+  // `if (config.cronSecret) { check }`, which meant an unset CRON_SECRET in
+  // production skipped the check entirely and left this endpoint open to
+  // anyone who found the URL. Now a missing secret is rejected in production
+  // (503 + loud console.error); only non-production (VERCEL_ENV !==
+  // "production" — local dev / preview) may run without a secret. See the
+  // matching guard in api/cron/detect-reviews for the full reasoning.
+  const isProd = process.env.VERCEL_ENV === "production";
+  if (!config.cronSecret) {
+    if (isProd) {
+      console.error(
+        "[cron/daily-report] CRON_SECRET is not set in production — refusing to run this endpoint unauthenticated. Set CRON_SECRET in Vercel."
+      );
+      return NextResponse.json({ error: "Cron not configured." }, { status: 503 });
+    }
+    console.warn("[cron/daily-report] CRON_SECRET unset — running WITHOUT auth (non-production only).");
+  } else {
     const auth = req.headers.get("authorization");
     if (auth !== `Bearer ${config.cronSecret}`) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });

@@ -13,13 +13,30 @@ import type { Role } from "./users";
 // Format: base64url(payload-json) + "." + base64url(hmac-sha256(payload, AUTH_SECRET))
 
 export const SESSION_COOKIE_NAME = "lc_user_session";
-export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days, matches the legacy password cookie
+// Cookie lifetime (2026-08-17 audit): cut from 30 days to 7. 30 days was only
+// ever "matches the legacy password cookie", and for a login that carries
+// financial data and team-member access that's an excessively long window for
+// a leaked/stolen cookie to keep working. This is a COMPLEMENTARY mitigation —
+// it bounds the blast radius — but it is NOT the real fix: the real fix is the
+// `epoch` field below, which lets the owner kill any outstanding cookie
+// immediately (deactivate/delete/demote/change-password) instead of waiting
+// for it to age out. 7 days keeps day-to-day mobile use from re-prompting
+// constantly while shrinking the passive-expiry window ~4x.
+export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
 export type SessionPayload = {
   userId: string;
   email: string;
   role: Role;
   organizationId: string;
+  // Session-invalidation counter copied from users.session_epoch at login
+  // (2026-08-17 audit). The proxy compares this against the live DB value on a
+  // short-TTL cached lookup and rejects the token if it's behind — this is
+  // what makes "deactivate/delete/demote/change-password" revoke a still-valid
+  // 7-day cookie instead of it working until natural expiry. Optional on the
+  // type because tokens minted before this field existed simply won't carry it
+  // (the proxy coerces a missing value to 0). See lib/users.ts.
+  epoch?: number;
   exp: number; // unix seconds
 };
 

@@ -21,7 +21,8 @@ import { trailingGuestMessages, combineGuestMessageBodies } from "@/lib/guestMes
 import { sweepChatEscalationFallbacks } from "@/lib/chatEscalationFallback";
 import { checkNewBookingAlerts } from "@/lib/bookingAlerts";
 import { listActiveOrganizations } from "@/lib/organizations";
-import type { ThreadMessage } from "@/lib/types";
+import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
+import type { Booking, ThreadMessage } from "@/lib/types";
 
 const AGENT_KEY = "guest_experience";
 const AGENT_NAME = "AI Guest Experience Manager";
@@ -142,65 +143,139 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
   // its own try/catch (same pattern as the chat-fallback sweep above) so a
   // failure here (bad OwnerRez PAT, Redis hiccup, etc.) never blocks guest-
   // message drafting, and vice versa.
-  let newBookingResult: Awaited<ReturnType<typeof checkNewBookingAlerts>> | { skipped: string } = {
-    skipped: "WhatsApp not configured yet.",
-  };
+  //
+  // PER-PROPERTY (2026-08-17 audit): this used to call getBookings(orgId) /
+  // getGuests(orgId) with NO property group, so it defaulted to Legacy
+  // Colombia — meaning new bookings on Alva, Pompano, Miami and Beach House
+  // NEVER fired a WhatsApp new-booking alert. Now it iterates every property
+  // group; each group's fetch+alert is isolated in its own try/catch so one
+  // property's OwnerRez failure can't suppress the others' alerts.
+  let newBookingResults: Record<string, unknown> = { skipped: "WhatsApp not configured yet." };
   if (isWhatsAppConfigured()) {
-    try {
-      const [bookingsForAlert, guestsForAlert] = await Promise.all([getBookings(orgId), getGuests(orgId)]);
-      newBookingResult = await checkNewBookingAlerts(bookingsForAlert, buildGuestsById(guestsForAlert), orgId);
-    } catch (err) {
-      newBookingResult = { skipped: err instanceof Error ? err.message : "Unknown error." };
+    const perGroup: Record<string, unknown> = {};
+    for (const group of PROPERTY_GROUPS) {
+      try {
+        const [bookingsForAlert, guestsForAlert] = await Promise.all([
+          getBookings(orgId, group.id),
+          getGuests(orgId, group.id),
+        ]);
+        perGroup[group.id] = await checkNewBookingAlerts(
+          bookingsForAlert,
+          buildGuestsById(guestsForAlert),
+          orgId
+        );
+      } catch (err) {
+        perGroup[group.id] = { skipped: err instanceof Error ? err.message : "Unknown error." };
+      }
     }
+    newBookingResults = perGroup;
   }
 
   if (!isMessagingConfigured()) {
     return {
       skipped: "OwnerRez messaging not connected yet.",
       chatFallback: chatFallbackResult,
-      newBookings: newBookingResult,
+      newBookings: newBookingResults,
     };
   }
   if (!isAiReplyConfigured()) {
     return {
       skipped: "ANTHROPIC_API_KEY not set (or has no credits).",
       chatFallback: chatFallbackResult,
-      newBookings: newBookingResult,
+      newBookings: newBookingResults,
     };
   }
   if (!isWhatsAppConfigured()) {
     return {
       skipped: "WhatsApp not configured yet.",
       chatFallback: chatFallbackResult,
-      newBookings: newBookingResult,
+      newBookings: newBookingResults,
     };
   }
 
-  const [allBookings, guests] = await Promise.all([getBookings(orgId), getGuests(orgId)]);
-  const bookings = allBookings.filter(
-    (b) => !b.isBlock && b.status !== "Cancelled" && b.threadIds.length > 0 && isActiveEnoughForPolling(b.departure)
-  );
-  const guestsById = buildGuestsById(guests);
-
-  // Grounded in Seni's own replies across every recent conversation (see
-  // inbox.ts), not just whatever's in each individual thread — most threads
-  // only have a couple of prior host messages, nowhere near enough for the
-  // AI to reliably match his tone. Computed once per run since it's the
-  // same regardless of which thread is being drafted for.
-  const stylePool = await getGlobalHostStyleExamples(MAX_STYLE_EXAMPLES, orgId);
+  // MULTI-PROPERTY COVERAGE (2026-08-17 audit). This whole poll used to call
+  // getBookings(orgId) / getGuests(orgId) / getGlobalHostStyleExamples(…,orgId)
+  // with NO property group — i.e. Legacy Colombia only — so guest messages on
+  // the other four properties (Alva, Pompano, Miami, Beach House) were NEVER
+  // drafted or alerted. We now gather candidate threads from EVERY property
+  // group into ONE combined list.
+  //
+  // BUDGET/FAIRNESS DECISION (ties into CRON_TIME_BUDGET_MS below): rather than
+  // run five separate 45s fetch loops — which would need roughly 5x the 60s
+  // maxDuration and blow the budget — we merge all properties' candidate
+  // threads into a single list and run the SAME single 45s-budgeted loop with
+  // the SAME global least-recently-checked sort. Two wins: (1) the existing
+  // per-run time budget is preserved unchanged, and (2) the round-robin
+  // fairness cursor (setLastCheckedAt / getLastCheckedAtMany) now spans all
+  // five properties for free — a thread not serviced this run, whichever
+  // property it belongs to, sorts to the front next run, so no property can be
+  // permanently starved. The tradeoff: per-run capacity (~40-50 live thread
+  // fetches inside the budget) is now SHARED across all properties instead of
+  // dedicated to Colombia, so the worst-case time for any single thread to get
+  // its turn grows roughly with the combined active-thread count. With crons
+  // every 1-2 minutes and most fetches being cache hits, that's still on the
+  // order of minutes, not "forever."
   const drafted: { threadId: number; guestName?: string; draftId: string }[] = [];
   const errors: { threadId: number; error: string }[] = [];
 
+  // Per-property drafting context: the guest directory (property-scoped) and
+  // the host-style tone corpus (also property-scoped as of 2026-08-17) each
+  // thread should be resolved / drafted against. Keyed by property group id.
+  type GroupContext = {
+    guestsById: ReturnType<typeof buildGuestsById>;
+    stylePool: string[];
+  };
+  const groupContext = new Map<string, GroupContext>();
+
   // Dedup (booking, threadId) pairs up front — a guest can theoretically
-  // appear on more than one booking's threadIds list, and we only want to
-  // check each real thread once per run.
+  // appear on more than one booking's threadIds list, and a thread belongs to
+  // exactly one property, so we only want to check each real thread once per
+  // run across all properties.
   const seenThreadIds = new Set<number>();
-  const candidates: { booking: (typeof bookings)[number]; threadId: number }[] = [];
-  for (const booking of bookings) {
-    for (const threadId of booking.threadIds) {
-      if (seenThreadIds.has(threadId)) continue;
-      seenThreadIds.add(threadId);
-      candidates.push({ booking, threadId });
+  const candidates: { booking: Booking; threadId: number; groupId: string }[] = [];
+
+  // Start the per-run time budget clock HERE — before the per-property
+  // candidate build — so the single 45s budget (CRON_TIME_BUDGET_MS below)
+  // covers both the five-property data fetch and the thread-message fetch
+  // loop, keeping total runtime under the 60s maxDuration. See that constant's
+  // comment for the full reasoning.
+  const runStartedAt = Date.now();
+
+  for (const group of PROPERTY_GROUPS) {
+    try {
+      const [allBookings, guests] = await Promise.all([
+        getBookings(orgId, group.id),
+        getGuests(orgId, group.id),
+      ]);
+      const bookings = allBookings.filter(
+        (b) => !b.isBlock && b.status !== "Cancelled" && b.threadIds.length > 0 && isActiveEnoughForPolling(b.departure)
+      );
+      const guestsById = buildGuestsById(guests);
+
+      // Grounded in Seni's own replies across THIS property's recent
+      // conversations (see inbox.ts), not just whatever's in each individual
+      // thread — most threads only have a couple of prior host messages,
+      // nowhere near enough for the AI to reliably match his tone. Computed
+      // once per property per run (cached 600s in inbox.ts, so cheap).
+      const stylePool = await getGlobalHostStyleExamples(MAX_STYLE_EXAMPLES, orgId, group.id);
+      groupContext.set(group.id, { guestsById, stylePool });
+
+      for (const booking of bookings) {
+        for (const threadId of booking.threadIds) {
+          if (seenThreadIds.has(threadId)) continue;
+          seenThreadIds.add(threadId);
+          candidates.push({ booking, threadId, groupId: group.id });
+        }
+      }
+    } catch (groupErr) {
+      // One property's data fetch failing must NOT stop the others being
+      // polled — its candidates simply aren't added this run. threadId -1 is
+      // a sentinel marking a property-level (not thread-level) failure.
+      console.error(`[cron/check-messages] candidate build failed for ${group.id}`, groupErr);
+      errors.push({
+        threadId: -1,
+        error: `[${group.id}] ${groupErr instanceof Error ? groupErr.message : "Unknown error."}`,
+      });
     }
   }
 
@@ -273,8 +348,16 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
   // likely-active threads this run, sweeps the rest next run" (crons every
   // 2 minutes) instead of risking a hard Vercel timeout that would silently
   // drop ALL of this run's work, including threads already fetched.
+  //
+  // runStartedAt is set ABOVE, before the per-property candidate build
+  // (2026-08-17 audit), NOT here — so this one 45s budget now bounds the WHOLE
+  // polling phase (all five properties' getBookings/getGuests/style-pool
+  // fetches PLUS the thread-message fetch loop), keeping total runtime under
+  // the 60s maxDuration even on a cold multi-property cache. If the candidate
+  // build alone eats the budget on a bad day, the fetch loop simply starts
+  // zero batches and the whole run degrades to "sweep next run" — safe now
+  // that the cursor only advances after a successful alert (see below).
   const CRON_TIME_BUDGET_MS = 45_000;
-  const runStartedAt = Date.now();
 
   // Fetch only the hot thread's messages in parallel (bounded batches)
   // rather than one at a time — see the batch-size comment above. Routed
@@ -323,15 +406,34 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
   }
   const messagesByThreadId = new Map(fetchResults.map((r) => [r.threadId, r.messages]));
 
-  for (const { booking, threadId } of hotCandidates) {
+  for (const { booking, threadId, groupId } of hotCandidates) {
     const messages = messagesByThreadId.get(threadId);
     if (!messages || messages.length === 0) continue;
+
+    // Per-property drafting context (guest directory + tone corpus) for the
+    // property this thread belongs to. Guaranteed present: a thread only ever
+    // becomes a candidate above once its group's context was set.
+    const ctx = groupContext.get(groupId);
+    if (!ctx) continue;
+    const { guestsById, stylePool } = ctx;
 
     const lastSeenId = await getLastSeenMessageId(threadId, orgId);
     const isFirstPoll = lastSeenId === null;
     const newMessages = lastSeenId ? messages.filter((m) => m.id > lastSeenId) : messages;
     const maxId = Math.max(...messages.map((m) => m.id));
-    await setLastSeenMessageId(threadId, maxId, orgId);
+
+    // CURSOR ORDERING FIX (2026-08-17 audit). This setLastSeenMessageId used
+    // to run HERE, up front, BEFORE any drafting/alerting happened — so a
+    // timeout (or crash) after the cursor advanced but before the WhatsApp
+    // approval alert went out PERMANENTLY dropped the guest message: next run
+    // filtered it out as "already seen" and it was never drafted or alerted.
+    // The cursor is now advanced only once the message has actually been
+    // handled — in each of the "nothing to do" branches below, and after a
+    // successful draft+alert (never in the failure/catch path). That way a
+    // mid-run failure leaves the cursor untouched so the message is retried
+    // next run, while the getPendingDraftByThreadId reuse and
+    // alreadyAlertedRecently guards below stop that retry from re-drafting or
+    // double-alerting the same message.
 
     // A guest can send several messages in a row (e.g. three separate
     // WhatsApp/OwnerRez sends a few seconds apart) — grab the whole trailing
@@ -339,7 +441,14 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
     // dropped from what the AI drafts against and what Seni sees. See
     // lib/guestMessageGroup.ts for why.
     const newGuestMessages = trailingGuestMessages(newMessages);
-    if (newGuestMessages.length === 0) continue;
+    if (newGuestMessages.length === 0) {
+      // No new INBOUND guest message on this thread (only host messages, or
+      // nothing new). Nothing to alert, so it's safe to advance the cursor to
+      // the newest id now — there's no pending alert a later failure could
+      // drop by doing so.
+      await setLastSeenMessageId(threadId, maxId, orgId);
+      continue;
+    }
 
     if (isFirstPoll) {
       // Normally a thread's first-ever poll means its whole backlog is old
@@ -357,7 +466,13 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
       // treating it as "new" would risk being backlog instead.
       const newest = newGuestMessages[newGuestMessages.length - 1];
       const ageMs = newest.sentAt ? Date.now() - new Date(newest.sentAt).getTime() : Infinity;
-      if (ageMs > FIRST_POLL_MAX_AGE_MS) continue;
+      if (ageMs > FIRST_POLL_MAX_AGE_MS) {
+        // Old backlog on this thread's first-ever poll — nothing to draft, but
+        // advance the cursor to establish a baseline so we don't re-examine
+        // the same ancient history every subsequent run.
+        await setLastSeenMessageId(threadId, maxId, orgId);
+        continue;
+      }
     }
 
     const guestMessageBody = combineGuestMessageBodies(newGuestMessages);
@@ -530,6 +645,22 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
       }
 
       drafted.push({ threadId, guestName, draftId: draft.id });
+
+      // CURSOR ADVANCE (2026-08-17 audit) — reached only after the draft was
+      // created AND the approval alert was sent (or deliberately suppressed as
+      // a recent duplicate / already-alerted). Advancing here, rather than up
+      // front, guarantees that if anything above threw, the cursor is left
+      // untouched and the guest message is retried next run instead of being
+      // silently dropped. Any error advancing the cursor itself must NOT
+      // discard the successful draft/alert, so it's swallowed — worst case the
+      // thread is re-examined next run, where the pending-draft reuse and
+      // alreadyAlertedRecently guards prevent a re-draft or duplicate alert.
+      await setLastSeenMessageId(threadId, maxId, orgId).catch((err) => {
+        console.error(
+          `[check-messages] draft/alert succeeded for thread ${threadId} but advancing the cursor failed`,
+          err
+        );
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error.";
       errors.push({ threadId, error: message });
@@ -557,14 +688,29 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
     drafted,
     errors,
     chatFallback: chatFallbackResult,
-    newBookings: newBookingResult,
+    newBookings: newBookingResults,
   };
 }
 
 export async function GET(req: NextRequest) {
-  // Vercel signs its own cron requests with this header when CRON_SECRET is
-  // set, so we can reject anyone else who finds/guesses this URL.
-  if (config.cronSecret) {
+  // CRON AUTH — FAIL CLOSED IN PRODUCTION (2026-08-17 audit). Vercel signs its
+  // own cron requests with this header when CRON_SECRET is set. The guard used
+  // to be `if (config.cronSecret) { check }`, so an unset CRON_SECRET in
+  // production skipped the check entirely and left this endpoint — which
+  // drives live OwnerRez polling, AI drafting and guest-approval WhatsApp
+  // sends — wide open to anyone who found the URL. Now a missing secret is
+  // rejected in production (503 + loud console.error); only non-production
+  // (VERCEL_ENV !== "production" — local dev / preview) may run without one.
+  const isProd = process.env.VERCEL_ENV === "production";
+  if (!config.cronSecret) {
+    if (isProd) {
+      console.error(
+        "[cron/check-messages] CRON_SECRET is not set in production — refusing to run this endpoint unauthenticated. Set CRON_SECRET in Vercel."
+      );
+      return NextResponse.json({ error: "Cron not configured." }, { status: 503 });
+    }
+    console.warn("[cron/check-messages] CRON_SECRET unset — running WITHOUT auth (non-production only).");
+  } else {
     const auth = req.headers.get("authorization");
     if (auth !== `Bearer ${config.cronSecret}`) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });

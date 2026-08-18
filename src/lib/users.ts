@@ -32,6 +32,12 @@ export type AppUser = {
   language: string;
   /** Property-group ids this login may see; empty array = ALL properties. */
   propertyAccess: string[];
+  /** Session-invalidation counter (2026-08-17 audit). Baked into the signed
+   * login token at creation and bumped whenever this account changes in a way
+   * that must kill outstanding sessions (password/role change, deactivation).
+   * proxy.ts rejects any token whose embedded epoch is behind this value. See
+   * db/migrations/0036_session_epoch.sql. */
+  sessionEpoch: number;
 };
 
 type UserRow = {
@@ -44,6 +50,7 @@ type UserRow = {
   organization_id: string;
   language?: string | null;
   property_access?: string | null;
+  session_epoch?: number | null;
 };
 
 function fromRow(row: UserRow): AppUser {
@@ -60,15 +67,30 @@ function fromRow(row: UserRow): AppUser {
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean),
+    sessionEpoch: row.session_epoch ?? 0,
   };
 }
 
 export async function getUserByEmail(email: string): Promise<AppUser | null> {
   const row = await queryOne<UserRow>(
-    "select id, email, password_hash, name, role, active, organization_id, language, property_access from users where lower(email) = lower($1)",
+    "select id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch from users where lower(email) = lower($1)",
     [email]
   );
   return row ? fromRow(row) : null;
+}
+
+/** Current session-invalidation epoch for a login, resolved by email (the
+ * identifier the signed token carries). Returns null if no such user exists —
+ * which the proxy treats as "session invalid" so a DELETED user's still-signed
+ * cookie stops working immediately (2026-08-17 audit). Deliberately its own
+ * tiny query, not getUserByEmail(), so the per-request check the proxy runs
+ * pulls a single integer column and never touches the bcrypt hash. */
+export async function getUserSessionEpoch(email: string): Promise<number | null> {
+  const row = await queryOne<{ session_epoch: number }>(
+    "select session_epoch from users where lower(email) = lower($1)",
+    [email]
+  );
+  return row ? row.session_epoch ?? 0 : null;
 }
 
 export async function verifyPassword(user: AppUser, password: string): Promise<boolean> {
@@ -105,8 +127,13 @@ export async function upsertUser(input: {
        role = excluded.role,
        language = excluded.language,
        property_access = excluded.property_access,
-       active = true
-     returning id, email, password_hash, name, role, active, organization_id, language, property_access`,
+       active = true,
+       -- Session invalidation (2026-08-17 audit): this is the password/role
+       -- reset path (scripts/seed-user, admin/set-user-password), so bump the
+       -- epoch to kill any cookie minted under the OLD password/role. On the
+       -- initial insert the column just defaults to 0.
+       session_epoch = users.session_epoch + 1
+     returning id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch`,
     [
       input.email.toLowerCase(),
       hash,
@@ -126,7 +153,7 @@ export async function upsertUser(input: {
  * type (AppUser) but callers exposing this over HTTP must strip them. */
 export async function listUsers(organizationId: string): Promise<AppUser[]> {
   const rows = await query<UserRow>(
-    `select id, email, password_hash, name, role, active, organization_id, language, property_access
+    `select id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch
      from users where organization_id = $1
      order by role, lower(coalesce(name, email))`,
     [organizationId]
@@ -138,7 +165,15 @@ export async function listUsers(organizationId: string): Promise<AppUser[]> {
  * never touch another tenant's users. Returns false if no matching row. */
 export async function setUserActive(userId: string, active: boolean, organizationId: string): Promise<boolean> {
   const rows = await query<{ id: string }>(
-    `update users set active = $2 where id = $1 and organization_id = $3 returning id`,
+    // Session invalidation (2026-08-17 audit): a DEACTIVATION must immediately
+    // kill the user's outstanding 30-day cookies, so bump the epoch whenever
+    // active is being set to false. Reactivation doesn't need to invalidate
+    // anything (there was no valid session to preserve), so it leaves the
+    // epoch untouched — `case` keeps this a single round trip.
+    `update users
+       set active = $2,
+           session_epoch = session_epoch + case when $2 = false then 1 else 0 end
+     where id = $1 and organization_id = $3 returning id`,
     [userId, active, organizationId]
   );
   return rows.length > 0;
@@ -178,10 +213,22 @@ export async function updateUser(
   if (fields.password) push("password_hash", await bcrypt.hash(fields.password, 12));
   if (sets.length === 0) return null;
 
+  // Session invalidation (2026-08-17 audit): a password change or a role
+  // change (e.g. CEO -> READ_ONLY) must kill every outstanding cookie for this
+  // login, otherwise the old token keeps working for up to 30 days with its
+  // stale embedded role/credential. Bump the epoch (no bound parameter — it's
+  // a self-referential increment) whenever either of those two fields is in
+  // play. An email-only or name-only edit doesn't need it: a changed email
+  // self-invalidates, because the token carries the OLD email and
+  // getUserSessionEpoch() will then find no matching row.
+  if (fields.password || fields.role !== undefined) {
+    sets.push("session_epoch = session_epoch + 1");
+  }
+
   const row = await queryOne<UserRow>(
     `update users set ${sets.join(", ")}
      where id = $1 and organization_id = $2
-     returning id, email, password_hash, name, role, active, organization_id, language, property_access`,
+     returning id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch`,
     values
   );
   return row ? fromRow(row) : null;
@@ -190,7 +237,11 @@ export async function updateUser(
 /** Permanently deletes a login (Settings → Team logins' Delete button).
  * Org-scoped like setUserActive. Nothing else references users(id) — team
  * activity attribution is stored denormalized as author_email/author_name,
- * so past notes keep their author label after deletion. */
+ * so past notes keep their author label after deletion.
+ *
+ * Session invalidation (2026-08-17 audit): no epoch bump is needed here — once
+ * the row is gone, getUserSessionEpoch() returns null for that email and the
+ * proxy rejects the deleted user's still-signed cookie on its next request. */
 export async function deleteUser(userId: string, organizationId: string): Promise<boolean> {
   const rows = await query<{ id: string }>(
     `delete from users where id = $1 and organization_id = $2 returning id`,
@@ -222,7 +273,7 @@ export async function createUserForSignup(input: {
     `insert into users (email, password_hash, name, role, organization_id)
      values ($1, $2, $3, $4, $5)
      on conflict (email) do nothing
-     returning id, email, password_hash, name, role, active, organization_id, language, property_access`,
+     returning id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch`,
     [input.email.toLowerCase(), hash, input.name ?? null, input.role, input.organizationId]
   );
   return row ? fromRow(row) : null;

@@ -26,5 +26,20 @@ export async function GET(req: NextRequest) {
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
 
-  return NextResponse.redirect(url.toString());
+  // CSRF protection (2026-08-17 audit). A `state` was already generated and
+  // sent to OwnerRez, but the callback never verified it came back unchanged —
+  // so an attacker could feed the account owner a forged callback URL with
+  // their OWN `code` and connect the attacker's OwnerRez account to this
+  // dashboard. Persist the expected state in a short-lived, httpOnly cookie
+  // and have the callback require an exact match. sameSite "lax" so the cookie
+  // still rides along on the top-level GET redirect back from OwnerRez.
+  const res = NextResponse.redirect(url.toString());
+  res.cookies.set("orez_oauth_state", state, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "lax",
+    path: "/api/oauth",
+    maxAge: 600, // 10 minutes is plenty to complete the approval round trip
+  });
+  return res;
 }

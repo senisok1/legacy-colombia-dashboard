@@ -1,6 +1,6 @@
 import { getBookings } from "./ownerrez";
 import { summaryStats, revPar, directBookingShare, occupancyRate, adr, bookingPace, isRevenueCounting, netAmount, lastMinuteDiscount, LAST_MINUTE_LEAD_DAYS, ADVANCE_LEAD_DAYS, cancellationRate, repeatGuestRate, type CancellationSummary, type RepeatGuestSummary } from "./finance";
-import { config, isDbConfigured, isRedisConfigured, isWhatsAppConfigured } from "./config";
+import { config, isDbConfigured, isRedisConfigured, isWhatsAppConfigured, isEmailSendConfigured } from "./config";
 import { listWorkOrders } from "./maintenance";
 import { listBills } from "./billPay";
 import { listLeads } from "./leads";
@@ -913,7 +913,11 @@ export async function deliverExecutiveReport(
   }
 
   const emailTo = recipientEmail?.trim() || config.reportEmailTo;
-  if (emailTo && config.resendApiKey) {
+  // Gate on ANY configured transport, not Resend specifically (2026-08-17
+  // audit). sendEmail() prefers Gmail SMTP; once Resend is dropped in favour
+  // of the Workspace sender, a Resend-only check here silently stopped every
+  // daily report even though SMTP worked.
+  if (emailTo && isEmailSendConfigured()) {
     email.attempted = true;
     try {
       await sendEmail({

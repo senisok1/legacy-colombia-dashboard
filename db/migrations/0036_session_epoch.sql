@@ -1,0 +1,26 @@
+-- Session invalidation / token revocation (2026-08-17 audit).
+--
+-- BUG: the per-user login cookie (see src/lib/session.ts) is a 30-day,
+-- HMAC-signed token that embeds the user's role and organization_id. Nothing
+-- ever re-checked the database against it, so a token stayed fully valid for
+-- its whole 30-day life even after the account behind it was deleted,
+-- deactivated, demoted (e.g. CEO -> READ_ONLY), or had its password changed.
+-- A cleaner who was let go, or a leaked/stolen cookie, kept working for weeks
+-- with its ORIGINAL embedded privileges regardless of what the owner did in
+-- Settings -> Team logins.
+--
+-- FIX: give every user a monotonically increasing "session epoch". The epoch
+-- is baked into the token at login (src/lib/session.ts) and bumped in
+-- src/lib/users.ts whenever the account changes in a way that must kill
+-- existing sessions (password change, role change, deactivation, delete —
+-- delete is covered automatically because the row disappears). The proxy
+-- (src/proxy.ts, Node runtime) compares the token's epoch against the current
+-- DB epoch on a short-TTL cached lookup and rejects any token whose epoch is
+-- stale. Bumping the epoch therefore invalidates every outstanding cookie for
+-- that user at once.
+--
+-- Existing rows default to 0, which matches the `epoch ?? 0` coercion in the
+-- proxy so tokens minted before this migration keep working until they either
+-- expire naturally or the account is next changed (at which point the DB epoch
+-- moves to 1 and the old token — still carrying 0 — is correctly rejected).
+alter table users add column if not exists session_epoch integer not null default 0;

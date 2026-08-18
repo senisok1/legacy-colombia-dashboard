@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { redisGet, redisSet, redisDel, redisMGet } from "./redis";
+import { redisGet, redisSet, redisDel, redisMGet, redisSetNX } from "./redis";
 import { logAiActivity } from "./aiActivity";
 import { getDefaultOrganizationId } from "./organizations";
 import { getBookings } from "./ownerrez";
@@ -138,6 +138,68 @@ export async function linkWhatsAppMessageId(
   if (draft) {
     await redisSet(draftKey(orgId, draftId), JSON.stringify({ ...draft, wamid }), { exSeconds: DRAFT_TTL_SECONDS });
   }
+}
+
+// ---------- Atomic send-claim (2026-08-17 audit: double-send fix) ----------
+// The bug: resolvePendingDraft is a read-modify-write with no compare-and-set,
+// and the WhatsApp approval path does the slow OwnerRez send BETWEEN reading
+// the draft's status and writing "sent". Two approvals racing (dashboard +
+// WhatsApp "yes", or a Meta webhook retry replaying the same "yes") both saw
+// status:"pending" and both sent — the guest got the message twice. The
+// dashboard path was worse: it never read the draft's status at all.
+//
+// The fix is a claim key set with NX: exactly one caller can transition a
+// draft from pending to in-flight, and it must hold the claim before it calls
+// OwnerRez. A 2-minute TTL means a crash mid-send self-heals rather than
+// wedging the draft forever. releaseDraftClaim() lets a caller hand the claim
+// back if its own send genuinely failed, so a real retry can re-acquire it.
+
+function claimKey(orgId: string, id: string): string {
+  return `draft:${orgId}:send-claim:${id}`;
+}
+
+export type ClaimResult =
+  | { ok: true; draft: PendingDraft }
+  | { ok: false; reason: "not_found" | "already_resolved" | "in_flight"; draft: PendingDraft | null };
+
+/**
+ * Atomically claim a pending draft for sending. Succeeds only if the draft
+ * exists, is still "pending", AND no other actor holds the claim. The claim
+ * MUST be acquired before the OwnerRez send, and the caller should mark the
+ * draft "sent" (via resolvePendingDraft) once the send returns.
+ */
+export async function claimDraftForSend(id: string, organizationId?: string): Promise<ClaimResult> {
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const draft = await getPendingDraft(id, orgId);
+  if (!draft) return { ok: false, reason: "not_found", draft: null };
+  if (draft.status !== "pending") return { ok: false, reason: "already_resolved", draft };
+  const claimed = await redisSetNX(claimKey(orgId, id), new Date().toISOString(), 120);
+  if (!claimed) return { ok: false, reason: "in_flight", draft };
+  return { ok: true, draft };
+}
+
+/** Hand a claim back after a send that genuinely failed, so a legitimate
+ * retry can re-acquire it. Never called on success — a sent draft must stay
+ * unclaimable. */
+export async function releaseDraftClaim(id: string, organizationId?: string): Promise<void> {
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  await redisDel(claimKey(orgId, id)).catch(() => {});
+}
+
+// Inbound-message idempotency (2026-08-17 audit). Meta retries a webhook POST
+// if our handler is slow, and this handler does translation + OwnerRez sends
+// inline — so the same "yes" can arrive twice and race past the claim on two
+// instances. Deduping the Meta message id (wamid) of the INBOUND reply means a
+// retry is dropped before it can act. Returns true the first time a given
+// inbound id is seen, false on every replay.
+export async function markInboundProcessed(
+  inboundId: string,
+  organizationId?: string,
+  ttlSeconds = 60 * 60 * 24
+): Promise<boolean> {
+  if (!inboundId) return true; // nothing to dedupe on — don't block real traffic
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  return redisSetNX(`draft:${orgId}:inbound-seen:${inboundId}`, "1", ttlSeconds);
 }
 
 export async function getPendingDraft(id: string, organizationId?: string): Promise<PendingDraft | null> {

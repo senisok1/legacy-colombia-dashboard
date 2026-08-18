@@ -220,7 +220,12 @@ export type TrendDeliveryResult = { attempted: boolean; sent: boolean; error?: s
 export async function deliverTrendReport(
   report: TrendReport,
   trigger: string,
-  organizationId?: string
+  organizationId?: string,
+  // Property label for the subject line (2026-08-17 audit). The cron now
+  // sends one trend report PER property; without this every one arrived
+  // titled "Legacy Colombia", so the four other properties' reports were
+  // indistinguishable in the inbox.
+  propertyLabel?: string
 ): Promise<{ whatsapp: TrendDeliveryResult; email: TrendDeliveryResult }> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
   const whatsapp: TrendDeliveryResult = { attempted: false, sent: false };
@@ -243,7 +248,7 @@ export async function deliverTrendReport(
     try {
       await sendEmail({
         to: config.reportEmailTo,
-        subject: `Weekly trend report — Legacy Colombia (${new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" })})`,
+        subject: `Weekly trend report — ${propertyLabel ?? "Legacy Colombia"} (${new Date().toLocaleDateString("en-US", { timeZone: "America/New_York" })})`,
         html: formatTrendReportForEmailHtml(report),
       });
       email.sent = true;

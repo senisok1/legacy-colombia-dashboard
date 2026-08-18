@@ -3,6 +3,7 @@ import { isDbConfigured, config } from "@/lib/config";
 import { getUserByEmail, createUserForSignup } from "@/lib/users";
 import { createTrialOrganization } from "@/lib/organizations";
 import { createSessionToken, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS } from "@/lib/session";
+import { checkRateLimit, getClientIp } from "@/lib/publicApiGuard";
 
 // Self-serve tenant signup (Phase 2 of the multi-tenant conversion — see
 // db/migrations/0015_organizations.sql and lib/organizations.ts). Creates a
@@ -45,6 +46,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
   }
 
+  // Registration throttle (2026-08-17 audit). This is OPEN registration: every
+  // successful call creates a whole new organization (createTrialOrganization)
+  // plus a user, and every call — success or 409 — probes whether an email is
+  // already registered. Unthrottled, that's both an unlimited-org-creation
+  // vector and an account-enumeration harvester (the 409 below is kept, on
+  // purpose, for real users' benefit). So cap hard per-IP: 5 attempts per
+  // hour. Same Redis limiter as the login route; it FAILS OPEN if Redis is
+  // down so a hiccup can never block a legitimate signup. Stricter window than
+  // login because the abuse here (spawning orgs / harvesting) is costlier than
+  // a password guess.
+  const ip = getClientIp(req);
+  const signupOk = await checkRateLimit(ip, "signup-ip", 5, 60 * 60);
+  if (!signupOk) {
+    return NextResponse.json(
+      { error: "Too many signup attempts. Please wait a while and try again." },
+      { status: 429 }
+    );
+  }
+
   try {
     // Check first so the overwhelmingly common case (a genuinely new email)
     // never creates an orphaned trial org — see createUserForSignup's own
@@ -82,6 +102,9 @@ export async function POST(req: NextRequest) {
       email: user.email,
       role: user.role,
       organizationId: user.organizationId,
+      // 2026-08-17 audit: stamp the session epoch (0 for a brand-new user) so
+      // this cookie is revocable via the proxy epoch check like every other.
+      epoch: user.sessionEpoch,
     });
     const res = NextResponse.json({ ok: true, organizationId: organization.id });
     res.cookies.set(SESSION_COOKIE_NAME, token, {

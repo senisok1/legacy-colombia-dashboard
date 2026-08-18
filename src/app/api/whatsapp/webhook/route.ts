@@ -13,6 +13,9 @@ import {
   getPendingDraftByWamid,
   getOldestPendingDraft,
   resolvePendingDraft,
+  claimDraftForSend,
+  releaseDraftClaim,
+  markInboundProcessed,
 } from "@/lib/pendingDrafts";
 import {
   getChatEscalationByWamid,
@@ -82,12 +85,19 @@ async function resolvePendingApproval(contextWamid: string | undefined): Promise
     if (draft) return { kind: "draft", draft };
     const escalation = await getChatEscalationByWamid(contextWamid);
     if (escalation) return { kind: "escalation", escalation };
-    // Fall through to the "oldest overall" fallback below — a swipe-reply
-    // to a message that isn't a tracked approval (e.g. an old confirmation
-    // text) shouldn't silently do nothing if there's still something
-    // genuinely pending.
+    // BUG FIX (2026-08-17 audit): this used to fall through to "oldest
+    // pending overall" when a swipe-reply's contextWamid didn't resolve.
+    // But wamid keys expire after 3 days, so swipe-replying "YES" to an old
+    // approval card would silently send whatever unrelated draft happened to
+    // be oldest — a message to a DIFFERENT guest than the one on screen.
+    // When Seni deliberately quoted a specific message, an unresolved quote
+    // means "that item is gone," not "send something else." Refuse.
+    return null;
   }
 
+  // Only reached when there's NO contextWamid — a plain reply not tied to any
+  // specific approval card. The oldest-pending fallback is acceptable here
+  // because Seni didn't point at anything, and this inbox is low-volume.
   const [oldestDraft, oldestEscalation] = await Promise.all([
     getOldestPendingDraft(),
     getOldestPendingChatEscalation(),
@@ -334,6 +344,17 @@ export async function POST(req: NextRequest) {
   const incoming = parseIncomingWhatsAppMessages(body);
 
   for (const msg of incoming) {
+    // Idempotency (2026-08-17 audit). Meta retries this POST whenever our
+    // handler is slow — and it IS slow here (translation + OwnerRez sends run
+    // inline). Without deduping the inbound message id, a retry replays the
+    // same "YES" and can race past the per-draft claim on a second instance.
+    // Dropping an already-seen inbound id closes that. First-seen returns
+    // true; a replay returns false and is skipped entirely.
+    if (msg.wamid) {
+      const fresh = await markInboundProcessed(msg.wamid).catch(() => true);
+      if (!fresh) continue;
+    }
+
     if (!isFromAuthorizedSender(msg.from)) {
       // Not Seni. Gabriel occasionally texts this same number too — that's
       // never a business inquiry, just ignore it (same as before this
@@ -442,33 +463,44 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
+    // Never send an empty message (2026-08-17 audit). A draft whose AI
+    // drafting failed stores draftReply:"" (see lib/webhookHandlers.ts), and
+    // "YES" to it would post an empty reply into the guest thread.
+    if (!finalText.trim()) {
+      await sendWhatsAppText(
+        `That draft for ${draft.guestName ?? "the guest"} is empty, so nothing was sent — reply "EDIT: <your text>" to send your own wording.`
+      ).catch(() => {});
+      continue;
+    }
+
+    // Atomic claim BEFORE the send (2026-08-17 audit). Exactly one actor can
+    // transition this draft from pending to in-flight; a concurrent dashboard
+    // approval or Meta retry that lost the race is turned away here instead of
+    // sending the guest a second copy.
+    const claim = await claimDraftForSend(draft.id);
+    if (!claim.ok) {
+      const why =
+        claim.reason === "in_flight"
+          ? "is already being sent"
+          : claim.reason === "already_resolved"
+            ? `was already ${claim.draft?.status ?? "resolved"}`
+            : "is no longer available";
+      await sendWhatsAppText(
+        `That reply to ${draft.guestName ?? "the guest"} ${why} — nothing sent twice. Check the Approvals tab.`
+      ).catch(() => {});
+      continue;
+    }
+
+    // ONLY the OwnerRez send is inside this try. A failure here means the
+    // guest did NOT get the message, so we release the claim and mark it
+    // failed. Everything AFTER the send (recording, notifying, logging) is
+    // deliberately outside — the guest already has the message, so a hiccup
+    // recording it must NOT flip the draft to "failed" and lure Seni into
+    // resending (2026-08-17 audit: that was the mis-recorded-send double-send).
     try {
       await sendMessage(draft.threadId, finalText);
-      await resolvePendingDraft(draft.id, { status: "sent", draftReply: finalText });
-      await appendMessage({
-        bookingId: draft.bookingId,
-        guestId: draft.guestId,
-        guestName: draft.guestName,
-        subject: "AI-assisted reply (WhatsApp-approved)",
-        language: "en",
-        body: logText,
-        status: "sent",
-      });
-      const gabrielNote = await notifyGabrielIfServiceRequest(draft);
-      await sendWhatsAppText(`Sent to ${draft.guestName ?? "the guest"} ✅${gabrielNote}`).catch(() => {});
-      await logAiActivity({
-        agentKey: AGENT_KEY,
-        agentDisplayName: AGENT_NAME,
-        task: "Send guest reply",
-        trigger: isYes
-          ? `Seni replied "YES" via WhatsApp for draft ${draft.id}`
-          : `Seni sent a custom reply via WhatsApp for draft ${draft.id}`,
-        decision: isYes ? "approved as drafted" : "approved with edits",
-        communicationSent: { channel: "ownerrez_message", threadId: draft.threadId, body: finalText },
-        actionTaken: "Sent message to guest via OwnerRez",
-        result: "sent",
-      });
     } catch (err) {
+      await releaseDraftClaim(draft.id);
       await resolvePendingDraft(draft.id, { status: "failed" });
       const message = err instanceof Error ? err.message : "Unknown error.";
       await sendWhatsAppText(
@@ -481,8 +513,36 @@ export async function POST(req: NextRequest) {
         trigger: `Draft ${draft.id} (${draft.guestName ?? "guest"})`,
         error: message,
         result: "failed",
-      });
+      }).catch(() => {});
+      continue;
     }
+
+    // Sent successfully. None of the below can un-send it, so each step is
+    // best-effort and the draft stays "sent" no matter what.
+    await resolvePendingDraft(draft.id, { status: "sent", draftReply: finalText }).catch(() => {});
+    await appendMessage({
+      bookingId: draft.bookingId,
+      guestId: draft.guestId,
+      guestName: draft.guestName,
+      subject: "AI-assisted reply (WhatsApp-approved)",
+      language: "en",
+      body: logText,
+      status: "sent",
+    }).catch(() => {});
+    const gabrielNote = await notifyGabrielIfServiceRequest(draft).catch(() => "");
+    await sendWhatsAppText(`Sent to ${draft.guestName ?? "the guest"} ✅${gabrielNote}`).catch(() => {});
+    await logAiActivity({
+      agentKey: AGENT_KEY,
+      agentDisplayName: AGENT_NAME,
+      task: "Send guest reply",
+      trigger: isYes
+        ? `Seni replied "YES" via WhatsApp for draft ${draft.id}`
+        : `Seni sent a custom reply via WhatsApp for draft ${draft.id}`,
+      decision: isYes ? "approved as drafted" : "approved with edits",
+      communicationSent: { channel: "ownerrez_message", threadId: draft.threadId, body: finalText },
+      actionTaken: "Sent message to guest via OwnerRez",
+      result: "sent",
+    }).catch(() => {});
   }
 
   // Meta requires a 200 within a few seconds regardless of outcome, or it

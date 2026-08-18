@@ -1,10 +1,62 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "./lib/session";
+import { getUserSessionEpoch } from "./lib/users";
 
 // Proxy (formerly "middleware") always runs on the Node.js runtime in
-// Next.js 16+, so node:crypto is available here without extra config.
+// Next.js 16+, so node:crypto is available here without extra config — and,
+// crucially for the session-epoch check below, so is `pg` (the DB layer that
+// getUserSessionEpoch reaches). This same file already imports node:crypto
+// via lib/session.ts and builds fine, which confirms the Node runtime; a real
+// Edge-runtime middleware could not do either.
 
-export function proxy(req: NextRequest) {
+// --- Session-epoch cache (2026-08-17 audit) ------------------------------
+// SESSION INVALIDATION FIX. The signed cookie embeds role+org and lived up to
+// 30 days (now 7, see lib/session.ts) with NO server-side revocation, so a
+// deleted/deactivated/demoted/password-changed user's token kept working with
+// its original privileges. The real fix is a per-user `session_epoch`
+// (db/migrations/0036) that's stamped into the token at login and bumped in
+// lib/users.ts on any of those events; a token whose epoch is behind the live
+// DB value is now rejected here.
+//
+// WHY THE CHECK LIVES HERE, NOT IN lib/session.ts: the natural place would be
+// getSessionFromRequest()/getServerSession(), but getSessionFromRequest() is
+// SYNCHRONOUS and is called synchronously from ~40 route handlers outside this
+// change's file scope — turning it async to await a DB read would break every
+// one of them. The proxy is instead the single choke point every request
+// already passes through (it's where the READ_ONLY role gate lives too), so
+// enforcing here covers all pages and APIs with zero caller changes.
+//
+// WHY A CACHE: the proxy runs on EVERY request and must stay fast — a raw DB
+// read per request is exactly what to avoid. So epochs are cached per warm
+// instance for a short TTL; a revocation therefore propagates within at most
+// EPOCH_TTL_MS (plus the fact that the very next login always re-reads). This
+// trades a small revocation-latency window for not adding a DB round trip to
+// the hot path. A DB error FAILS OPEN (admits the request) — the token is
+// still signature- and expiry-checked, and hard-failing here would lock
+// everyone out on a transient DB blip.
+const EPOCH_TTL_MS = 60_000;
+type EpochEntry = { epoch: number | null; at: number };
+const epochCache = new Map<string, EpochEntry>();
+
+/** Returns the user's current session epoch (null = no such user, e.g.
+ * deleted), or the string "db-error" when the lookup itself failed and the
+ * caller should fail open. Cached per warm instance for EPOCH_TTL_MS. */
+async function currentSessionEpoch(email: string): Promise<number | null | "db-error"> {
+  const key = email.toLowerCase();
+  const now = Date.now();
+  const cached = epochCache.get(key);
+  if (cached && now - cached.at < EPOCH_TTL_MS) return cached.epoch;
+  try {
+    const epoch = await getUserSessionEpoch(email);
+    epochCache.set(key, { epoch, at: now });
+    return epoch;
+  } catch {
+    // Don't cache a failure; fail open for this request only.
+    return "db-error";
+  }
+}
+
+export async function proxy(req: NextRequest) {
   // Per-user login (see lib/session.ts) is the only check now. The legacy
   // single shared DASHBOARD_PASSWORD cookie ("lc_dashboard_auth") was
   // retired 2026-08-10 — it let a browser into every page with a valid
@@ -97,6 +149,31 @@ export function proxy(req: NextRequest) {
   }
 
   if (validUserSession) {
+    // SESSION-EPOCH ENFORCEMENT (2026-08-17 audit). Before honoring the
+    // token's embedded role/org, confirm it hasn't been revoked. A token whose
+    // epoch is behind the live DB value — or whose user no longer exists — is
+    // treated exactly as if it were unsigned: the page bounces to /login and
+    // the API returns 401. This is what makes deactivate/delete/demote/
+    // change-password take effect within the cache TTL instead of after up to
+    // 7 days. DB errors fall through (fail open) — see currentSessionEpoch.
+    const liveEpoch = await currentSessionEpoch(session!.email);
+    const tokenEpoch = session!.epoch ?? 0; // pre-epoch tokens are treated as 0
+    const revoked = liveEpoch === null || (liveEpoch !== "db-error" && liveEpoch !== tokenEpoch);
+    if (revoked) {
+      if (pathname.startsWith("/api/")) {
+        return NextResponse.json(
+          { error: "Your session is no longer valid. Please sign in again." },
+          { status: 401 }
+        );
+      }
+      const loginUrl = new URL("/login", req.url);
+      loginUrl.searchParams.set("next", pathname);
+      const res = NextResponse.redirect(loginUrl);
+      // Proactively clear the dead cookie so the browser stops re-sending it.
+      res.cookies.set(SESSION_COOKIE_NAME, "", { path: "/", maxAge: 0 });
+      return res;
+    }
+
     // READ_ONLY role gate (2026-08-16, Seni's ask: a team login for
     // cleaners/property managers that "can view all tabs only but without
     // the ability to reply to guests or modify anything"). Enforced HERE,

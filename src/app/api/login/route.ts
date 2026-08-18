@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isPerUserLoginConfigured } from "@/lib/config";
 import { getUserByEmail, verifyPassword, touchLastLogin } from "@/lib/users";
 import { createSessionToken, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS } from "@/lib/session";
+import { checkRateLimit, getClientIp } from "@/lib/publicApiGuard";
 
 // Per-user login only. The legacy password-only path (a single shared
 // DASHBOARD_PASSWORD, no email, granting a "lc_dashboard_auth" cookie with
@@ -28,6 +29,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Enter your email and password." }, { status: 400 });
   }
 
+  // Brute-force throttle (2026-08-17 audit): this route was previously
+  // unthrottled, so an attacker could grind unlimited email/password guesses
+  // against it (each guess runs a real bcrypt compare). Cap attempts per-IP
+  // AND per-email at 10 per 15 minutes using the same Redis fixed-window
+  // limiter the public chat widget already uses. Both keys are checked so one
+  // attacker IP can't spray many accounts, and one target account can't be
+  // ground down from many IPs. checkRateLimit FAILS OPEN (returns true) when
+  // Redis is unconfigured or hiccups — deliberately, so a Redis outage can
+  // never lock the real owner out of his own dashboard. A 429 here is generic
+  // and reveals nothing about whether the email exists (same reasoning as the
+  // shared 401 below).
+  const ip = getClientIp(req);
+  const emailKey = email.trim().toLowerCase();
+  const RL_MAX = 10;
+  const RL_WINDOW = 15 * 60; // 15 minutes
+  const [ipOk, emailOk] = await Promise.all([
+    checkRateLimit(ip, "login-ip", RL_MAX, RL_WINDOW),
+    checkRateLimit(emailKey, "login-email", RL_MAX, RL_WINDOW),
+  ]);
+  if (!ipOk || !emailOk) {
+    return NextResponse.json(
+      { ok: false, error: "Too many attempts. Please wait a few minutes and try again." },
+      { status: 429 }
+    );
+  }
+
   const user = await getUserByEmail(email.trim());
   if (!user || !user.active || !password || !(await verifyPassword(user, password))) {
     return NextResponse.json({ ok: false, error: "Incorrect email or password." }, { status: 401 });
@@ -37,6 +64,9 @@ export async function POST(req: NextRequest) {
     email: user.email,
     role: user.role,
     organizationId: user.organizationId,
+    // 2026-08-17 audit: stamp the current session epoch into the token so the
+    // proxy can revoke it later (see lib/session.ts + lib/users.ts).
+    epoch: user.sessionEpoch,
   });
   await touchLastLogin(user.id).catch(() => {}); // best-effort, never blocks login
   const res = NextResponse.json({ ok: true });

@@ -78,6 +78,22 @@ export async function redisDel(key: string): Promise<void> {
   await c.del(key);
 }
 
+/**
+ * Atomic set-if-absent (Redis `SET key val NX EX`) — the primitive the store
+ * lacked (2026-08-17 audit). Returns true only if THIS caller created the key,
+ * false if it already existed. This is the one operation that can serialize
+ * concurrent actors without a read-modify-write race, so it's what the
+ * guest-reply approval flow uses to guarantee a draft is sent at most once
+ * even when the dashboard and a WhatsApp "yes" (or a Meta webhook retry) land
+ * at the same moment. A TTL is required so a crash between claim and send
+ * can't wedge a draft as permanently un-sendable.
+ */
+export async function redisSetNX(key: string, value: string, exSeconds: number): Promise<boolean> {
+  const c = await getClient();
+  const res = await c.set(key, value, { NX: true, EX: exSeconds });
+  return res === "OK";
+}
+
 export async function redisKeys(pattern: string): Promise<string[]> {
   const c = await getClient();
   return c.keys(pattern);

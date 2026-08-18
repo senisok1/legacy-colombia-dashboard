@@ -15,9 +15,23 @@ import { listActiveOrganizations } from "@/lib/organizations";
 export const maxDuration = 120;
 
 export async function GET(req: NextRequest) {
-  // Vercel signs its own cron requests with this header when CRON_SECRET is
-  // set — same guard as api/cron/check-messages.
-  if (config.cronSecret) {
+  // CRON AUTH — FAIL CLOSED IN PRODUCTION (2026-08-17 audit). This used to be
+  // `if (config.cronSecret) { check }`, which meant an unset CRON_SECRET in
+  // production skipped the check entirely and left this endpoint open. This
+  // one can even AUTO-APPLY rate changes (runAutoApplyPass below) when Seni
+  // has enabled it, so an open endpoint is especially unwanted. Now a missing
+  // secret is rejected in production (503 + loud console.error); only
+  // non-production (VERCEL_ENV !== "production") may run without a secret.
+  const isProd = process.env.VERCEL_ENV === "production";
+  if (!config.cronSecret) {
+    if (isProd) {
+      console.error(
+        "[cron/revenue-snapshot] CRON_SECRET is not set in production — refusing to run this endpoint unauthenticated. Set CRON_SECRET in Vercel."
+      );
+      return NextResponse.json({ error: "Cron not configured." }, { status: 503 });
+    }
+    console.warn("[cron/revenue-snapshot] CRON_SECRET unset — running WITHOUT auth (non-production only).");
+  } else {
     const auth = req.headers.get("authorization");
     if (auth !== `Bearer ${config.cronSecret}`) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });

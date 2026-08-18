@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendMessage } from "@/lib/ownerrez";
 import { appendMessage } from "@/lib/store";
-import { resolvePendingDraft } from "@/lib/pendingDrafts";
+import { resolvePendingDraft, claimDraftForSend, releaseDraftClaim } from "@/lib/pendingDrafts";
 import { sendWhatsAppText } from "@/lib/whatsapp";
 import { translateToLanguage } from "@/lib/translate";
 import { isMessagingConfigured, isWhatsAppConfigured } from "@/lib/config";
@@ -83,74 +83,108 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  if (!payload.threadId || !payload.body?.trim()) {
-    return NextResponse.json({ error: "threadId and body are required." }, { status: 400 });
+  if (!payload.threadId) {
+    return NextResponse.json({ error: "threadId is required." }, { status: 400 });
   }
 
-  // Seni only writes in English. "approve" sends the AI draft's reply,
-  // which is already in the guest's own language — nothing to translate.
-  // "edit" (his own free-typed or edited-from-suggestion text) gets
-  // auto-translated into the guest's language before it goes out, the same
-  // rule the WhatsApp approval flow uses (see api/whatsapp/webhook).
-  const englishBody = payload.body;
-  const sendText =
-    payload.action === "edit" && payload.targetLanguage
-      ? await translateToLanguage(englishBody, payload.targetLanguage, session?.organizationId)
-      : englishBody;
+  // SECURITY FIX (2026-08-17 audit). This path used to send payload.body — the
+  // BROWSER's text — for BOTH approve and edit, and only marked the draft
+  // resolved afterward, with no read of its status. Two consequences:
+  //   1. Approving here after (or during) a WhatsApp "yes" sent the guest the
+  //      message TWICE — the exact double-send the old comment claimed was
+  //      impossible.
+  //   2. "approve" sent whatever the client POSTed, not the reviewed draft.
+  //
+  // Now: on "approve" the STORED draft text is authoritative (the client body
+  // is ignored), and every draft-backed send goes through the same atomic
+  // claim the WhatsApp path uses, so a draft is sent at most once across both
+  // channels.
+  const draftId = payload.draftId;
 
-  try {
-    await sendMessage(payload.threadId, sendText, session?.organizationId);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to send message.";
-    if (payload.draftId) await resolvePendingDraft(payload.draftId, { status: "failed" }, session?.organizationId, groupId);
-    const failedEntry = await appendMessage({
+  // What actually goes to the guest, and what's logged in English.
+  let sendText: string;
+  let englishBody: string;
+
+  if (draftId) {
+    // Claim first — this both proves the draft is still pending AND blocks a
+    // racing WhatsApp/dashboard approval of the same draft.
+    const claim = await claimDraftForSend(draftId, session?.organizationId);
+    if (!claim.ok) {
+      const why =
+        claim.reason === "in_flight"
+          ? "is already being sent from another channel"
+          : claim.reason === "already_resolved"
+            ? `was already ${claim.draft?.status ?? "resolved"}`
+            : "no longer exists";
+      return NextResponse.json(
+        { error: `That reply ${why} — nothing was sent. Refresh the Approvals tab.` },
+        { status: 409 }
+      );
+    }
+    const draft = claim.draft;
+
+    if (payload.action === "approve") {
+      // Authoritative: the reviewed draft, already in the guest's language.
+      sendText = draft.draftReply ?? "";
+      englishBody = draft.replyEnglish ?? draft.draftReply ?? "";
+    } else {
+      // Edit of a suggestion: Seni's own English text, translated out.
+      englishBody = payload.body?.trim() ?? "";
+      if (!englishBody) {
+        await releaseDraftClaim(draftId, session?.organizationId);
+        return NextResponse.json({ error: "Your edited reply is empty." }, { status: 400 });
+      }
+      sendText = payload.targetLanguage
+        ? await translateToLanguage(englishBody, payload.targetLanguage, session?.organizationId)
+        : englishBody;
+    }
+
+    if (!sendText.trim()) {
+      await releaseDraftClaim(draftId, session?.organizationId);
+      return NextResponse.json({ error: "That draft is empty — nothing was sent." }, { status: 400 });
+    }
+
+    try {
+      await sendMessage(payload.threadId, sendText, session?.organizationId);
+    } catch (err) {
+      // Send genuinely failed → release the claim so a real retry can proceed.
+      await releaseDraftClaim(draftId, session?.organizationId);
+      await resolvePendingDraft(draftId, { status: "failed" }, session?.organizationId, groupId);
+      const message = err instanceof Error ? err.message : "Failed to send message.";
+      const failedEntry = await appendMessage({
+        bookingId: payload.bookingId,
+        guestId: payload.guestId,
+        guestName: payload.guestName,
+        subject: "AI-assisted reply (dashboard)",
+        language: "en",
+        body: englishBody,
+        status: "failed",
+      }, session?.organizationId).catch(() => null);
+      return NextResponse.json({ error: message, entry: failedEntry }, { status: 502 });
+    }
+
+    // Sent. Nothing below can un-send it, so keep it "sent" regardless.
+    const entry = await appendMessage({
       bookingId: payload.bookingId,
       guestId: payload.guestId,
       guestName: payload.guestName,
-      subject: payload.action === "approve" ? "AI-assisted reply (dashboard)" : "Direct reply (dashboard)",
+      subject:
+        payload.action === "approve"
+          ? "AI-assisted reply (dashboard-approved)"
+          : "AI-assisted reply, edited (dashboard)",
       language: "en",
       body: englishBody,
-      status: "failed",
-    }, session?.organizationId);
-    if (payload.draftId) {
-      await logAiActivity({
-        agentKey: AGENT_KEY,
-        agentDisplayName: AGENT_NAME,
-        task: "Send guest reply",
-        trigger: `Draft ${payload.draftId} (dashboard)`,
-        error: message,
-        result: "failed",
-      });
-    }
-    return NextResponse.json({ error: message, entry: failedEntry }, { status: 502 });
-  }
+      status: "sent",
+    }, session?.organizationId).catch(() => null);
 
-  // Logged in English (what Seni actually wrote) so his own Sent log stays
-  // readable — the guest received sendText, in their own language.
-  const entry = await appendMessage({
-    bookingId: payload.bookingId,
-    guestId: payload.guestId,
-    guestName: payload.guestName,
-    subject:
-      payload.action === "approve"
-        ? "AI-assisted reply (dashboard-approved)"
-        : payload.draftId
-          ? "AI-assisted reply, edited (dashboard)"
-          : "Direct reply (dashboard)",
-    language: "en",
-    body: englishBody,
-    status: "sent",
-  }, session?.organizationId);
-
-  if (payload.draftId) {
     const resolved = await resolvePendingDraft(
-      payload.draftId,
+      draftId,
       { status: "sent", draftReply: sendText },
       session?.organizationId,
       groupId
-    );
+    ).catch(() => null);
     if (isWhatsAppConfigured()) {
-      const gabrielNote = resolved ? await notifyGabrielIfServiceRequest(resolved, groupId) : "";
+      const gabrielNote = resolved ? await notifyGabrielIfServiceRequest(resolved, groupId).catch(() => "") : "";
       await sendWhatsAppText(
         `Sent to ${payload.guestName ?? "the guest"} via dashboard ✅${gabrielNote}`,
         session?.organizationId
@@ -160,13 +194,51 @@ export async function POST(req: NextRequest) {
       agentKey: AGENT_KEY,
       agentDisplayName: AGENT_NAME,
       task: "Send guest reply",
-      trigger: `Seni resolved draft ${payload.draftId} from the dashboard (${payload.action})`,
+      trigger: `Seni resolved draft ${draftId} from the dashboard (${payload.action})`,
       decision: payload.action === "approve" ? "approved as drafted" : "approved with edits",
       communicationSent: { channel: "ownerrez_message", threadId: payload.threadId, body: sendText },
       actionTaken: "Sent message to guest via OwnerRez",
       result: "sent",
-    });
+    }).catch(() => {});
+
+    return NextResponse.json({ ok: true, entry });
   }
+
+  // No draftId: a direct/free-typed reply, not tied to any AI draft. No claim
+  // to contend for — but still translate out and isolate the send.
+  englishBody = payload.body?.trim() ?? "";
+  if (!englishBody) {
+    return NextResponse.json({ error: "body is required." }, { status: 400 });
+  }
+  sendText = payload.targetLanguage
+    ? await translateToLanguage(englishBody, payload.targetLanguage, session?.organizationId)
+    : englishBody;
+
+  try {
+    await sendMessage(payload.threadId, sendText, session?.organizationId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to send message.";
+    const failedEntry = await appendMessage({
+      bookingId: payload.bookingId,
+      guestId: payload.guestId,
+      guestName: payload.guestName,
+      subject: "Direct reply (dashboard)",
+      language: "en",
+      body: englishBody,
+      status: "failed",
+    }, session?.organizationId).catch(() => null);
+    return NextResponse.json({ error: message, entry: failedEntry }, { status: 502 });
+  }
+
+  const entry = await appendMessage({
+    bookingId: payload.bookingId,
+    guestId: payload.guestId,
+    guestName: payload.guestName,
+    subject: "Direct reply (dashboard)",
+    language: "en",
+    body: englishBody,
+    status: "sent",
+  }, session?.organizationId).catch(() => null);
 
   return NextResponse.json({ ok: true, entry });
 }
