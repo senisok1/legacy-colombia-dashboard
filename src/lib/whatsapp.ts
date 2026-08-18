@@ -404,32 +404,63 @@ export async function sendAdminReplyNotificationTemplate(
   organizationId?: string
 ): Promise<string> {
   const creds = await resolveWhatsAppCredentials(organizationId);
-  if (!isAdminReplyNotificationConfigured(creds)) {
-    throw new WhatsAppError("Admin reply notification template isn't configured/approved yet.");
-  }
 
-  return postTemplateWithLanguageFallback(
-    {
-      messaging_product: "whatsapp",
-      to: creds.recipientNumber,
-      type: "template",
-      template: {
-        name: config.whatsappAdminReplyNotificationTemplate,
-        language: { code: config.whatsappTemplateLanguage },
-        components: [
-          {
-            type: "body",
-            parameters: [
-              { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
-              { type: "text", text: templateParam(params.guestMessage.slice(0, 350)) },
-              { type: "text", text: templateParam(params.adminReply.slice(0, 350)) },
-            ],
-          },
-        ],
+  // ROOT CAUSE (2026-08-18, Seni: "I didn't get the last 3 guest messages…
+  // I also need the admin replies on my WhatsApp"): the configured template
+  // name defaults to "admin_reply_notification", but NO such template exists
+  // on the WhatsApp Business Account (confirmed live via
+  // /api/admin/whatsapp-delivery?templates=1 — seven templates, none of them
+  // this one). Every send here threw 132001, callers fell back to
+  // sendWhatsAppText, and Meta rejected that with 131047 because Seni's 24h
+  // session window was shut — six admin-reply FYIs silently lost in one day
+  // while the log said "notified". Durable fix: fall back to the APPROVED
+  // daily_summary_alert template as a carrier (exact same trick
+  // lib/bookingAlerts.ts uses for the new-booking alert, and for the same
+  // reason) — a real template reaches Seni regardless of the session window.
+  // If a real admin_reply_notification template is ever approved on the WABA,
+  // the primary path below just starts working and the carrier goes unused.
+  const viaCarrier = () =>
+    sendDailySummaryTemplate(
+      {
+        orgLabel: config.propertyName || "Legacy Colombia",
+        headline: `Admin replied to ${templateParam(params.guestName, 60) || "a guest"} in OwnerRez (FYI): "${params.adminReply}"`,
+        statsLine: `Guest's message: "${params.guestMessage}" — no action needed.`,
       },
-    },
-    creds
-  );
+      organizationId
+    );
+
+  if (!isAdminReplyNotificationConfigured(creds)) return viaCarrier();
+
+  try {
+    return await postTemplateWithLanguageFallback(
+      {
+        messaging_product: "whatsapp",
+        to: creds.recipientNumber,
+        type: "template",
+        template: {
+          name: config.whatsappAdminReplyNotificationTemplate,
+          language: { code: config.whatsappTemplateLanguage },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
+                { type: "text", text: templateParam(params.guestMessage.slice(0, 350)) },
+                { type: "text", text: templateParam(params.adminReply.slice(0, 350)) },
+              ],
+            },
+          ],
+        },
+      },
+      creds
+    );
+  } catch (err) {
+    console.warn(
+      "[whatsapp] admin_reply_notification template send failed — using daily_summary_alert carrier:",
+      err instanceof Error ? err.message : err
+    );
+    return viaCarrier();
+  }
 }
 
 /**

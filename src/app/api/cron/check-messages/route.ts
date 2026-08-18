@@ -494,6 +494,16 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
             if (gDet && gDet.language !== "English" && gDet.english.trim()) guestContext = gDet.english.trim();
           }
 
+          // Delivery honesty (2026-08-18): this used to log "notified" even
+          // when both the template AND the free-text fallback failed (the
+          // fallback swallowed its own error) — six admin FYIs died with
+          // 131047 that day while the activity log claimed success.
+          // sendAdminReplyNotificationTemplate now carries its own durable
+          // fallback (daily_summary_alert carrier — see lib/whatsapp.ts), and
+          // the free-text rung here is a last resort only. Whatever happens,
+          // the log records what actually happened.
+          let adminFyiSent = false;
+          let adminFyiError: string | undefined;
           try {
             await sendAdminReplyNotificationTemplate(
               {
@@ -503,11 +513,18 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
               },
               orgId
             );
-          } catch {
-            await sendWhatsAppText(
-              `✅ An admin replied to ${adminGuestName} (${booking.propertyName ?? "Legacy Colombia"}) directly in OwnerRez${translatedNote}:\n"${adminReplyEnglish.slice(0, 400)}"\n\nGuest's message: "${guestContext.slice(0, 250)}"\n\nFYI only — no action needed.`,
-              orgId
-            ).catch(() => {});
+            adminFyiSent = true;
+          } catch (tmplErr) {
+            adminFyiError = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
+            try {
+              await sendWhatsAppText(
+                `✅ An admin replied to ${adminGuestName} (${booking.propertyName ?? "Legacy Colombia"}) directly in OwnerRez${translatedNote}:\n"${adminReplyEnglish.slice(0, 400)}"\n\nGuest's message: "${guestContext.slice(0, 250)}"\n\nFYI only — no action needed.`,
+                orgId
+              );
+              adminFyiSent = true;
+            } catch (textErr) {
+              adminFyiError = textErr instanceof Error ? textErr.message : String(textErr);
+            }
           }
 
           await logAiActivity(
@@ -516,8 +533,11 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
               agentDisplayName: AGENT_NAME,
               task: "Notify admin reply",
               trigger: `Admin replied directly in OwnerRez on thread ${threadId} (${adminGuestName})`,
-              actionTaken: "Sent FYI WhatsApp to Seni with English reading of the admin's reply",
-              result: "notified",
+              actionTaken: adminFyiSent
+                ? "Sent FYI WhatsApp to Seni with English reading of the admin's reply"
+                : "FAILED to deliver the FYI WhatsApp to Seni",
+              result: adminFyiSent ? "notified" : "failed",
+              error: adminFyiSent ? undefined : adminFyiError,
             },
             orgId
           ).catch(() => {});
