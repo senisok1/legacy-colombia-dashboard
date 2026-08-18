@@ -30,7 +30,9 @@ export const dynamic = "force-dynamic";
 //   PATCH  {id, accepted|declined}         → ONLY the tagged person — no CEO override
 //                                             (2026-08-18, Seni's explicit ask)
 //   PUT    {id, completed}                 → requester, tagged person, or a CEO
-//   DELETE {id}                            → the requester or a CEO
+//   DELETE {id}                            → Admin/Owner (CEO) only
+//                                             (2026-08-18, Seni's explicit ask — the
+//                                             requester can no longer remove their own)
 //
 // Editing a request's own details (title/description/neededBy/taggedEmail)
 // is its own route, api/team-requests/edit/route.ts — ONLY the original
@@ -309,8 +311,11 @@ export async function DELETE(req: NextRequest) {
   try {
     const existing = (await listTeamRequests(session.organizationId)).find((r) => r.id === body.id);
     if (!existing) return NextResponse.json({ error: "No such request." }, { status: 404 });
-    if (existing.requestedByEmail.toLowerCase() !== session.email.toLowerCase() && session.role !== "CEO") {
-      return NextResponse.json({ error: "Only the requester or an admin can delete this." }, { status: 403 });
+    // Admin/Owner only (2026-08-18, Seni's explicit ask) — the requester can
+    // no longer remove their own request; they can still edit it instead
+    // (see api/team-requests/edit/route.ts).
+    if (session.role !== "CEO") {
+      return NextResponse.json({ error: "Only an admin/owner can remove this." }, { status: 403 });
     }
 
     const ok = await deleteTeamRequest(session.organizationId, body.id);

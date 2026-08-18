@@ -363,7 +363,10 @@ export function TeamRequests() {
             // accept or deny that request") — no CEO override.
             const canDecide = !r.accepted && !r.declined && r.taggedEmail.toLowerCase() === viewerEmail.toLowerCase();
             const canComplete = r.accepted && !r.completed;
-            const canRemove = viewerIsCeo || r.requestedByEmail.toLowerCase() === viewerEmail.toLowerCase();
+            // Admin/Owner only (2026-08-18, Seni's explicit ask) — the
+            // requester can no longer remove their own; they can edit it
+            // instead.
+            const canRemove = viewerIsCeo;
             // Only the original requester may edit (2026-08-18, Seni: "only
             // that person should be able to edit that request") — no CEO
             // override — and only before a decision's been made, matching
