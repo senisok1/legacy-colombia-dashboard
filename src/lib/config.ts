@@ -133,6 +133,12 @@ export const config = {
   whatsappDailySummaryTemplate: (process.env.WHATSAPP_DAILY_SUMMARY_TEMPLATE || "daily_summary_alert").trim(),
   whatsappBookingNotificationTemplate: (process.env.WHATSAPP_BOOKING_NOTIFICATION_TEMPLATE || "booking_notification").trim(),
   whatsappAdminReplyNotificationTemplate: (process.env.WHATSAPP_ADMIN_REPLY_NOTIFICATION_TEMPLATE || "admin_reply_notification").trim(),
+  // New pre-booking inquiry alert (2026-08-18, Seni's ask: correct WhatsApp
+  // subject lines per alert type — see lib/whatsapp.ts's sendNewInquiryTemplate).
+  // handleOwnerRezInquiryEvent previously only had a plain-text fallback,
+  // which both showed no real "subject" and silently failed whenever Seni's
+  // 24h session window was closed.
+  whatsappNewInquiryTemplate: (process.env.WHATSAPP_NEW_INQUIRY_TEMPLATE || "new_inquiry_alert").trim(),
   // Team Requests (2026-08-18): notifies a TAGGED TEAM MEMBER (Gabriel, Ahmed,
   // Geo, …) that something needs their accept/deny — recipient varies per
   // request, unlike the templates above which always go to Seni's own

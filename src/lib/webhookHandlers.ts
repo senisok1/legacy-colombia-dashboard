@@ -2,6 +2,7 @@ import {
   sendAdminReplyNotificationTemplate,
   sendBookingNotificationTemplate,
   sendGuestReplyApprovalTemplate,
+  sendNewInquiryTemplate,
   sendWhatsAppText,
 } from "@/lib/whatsapp";
 import { config } from "@/lib/config";
@@ -480,9 +481,18 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
     const guestName = str(inq.guestName ?? inq.guest_name ?? inq.name) ?? "Guest";
     const question = str(inq.message ?? inq.question ?? inq.body) ?? "(no message provided)";
 
-    await sendWhatsAppText(
-      `❓ *New guest inquiry*\n\nFrom: ${guestName}\n\n"${question.slice(0, 400)}"\n\nCheck OwnerRez to respond.`
-    ).catch(() => {});
+    // Subject-line fix (2026-08-18): try the real "New Inquiry" template
+    // first — it reaches Seni whether or not his 24h session window is open,
+    // unlike the old plain-text-only send below (which also had no real
+    // "subject" heading at all). Falls back to the old free text if the
+    // template isn't configured/approved yet, so this never regresses.
+    try {
+      await sendNewInquiryTemplate({ guestName, question });
+    } catch {
+      await sendWhatsAppText(
+        `❓ *New Inquiry*\n\nFrom: ${guestName}\n\n"${question.slice(0, 400)}"\n\nCheck OwnerRez to respond.`
+      ).catch(() => {});
+    }
     console.log(`[webhookHandlers] Inquiry notification sent for ${guestName}`);
   } catch (error) {
     console.error("[webhookHandlers] Error processing inquiry event:", error);

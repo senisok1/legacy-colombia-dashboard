@@ -84,6 +84,10 @@ function isTeamTaskRequestConfigured(creds: WhatsAppCredentials): boolean {
   return Boolean(creds.accessToken && creds.phoneNumberId && config.whatsappTeamTaskRequestTemplate);
 }
 
+function isNewInquiryConfigured(creds: WhatsAppCredentials): boolean {
+  return Boolean(creds.accessToken && creds.phoneNumberId && creds.recipientNumber && config.whatsappNewInquiryTemplate);
+}
+
 /** Shared POST to the Graph API messages endpoint — both plain-text sends
  * (to Seni) and template sends (to Gabriel) funnel through this. */
 async function postWhatsAppMessage(payload: Record<string, unknown>, creds: WhatsAppCredentials): Promise<string> {
@@ -505,6 +509,47 @@ export async function sendTeamTaskRequestTemplate(
               { type: "text", text: templateParam(params.title.slice(0, 100)) },
               { type: "text", text: templateParam(params.neededBy.slice(0, 60)) },
               { type: "text", text: templateParam(params.description.slice(0, 350)) },
+            ],
+          },
+        ],
+      },
+    },
+    creds
+  );
+}
+
+/**
+ * Sends a new pre-booking inquiry alert to Seni as a real Meta-approved
+ * Utility template (2026-08-18, subject-line correction — see this file's
+ * daily-summary carrier comments for the bug this fixes: an inquiry alert
+ * previously had no template at all, just a plain-text send that both
+ * carried no real "subject" and silently failed whenever Seni's 24h session
+ * window was shut). Throws WhatsAppError if not configured/approved yet —
+ * callers should catch and fall back to sendWhatsAppText.
+ */
+export async function sendNewInquiryTemplate(
+  params: { guestName: string; question: string },
+  organizationId?: string
+): Promise<string> {
+  const creds = await resolveWhatsAppCredentials(organizationId);
+  if (!isNewInquiryConfigured(creds)) {
+    throw new WhatsAppError("New inquiry template isn't configured/approved yet.");
+  }
+
+  return postTemplateWithLanguageFallback(
+    {
+      messaging_product: "whatsapp",
+      to: creds.recipientNumber,
+      type: "template",
+      template: {
+        name: config.whatsappNewInquiryTemplate,
+        language: { code: config.whatsappTemplateLanguage },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
+              { type: "text", text: templateParam(params.question.slice(0, 400)) },
             ],
           },
         ],
