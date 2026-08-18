@@ -163,7 +163,7 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
   const monthLabel = view.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 
   return (
-    <aside className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 lg:sticky lg:top-20">
+    <aside className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
       <div className="mb-2 flex items-center justify-between">
         <button
           onClick={() => setMonthOffset((o) => o - 1)}
@@ -578,7 +578,17 @@ export function ManagementBoard() {
         </div>
       </section>
 
-      <div className="space-y-6">
+      {/* Sticky lives on this wrapper, not on StayCalendar alone (bug fixed
+          2026-08-18, Seni: "events list overlaps the calendar"). Position:
+          sticky elements paint above static siblings regardless of DOM
+          order, so a sticky calendar sitting directly above a static
+          EventsList meant the pinned calendar visually overlapped the
+          events list as it scrolled underneath — worse in dark mode since
+          both panels use a near-transparent bg-white/5. Making the whole
+          calendar+events block stick together as one unit keeps the
+          "always visible while scrolling stays" behavior with nothing left
+          to overlap. */}
+      <div className="space-y-6 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
         <StayCalendar stays={data.stays} calendarStays={data.calendarStays ?? []} />
         <EventsList stays={data.stays} />
       </div>

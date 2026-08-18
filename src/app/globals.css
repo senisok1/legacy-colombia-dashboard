@@ -1,6 +1,21 @@
 @import "tailwindcss";
 
 :root {
+  /* Bug found 2026-08-18 (Seni, screenshots from Geo's account): every
+     <select> dropdown in the app — Access role, People attending, Tag
+     someone to decide, etc., ~12 files — went nearly blank for anyone on
+     the default "indigo" theme with a dark OS/browser preference. Cause:
+     <option> text inherits `color: var(--foreground)` (near-white in dark
+     mode, see the media query below), but only the red-black theme ever
+     set `color-scheme: dark` to tell the BROWSER to paint the native
+     dropdown popup itself with a dark background. Without that, the popup
+     defaulted to the browser's plain white background — near-white text on
+     white, invisible except the one row the blue OS selection-highlight
+     lands on. `light dark` here lets the browser pick the right native
+     popup skin (and matching text/background) for whichever mode is
+     actually active, for every theme, without touching individual
+     <select>/<option> markup. */
+  color-scheme: light dark;
   --background: #ffffff;
   --foreground: #171717;
   /* Brand accent introduced in the 2026-08-05 visual refresh — a neutral
