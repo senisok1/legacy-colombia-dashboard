@@ -140,6 +140,32 @@ export async function linkWhatsAppMessageId(
   }
 }
 
+/** Corrects a stored draft's language / English-preview fields in place
+ * (2026-08-18). Exists because the check-messages alert builder now runs an
+ * INDEPENDENT language detection at send time (never trusting the drafting
+ * model's self-reported `language` — observed wrong for short messages like
+ * "Si gracias, todo bien", which produced a Spanish alert Seni couldn't
+ * read). When that detection corrects the language, the fix must ALSO land
+ * on the stored draft, because the EDIT: path later translates Seni's typed
+ * English into `draft.language` before sending — a draft mislabeled
+ * "English" would send his English text untranslated to a Spanish guest. */
+export async function updateDraftEnglishFields(
+  id: string,
+  fields: { language?: string; guestMessageEnglish?: string; replyEnglish?: string },
+  organizationId?: string
+): Promise<void> {
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const draft = await getPendingDraft(id, orgId);
+  if (!draft) return;
+  const next: PendingDraft = {
+    ...draft,
+    ...(fields.language ? { language: fields.language } : {}),
+    ...(fields.guestMessageEnglish ? { guestMessageEnglish: fields.guestMessageEnglish } : {}),
+    ...(fields.replyEnglish ? { replyEnglish: fields.replyEnglish } : {}),
+  };
+  await redisSet(draftKey(orgId, id), JSON.stringify(next), { exSeconds: DRAFT_TTL_SECONDS });
+}
+
 // ---------- Atomic send-claim (2026-08-17 audit: double-send fix) ----------
 // The bug: resolvePendingDraft is a read-modify-write with no compare-and-set,
 // and the WhatsApp approval path does the slow OwnerRez send BETWEEN reading

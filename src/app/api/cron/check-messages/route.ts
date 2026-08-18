@@ -4,8 +4,9 @@ import { getBookings, getGuests, getThreadMessages } from "@/lib/ownerrez";
 import { getGlobalHostStyleExamples, getCachedThreadMessages } from "@/lib/inbox";
 import { resolveGuestName, resolveGuestPhone, buildGuestsById } from "@/lib/guestName";
 import { draftGuestReply } from "@/lib/aiReply";
-import { translateText } from "@/lib/translate";
-import { sendWhatsAppText, sendGuestReplyApprovalTemplate } from "@/lib/whatsapp";
+import { translateText, detectLanguageAndTranslateToEnglish } from "@/lib/translate";
+import { sendWhatsAppText, sendGuestReplyApprovalTemplate, sendAdminReplyNotificationTemplate } from "@/lib/whatsapp";
+import { wasCrmSentReply, alreadyNotifiedAdminReply } from "@/lib/adminReplyMarkers";
 import {
   createPendingDraft,
   getLastSeenMessageId,
@@ -15,6 +16,7 @@ import {
   getLastCheckedAtMany,
   alreadyAlertedRecently,
   setLastCheckedAt,
+  updateDraftEnglishFields,
 } from "@/lib/pendingDrafts";
 import { logAiActivity } from "@/lib/aiActivity";
 import { trailingGuestMessages, combineGuestMessageBodies } from "@/lib/guestMessageGroup";
@@ -442,10 +444,91 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
     // lib/guestMessageGroup.ts for why.
     const newGuestMessages = trailingGuestMessages(newMessages);
     if (newGuestMessages.length === 0) {
-      // No new INBOUND guest message on this thread (only host messages, or
-      // nothing new). Nothing to alert, so it's safe to advance the cursor to
-      // the newest id now — there's no pending alert a later failure could
-      // drop by doing so.
+      // No new INBOUND guest message — but there may be new HOST messages:
+      // another admin replying to the guest directly in OwnerRez's own inbox
+      // (2026-08-18, Seni's ask: "there are other admin that might reply
+      // directly in OwnerRez" and he needs those on his WhatsApp too). The
+      // webhook path already pings for these when OwnerRez's webhook fires;
+      // this cron sweep is the reliable backstop, deduped against it via
+      // alreadyNotifiedAdminReply's content hash.
+      //
+      // Guards, in order:
+      //   - 6h age cap: on a thread's first-ever poll (or a Redis cursor
+      //     reset) newMessages is the ENTIRE history — without the cap that
+      //     would replay every past host message as "new admin activity".
+      //   - wasCrmSentReply: the CRM's own sends (approval YES, dashboard
+      //     replies, EDIT:) are Seni's own actions — never echo them back.
+      //   - alreadyNotifiedAdminReply: content dedupe vs the webhook path
+      //     and vs overlapping cron runs. Marks before sending, so a failed
+      //     informational ping is dropped, never retried into a page loop.
+      // Errors are swallowed per message and the cursor ALWAYS advances —
+      // a missed admin FYI is tolerable; re-alerting forever is not.
+      const ADMIN_REPLY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+      const newHostMessages = newMessages.filter((mm) => {
+        if (mm.isGuest || !mm.body?.trim()) return false;
+        const sentMs = mm.sentAt ? new Date(mm.sentAt).getTime() : NaN;
+        return Number.isFinite(sentMs) && Date.now() - sentMs <= ADMIN_REPLY_MAX_AGE_MS;
+      });
+      for (const hostMsg of newHostMessages) {
+        try {
+          const hostBody = hostMsg.body.trim();
+          if (await wasCrmSentReply(hostBody, orgId)) continue;
+          if (await alreadyNotifiedAdminReply(hostBody, orgId)) continue;
+
+          const adminGuestName = resolveGuestName(booking, guestsById);
+
+          // English readings for Seni — Gabriel and other co-admins reply in
+          // Spanish. Both the admin's reply and the guest message it answers
+          // get an English pass; each degrades to the original on failure.
+          let adminReplyEnglish = hostBody;
+          let translatedNote = "";
+          const det = await detectLanguageAndTranslateToEnglish(hostBody, orgId).catch(() => null);
+          if (det && det.language !== "English" && det.english.trim()) {
+            adminReplyEnglish = det.english.trim();
+            translatedNote = ` [translated from ${det.language}]`;
+          }
+          const lastGuestMsg = [...messages].reverse().find((mm) => mm.isGuest && mm.body?.trim());
+          let guestContext = lastGuestMsg?.body?.trim() ?? "(see OwnerRez thread)";
+          if (lastGuestMsg) {
+            const gDet = await detectLanguageAndTranslateToEnglish(guestContext, orgId).catch(() => null);
+            if (gDet && gDet.language !== "English" && gDet.english.trim()) guestContext = gDet.english.trim();
+          }
+
+          try {
+            await sendAdminReplyNotificationTemplate(
+              {
+                guestName: adminGuestName,
+                guestMessage: guestContext.slice(0, 300),
+                adminReply: adminReplyEnglish.slice(0, 350),
+              },
+              orgId
+            );
+          } catch {
+            await sendWhatsAppText(
+              `✅ An admin replied to ${adminGuestName} (${booking.propertyName ?? "Legacy Colombia"}) directly in OwnerRez${translatedNote}:\n"${adminReplyEnglish.slice(0, 400)}"\n\nGuest's message: "${guestContext.slice(0, 250)}"\n\nFYI only — no action needed.`,
+              orgId
+            ).catch(() => {});
+          }
+
+          await logAiActivity(
+            {
+              agentKey: AGENT_KEY,
+              agentDisplayName: AGENT_NAME,
+              task: "Notify admin reply",
+              trigger: `Admin replied directly in OwnerRez on thread ${threadId} (${adminGuestName})`,
+              actionTaken: "Sent FYI WhatsApp to Seni with English reading of the admin's reply",
+              result: "notified",
+            },
+            orgId
+          ).catch(() => {});
+        } catch (adminNotifyErr) {
+          console.error(`[check-messages] admin-reply notify failed for thread ${threadId}`, adminNotifyErr);
+        }
+      }
+
+      // Safe to advance the cursor now — admin FYIs above are best-effort by
+      // design (see the guard comment), and there's no pending guest alert a
+      // later failure could drop.
       await setLastSeenMessageId(threadId, maxId, orgId);
       continue;
     }
@@ -590,10 +673,49 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
           `[check-messages] suppressed duplicate alert for thread ${threadId} — same guest text already alerted within the window`
         );
       } else if (!draft.wamid) {
-        const isNonEnglish = Boolean(draft.language) && draft.language !== "English";
-        const languageNote = isNonEnglish ? ` [written in ${draft.language}]` : "";
+        // FINAL ENGLISH GUARANTEE (2026-08-18 — Seni received an approval
+        // alert entirely in Spanish). The creation-time translation above only
+        // runs when THIS run drafted the reply; a REUSED draft (created by the
+        // webhook path or the Inbox tab) can arrive here with no genuine
+        // English previews, and the drafting model's self-reported `language`
+        // has been observed flatly wrong for short messages. So never trust
+        // stored state at send time: if the "English" preview is just the
+        // original text, run an independent detection over the guest message
+        // and translate both sides. When detection corrects the language, the
+        // stored draft is fixed too (updateDraftEnglishFields) so the EDIT:
+        // path translates Seni's English into the guest's REAL language. In
+        // the normal case (genuine previews already stored) both checks
+        // short-circuit at zero extra cost.
+        let alertGuestMessage = draft.guestMessageEnglish ?? draft.guestMessage;
+        let alertReply = draft.replyEnglish ?? draft.draftReply;
+        let effectiveLanguage = draft.language && draft.language !== "English" ? draft.language : null;
+        if (!draft.guestMessageEnglish || draft.guestMessageEnglish === draft.guestMessage) {
+          const det = await detectLanguageAndTranslateToEnglish(draft.guestMessage, orgId).catch(() => null);
+          if (det && det.language !== "English" && det.english.trim()) {
+            alertGuestMessage = det.english.trim();
+            effectiveLanguage = det.language;
+          }
+        }
+        if (effectiveLanguage && (!draft.replyEnglish || draft.replyEnglish === draft.draftReply)) {
+          const t = await translateText(draft.draftReply, "en", orgId).catch(() => null);
+          if (t?.ok && t.text.trim()) alertReply = t.text.trim();
+        }
+        if (effectiveLanguage && effectiveLanguage !== draft.language) {
+          await updateDraftEnglishFields(
+            draft.id,
+            {
+              language: effectiveLanguage,
+              guestMessageEnglish: alertGuestMessage !== draft.guestMessage ? alertGuestMessage : undefined,
+              replyEnglish: alertReply !== draft.draftReply ? alertReply : undefined,
+            },
+            orgId
+          ).catch(() => {});
+        }
+
+        const isNonEnglish = Boolean(effectiveLanguage);
+        const languageNote = isNonEnglish ? ` [written in ${effectiveLanguage}]` : "";
         const customReplyNote = isNonEnglish
-          ? `, or type your own reply in English to send that (auto-translated to ${draft.language}) instead`
+          ? `, or type your own reply in English to send that (auto-translated to ${effectiveLanguage}) instead`
           : ", or type your own reply to send that instead";
         // Service requests (chef, massage, jet ski, boat rental, etc.) get
         // the guest's WhatsApp number surfaced right in the title line, so
@@ -603,7 +725,7 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
         const serviceRequestNote = draft.isServiceRequest
           ? ` 🛎️ SERVICE REQUEST${draft.guestPhone ? ` — WhatsApp: ${draft.guestPhone}` : " — no phone on file"}`
           : "";
-        const approvalText = `New message from ${guestName} (${booking.propertyName ?? "Legacy Colombia"}):${serviceRequestNote}\n"${draft.guestMessageEnglish ?? draft.guestMessage}"\n\nSuggested reply${languageNote}:\n"${draft.replyEnglish ?? draft.draftReply}"\n\nReply YES to send it, NO to discard${customReplyNote}.`;
+        const approvalText = `New message from ${guestName} (${booking.propertyName ?? "Legacy Colombia"}):${serviceRequestNote}\n"${alertGuestMessage}"\n\nSuggested reply${languageNote}:\n"${alertReply}"\n\nReply YES to send it, NO to discard${customReplyNote}.`;
 
         // DURABLE FIX (2026-08-07): try the real Meta-approved template
         // first — it reaches Seni whether or not his 24h session window is
@@ -620,8 +742,11 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
             {
               guestName,
               propertyName: booking.propertyName ?? "Legacy Colombia",
-              guestMessage: draft.guestMessageEnglish ?? draft.guestMessage,
-              suggestedReply: draft.replyEnglish ?? draft.draftReply,
+              // The independently-verified English readings from above — NOT
+              // the raw stored fields (2026-08-18; the template path is what
+              // actually delivered Seni's untranslated Spanish alert).
+              guestMessage: alertGuestMessage,
+              suggestedReply: alertReply,
             },
             orgId
           );

@@ -7,6 +7,7 @@ import { getDefaultOrganizationId } from "./organizations";
 import { getOwnerRezCredentials, type OwnerRezCredentials } from "./credentials";
 import type { PmsProvider } from "./pms/types";
 import { redisGet, redisSet } from "./redis";
+import { markCrmSentReply } from "./adminReplyMarkers";
 import { ownerRezQueue } from "./ownerrez-queue";
 
 const API_BASE = "https://api.ownerrez.com/v2";
@@ -786,6 +787,14 @@ export async function sendMessage(
   }
 
   const data = (await res.json()) as Record<string, unknown>;
+
+  // Admin-reply visibility (2026-08-18): remember that the CRM itself posted
+  // this text, so the cron/webhook "an admin replied in OwnerRez" ping (see
+  // lib/adminReplyMarkers.ts) can tell Seni's own approved sends apart from a
+  // co-admin replying directly in OwnerRez's UI. Fire-and-forget — a Redis
+  // hiccup must never fail a message that already reached the guest.
+  markCrmSentReply(body, organizationId).catch(() => {});
+
   return {
     id: pick(data, "id") as number | undefined,
     dateUtc: pick(data, "date_utc") as string | undefined,

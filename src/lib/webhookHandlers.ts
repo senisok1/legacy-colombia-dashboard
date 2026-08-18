@@ -6,7 +6,8 @@ import {
 } from "@/lib/whatsapp";
 import { config } from "@/lib/config";
 import { draftGuestReply, type DraftedReply } from "@/lib/aiReply";
-import { detectLanguageAndTranslateToEnglish } from "@/lib/translate";
+import { detectLanguageAndTranslateToEnglish, translateText } from "@/lib/translate";
+import { wasCrmSentReply, alreadyNotifiedAdminReply } from "@/lib/adminReplyMarkers";
 import { getGlobalHostStyleExamples } from "@/lib/inbox";
 import { createPendingDraft, getPendingDraftByThreadId, linkWhatsAppMessageId } from "@/lib/pendingDrafts";
 import { logAiActivity } from "@/lib/aiActivity";
@@ -161,23 +162,45 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       }
     }
 
-    const guestName = str(m.guestName ?? m.guest_name) ?? "Guest";
+    // let, not const (2026-08-18): real OwnerRez message payloads carry no
+    // guest name, so this starts as "Guest" — the booking lookup further down
+    // upgrades it to the real name for the approval alert.
+    let guestName = str(m.guestName ?? m.guest_name) ?? "Guest";
     const fromRole = (str(m.fromRole ?? m.from_role ?? m.senderType ?? m.sender_type) ?? "").toLowerCase();
     const isGuestMessage = m.isGuest === true || m.is_guest === true || fromRole === "guest";
     const isHostMessage = ["admin", "owner", "host", "co_host", "cohost"].includes(fromRole);
 
     if (isHostMessage && !isGuestMessage) {
-      // Seni (or a co-host/automation) replied to the guest in OwnerRez —
-      // confirm it on his WhatsApp so he sees the send went through.
+      // Another admin (or automation) replied to the guest in OwnerRez —
+      // surface it on Seni's WhatsApp (2026-08-18, Seni's ask: other admins
+      // reply directly in OwnerRez and he needs to see those too).
+      //
+      // Skip the CRM's own sends (approval YES / dashboard replies / EDIT:) —
+      // those flows are Seni's own actions and re-pinging every one of them
+      // would bury the genuinely-new co-admin activity this exists to show.
+      if (await wasCrmSentReply(body).catch(() => false)) return;
+      // Content dedupe vs the check-messages cron's admin-reply sweep, which
+      // observes the same message a minute later.
+      if (await alreadyNotifiedAdminReply(body).catch(() => false)) return;
+
+      // English reading for Seni — co-admins (Gabriel) often reply in
+      // Spanish, and Seni only reads English. Degrades to the original text.
+      let adminReplyEnglish = body;
+      let translatedNote = "";
+      const det = await detectLanguageAndTranslateToEnglish(body).catch(() => null);
+      if (det && det.language !== "English" && det.english.trim()) {
+        adminReplyEnglish = det.english.trim();
+        translatedNote = ` [translated from ${det.language}]`;
+      }
       try {
         await sendAdminReplyNotificationTemplate({
           guestName,
           guestMessage: "(see OwnerRez thread)",
-          adminReply: body.slice(0, 350),
+          adminReply: adminReplyEnglish.slice(0, 350),
         });
       } catch {
         await sendWhatsAppText(
-          `✅ Your reply to ${guestName} was sent via OwnerRez (thread #${threadId}):\n\n"${body.slice(0, 300)}"`
+          `✅ An admin replied to ${guestName} via OwnerRez (thread #${threadId})${translatedNote}:\n\n"${adminReplyEnglish.slice(0, 300)}"`
         ).catch(() => {});
       }
       return;
@@ -250,6 +273,11 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
           threadIds: [threadId],
         };
 
+      // Upgrade the placeholder "Guest" to the booking's real guest name so
+      // the WhatsApp alert reads "New message from María…" not "from Guest"
+      // (2026-08-18, Seni's report — his alert literally said "Guest").
+      if (booking.guestName?.trim()) guestName = booking.guestName.trim();
+
       // Same account-wide host-voice corpus the cron/Inbox use (600s cache
       // in lib/inbox.ts, so this is usually a warm read). Failure just means
       // the prompt's built-in "no past host messages found" default tone.
@@ -282,6 +310,30 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       }
     }
 
+    // FINAL ENGLISH GUARANTEE (2026-08-18 — Seni received this path's alert
+    // fully in Spanish: "Si gracias, todo bien" + a Spanish suggested reply).
+    // Root cause: this path trusted the drafting model's SELF-REPORTED
+    // language + translation fields. When the model mislabels a short message
+    // as English (or returns "" so the parser falls back to the original
+    // text), no translation ever happened and no other layer re-checked.
+    // Never trust the drafting call here: if the "English" preview we hold is
+    // just the original text, run an INDEPENDENT detection over the guest's
+    // message; if that says non-English, translate both sides for the alert.
+    // In the normal case (model translated properly) this costs nothing — the
+    // previews already differ from the originals and both checks short-circuit.
+    let replyEnglish = drafted?.replyEnglish;
+    if (!guestMessageEnglish || guestMessageEnglish === body) {
+      const det = await detectLanguageAndTranslateToEnglish(body).catch(() => null);
+      if (det && det.language !== "English" && det.english.trim()) {
+        guestMessageEnglish = det.english.trim();
+        detectedLanguage = det.language;
+      }
+    }
+    if (drafted && detectedLanguage !== "English" && (!replyEnglish || replyEnglish === drafted.reply)) {
+      const t = await translateText(drafted.reply, "en").catch(() => null);
+      if (t?.ok && t.text.trim()) replyEnglish = t.text.trim();
+    }
+
     const pending = await createPendingDraft({
       threadId,
       bookingId: num(m.bookingId ?? m.booking_id) ?? num(thread.booking_id) ?? 0,
@@ -289,10 +341,10 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       guestName,
       guestMessage: body,
       draftReply: drafted?.reply ?? "",
-      // English previews for Seni's approval view — draftGuestReply already
-      // guarantees replyEnglish is an INDEPENDENT translation of the
-      // outgoing reply for non-English guests (2026-08-17 audit fix there).
-      replyEnglish: drafted?.replyEnglish,
+      // English previews for Seni's approval view — independently verified
+      // above, so the language stored here is what the EDIT: path will
+      // translate Seni's English back into.
+      replyEnglish,
       guestMessageEnglish,
       language: detectedLanguage,
       isServiceRequest: drafted?.isServiceRequest ?? false,
@@ -302,7 +354,7 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
     // the native-language drafted.reply is what actually goes to the guest
     // on YES — same convention as the check-messages cron's alert.
     const alertGuestMessage = guestMessageEnglish ?? body;
-    const alertReply = drafted ? drafted.replyEnglish || drafted.reply : undefined;
+    const alertReply = drafted ? replyEnglish || drafted.reply : undefined;
     const languageNote = detectedLanguage !== "English" ? ` [written in ${detectedLanguage}]` : "";
     const draftLine = alertReply
       ? `Suggested reply${languageNote}:\n"${alertReply}"\n\nReply YES to send it, NO to skip, or "EDIT: <your text>" to send your own wording.`
