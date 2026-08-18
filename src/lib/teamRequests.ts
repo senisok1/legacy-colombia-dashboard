@@ -199,9 +199,51 @@ export async function linkNotifyWamid(id: string, organizationId: string, wamid:
   ]);
 }
 
+/** Edits a request's own details — restricted at the route layer (see
+ * api/team-requests/edit/route.ts) to the ORIGINAL REQUESTER only, no CEO
+ * override (2026-08-18, Seni's explicit ask: "only that person should be
+ * able to edit that request"). Re-tagging is allowed here; the route decides
+ * whether to re-notify the newly tagged person. */
+export async function updateTeamRequest(input: {
+  organizationId: string;
+  id: string;
+  title: string;
+  description?: string | null;
+  descriptionOriginal?: string | null;
+  authorLanguage?: string | null;
+  neededBy?: string | null;
+  taggedEmail: string;
+  taggedName?: string | null;
+}): Promise<TeamRequest | null> {
+  const row = await queryOne<Row>(
+    `update team_requests set
+       title = $3,
+       description = $4,
+       description_original = $5,
+       author_language = $6,
+       needed_by = $7,
+       tagged_email = $8,
+       tagged_name = $9
+     where id = $2 and organization_id = $1
+     returning ${COLUMNS}`,
+    [
+      input.organizationId,
+      input.id,
+      input.title.trim(),
+      input.description?.trim() || null,
+      input.descriptionOriginal?.trim() || null,
+      input.authorLanguage ?? null,
+      input.neededBy || null,
+      input.taggedEmail.toLowerCase(),
+      input.taggedName ?? null,
+    ]
+  );
+  return row ? fromRow(row) : null;
+}
+
 /** Accept/decline — restricted at the route layer to the TAGGED person (by
- * email) or a CEO override, not by role, since a team member is exactly who's
- * meant to decide these. */
+ * email) only, not by role (2026-08-18: the CEO override was deliberately
+ * removed — see api/team-requests/route.ts's PATCH). */
 export async function setDecision(input: {
   organizationId: string;
   id: string;

@@ -94,6 +94,9 @@ export function TeamRequests() {
   const [creating, setCreating] = useState(false);
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [postingNoteId, setPostingNoteId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ title: "", description: "", neededBy: "", taggedEmail: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -217,6 +220,42 @@ export function TeamRequests() {
     }
   }
 
+  function startEdit(r: TeamRequestEntry) {
+    setEditingId(r.id);
+    setEditForm({
+      title: r.title,
+      description: textFor(r.descriptionOriginal, r.authorLanguage, r.description, viewerLanguage) ?? "",
+      neededBy: r.neededBy ?? "",
+      taggedEmail: r.taggedEmail,
+    });
+    setError(null);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  async function saveEdit(id: string) {
+    if (!editForm.title.trim() || !editForm.taggedEmail || savingEdit) return;
+    setSavingEdit(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/team-requests/edit", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, ...editForm }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save your edits.");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
   async function remove(id: string) {
     if (busyId || !window.confirm("Remove this request?")) return;
     setBusyId(id);
@@ -319,37 +358,110 @@ export function TeamRequests() {
         <ul className="space-y-2">
           {entries.map((r) => {
             const badge = statusBadge(r);
-            const canDecide = !r.accepted && !r.declined && (r.taggedEmail.toLowerCase() === viewerEmail.toLowerCase() || viewerIsCeo);
+            // Only the tagged person may decide (2026-08-18, Seni: "whoever
+            // is tagged in that request should be the only one who can
+            // accept or deny that request") — no CEO override.
+            const canDecide = !r.accepted && !r.declined && r.taggedEmail.toLowerCase() === viewerEmail.toLowerCase();
             const canComplete = r.accepted && !r.completed;
             const canRemove = viewerIsCeo || r.requestedByEmail.toLowerCase() === viewerEmail.toLowerCase();
+            // Only the original requester may edit (2026-08-18, Seni: "only
+            // that person should be able to edit that request") — no CEO
+            // override — and only before a decision's been made, matching
+            // the API route's own gate.
+            const canEdit =
+              r.requestedByEmail.toLowerCase() === viewerEmail.toLowerCase() && !r.accepted && !r.declined;
             const body = textFor(r.descriptionOriginal, r.authorLanguage, r.description, viewerLanguage);
+            const isEditing = editingId === r.id;
             return (
               <li key={r.id} className="rounded-lg border border-black/10 dark:border-white/10 p-3 text-sm space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{r.title}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>{badge.label}</span>
-                  {r.neededBy && (
-                    <span className="text-xs text-black/50 dark:text-white/50">needed by {fmtDate(r.neededBy)}</span>
-                  )}
-                </div>
-                {body && <p className="text-black/70 dark:text-white/70">{body}</p>}
-                <p className="text-xs text-black/40 dark:text-white/40">
-                  {r.requestedByName || r.requestedByEmail} tagged {r.taggedName || r.taggedEmail} —{" "}
-                  {fmtWhen(r.requestedAt)}
-                  {r.decidedAt && (
-                    <>
-                      {" · "}
-                      {r.accepted ? "accepted" : "declined"} by {r.decidedByName || r.taggedName || r.taggedEmail},{" "}
-                      {fmtWhen(r.decidedAt)}
-                      {r.declineReason ? ` — ${r.declineReason}` : ""}
-                    </>
-                  )}
-                  {r.completedAt && (
-                    <>
-                      {" · "}completed by {r.completedByName}, {fmtWhen(r.completedAt)}
-                    </>
-                  )}
-                </p>
+                {isEditing ? (
+                  <div className="space-y-2 rounded-lg border border-black/10 dark:border-white/10 p-2">
+                    <input
+                      className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      placeholder="What do you need?"
+                      value={editForm.title}
+                      onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
+                    />
+                    <textarea
+                      className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      placeholder="Any details they should know (optional)"
+                      rows={2}
+                      value={editForm.description}
+                      onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <label className="text-xs text-black/60 dark:text-white/60">
+                        Needed by
+                        <input
+                          type="date"
+                          className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                          value={editForm.neededBy}
+                          onChange={(e) => setEditForm((f) => ({ ...f, neededBy: e.target.value }))}
+                        />
+                      </label>
+                      <label className="text-xs text-black/60 dark:text-white/60">
+                        Tag someone to decide
+                        <select
+                          className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                          value={editForm.taggedEmail}
+                          onChange={(e) => setEditForm((f) => ({ ...f, taggedEmail: e.target.value }))}
+                        >
+                          {teamMembers.map((m) => (
+                            <option key={m.email} value={m.email}>
+                              {m.name || m.email}
+                              {m.isYou ? " (you)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <div className="ml-auto flex items-end gap-1.5">
+                        <button
+                          onClick={() => cancelEdit()}
+                          disabled={savingEdit}
+                          className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1.5 text-xs disabled:opacity-40"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => void saveEdit(r.id)}
+                          disabled={savingEdit || !editForm.title.trim() || !editForm.taggedEmail}
+                          className="rounded-md bg-[var(--accent)] px-2.5 py-1.5 text-xs text-white disabled:opacity-40"
+                        >
+                          {savingEdit ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{r.title}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>{badge.label}</span>
+                      {r.neededBy && (
+                        <span className="text-xs text-black/50 dark:text-white/50">needed by {fmtDate(r.neededBy)}</span>
+                      )}
+                    </div>
+                    {body && <p className="text-black/70 dark:text-white/70">{body}</p>}
+                    <p className="text-xs text-black/40 dark:text-white/40">
+                      {r.requestedByName || r.requestedByEmail} tagged {r.taggedName || r.taggedEmail} —{" "}
+                      {fmtWhen(r.requestedAt)}
+                      {r.decidedAt && (
+                        <>
+                          {" · "}
+                          {r.accepted ? "accepted" : "declined"} by {r.decidedByName || r.taggedName || r.taggedEmail},{" "}
+                          {fmtWhen(r.decidedAt)}
+                          {r.declineReason ? ` — ${r.declineReason}` : ""}
+                        </>
+                      )}
+                      {r.completedAt && (
+                        <>
+                          {" · "}completed by {r.completedByName}, {fmtWhen(r.completedAt)}
+                        </>
+                      )}
+                    </p>
+                  </>
+                )}
+                {!isEditing && (
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {canDecide && (
                     <>
@@ -387,16 +499,32 @@ export function TeamRequests() {
                       Undo completed
                     </button>
                   )}
-                  {canRemove && (
-                    <button
-                      onClick={() => void remove(r.id)}
-                      disabled={busyId === r.id}
-                      className="ml-auto rounded-md px-2.5 py-1 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
-                    >
-                      Remove
-                    </button>
+                  {(canEdit || canRemove) && (
+                    <div className="ml-auto flex gap-1.5">
+                      {/* Edit — original requester only, no CEO override
+                          (2026-08-18, Seni's explicit ask). */}
+                      {canEdit && (
+                        <button
+                          onClick={() => startEdit(r)}
+                          disabled={busyId === r.id}
+                          className="rounded-md px-2.5 py-1 text-xs text-black/40 hover:text-[var(--accent)] dark:text-white/40 disabled:opacity-40"
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {canRemove && (
+                        <button
+                          onClick={() => void remove(r.id)}
+                          disabled={busyId === r.id}
+                          className="rounded-md px-2.5 py-1 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
+                )}
 
                 {/* Notes back-and-forth (2026-08-18, Seni's ask): open to any
                     team member, not just the requester/tagged person —

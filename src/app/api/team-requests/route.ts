@@ -27,9 +27,14 @@ export const dynamic = "force-dynamic";
 //   GET                                    → every request for this property, plus the
 //                                             taggable-teammates list for the dropdown
 //   POST   {title, taggedEmail, …}         → any logged-in user may request
-//   PATCH  {id, accepted|declined}         → ONLY the tagged person (or a CEO override)
+//   PATCH  {id, accepted|declined}         → ONLY the tagged person — no CEO override
+//                                             (2026-08-18, Seni's explicit ask)
 //   PUT    {id, completed}                 → requester, tagged person, or a CEO
 //   DELETE {id}                            → the requester or a CEO
+//
+// Editing a request's own details (title/description/neededBy/taggedEmail)
+// is its own route, api/team-requests/edit/route.ts — ONLY the original
+// requester, no CEO override (2026-08-18, Seni's explicit ask).
 //
 // POST/PATCH/PUT are allowlisted for READ_ONLY sessions in src/proxy.ts —
 // same reasoning as Team Expense Requests: the on-site team raises and
@@ -197,11 +202,13 @@ export async function PATCH(req: NextRequest) {
     const existing = requests.find((r) => r.id === body.id);
     if (!existing) return NextResponse.json({ error: "No such request." }, { status: 404 });
 
-    // Only the tagged person may decide — or a CEO, as an override for when
-    // someone's out sick / no longer has access. This is the real gate; the
-    // UI only hides the buttons for everyone else.
+    // Only the tagged person may decide (2026-08-18, Seni: "whoever is
+    // tagged in that request should be the only one who can accept or deny
+    // that request") — the CEO override that used to exist here was
+    // deliberately removed. This is the real gate; the UI only hides the
+    // buttons for everyone else.
     const isTagged = existing.taggedEmail.toLowerCase() === session.email.toLowerCase();
-    if (!isTagged && session.role !== "CEO") {
+    if (!isTagged) {
       return NextResponse.json(
         { error: `Only ${existing.taggedName || existing.taggedEmail} can accept or deny this.` },
         { status: 403 }

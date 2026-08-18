@@ -365,6 +365,12 @@ export async function proxy(req: NextRequest) {
         // thread on a request — open to any team member, same posture as
         // the request lifecycle itself.
         (pathname === "/api/team-requests/notes" && req.method === "POST") ||
+        // Team Request Edit (2026-08-18): the original requester correcting
+        // their own request's details. The route independently re-checks
+        // that the caller IS that requester (no CEO override) — this
+        // allowlist entry only controls whether a READ_ONLY session can
+        // reach the route at all.
+        (pathname === "/api/team-requests/edit" && req.method === "PATCH") ||
         // Translation is a POST but modifies nothing — the team needs it to
         // read Spanish guest threads.
         pathname === "/api/translate";
