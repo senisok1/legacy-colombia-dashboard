@@ -43,7 +43,13 @@ export async function GET(req: NextRequest) {
       { headers: { Authorization: `Bearer ${config.whatsappAccessToken}` }, cache: "no-store" }
     );
     const json = (await res.json()) as {
-      data?: { name: string; status: string; category: string; language: string }[];
+      data?: {
+        name: string;
+        status: string;
+        category: string;
+        language: string;
+        components?: { type: string; text?: string; format?: string }[];
+      }[];
       error?: unknown;
     };
     if (!res.ok) return NextResponse.json({ ok: false, error: json.error ?? "Unknown" }, { status: 502 });
@@ -56,11 +62,16 @@ export async function GET(req: NextRequest) {
         sessionOpener: config.whatsappSessionOpenerTemplate,
         templateLanguage: config.whatsappTemplateLanguage,
       },
+      // components included (2026-08-18) — diagnosing why every carrier-sent
+      // alert (new booking, admin reply) shows a "Daily Summary for X"
+      // heading: need to see whether that's a static HEADER component or
+      // static body text baked into daily_summary_alert's approved copy.
       templates: (json.data ?? []).map((t) => ({
         name: t.name,
         status: t.status,
         category: t.category,
         language: t.language,
+        components: t.components,
       })),
     });
   }
