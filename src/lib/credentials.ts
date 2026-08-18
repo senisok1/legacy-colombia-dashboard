@@ -234,25 +234,35 @@ export async function getPriceLabsCredentials(organizationId: string): Promise<P
   };
 }
 
-// Added 2026-08-05 ("bring your own Claude key" feature): unlike
-// OwnerRez/WhatsApp/PriceLabs above, the platform's global ANTHROPIC_API_KEY
-// fallback here is NOT gated by isDefaultOrg. Those other fallbacks are
-// gated because they're real operational secrets tied to Legacy Colombia's
-// specific property listings / phone number / channel-manager account —
-// letting another tenant "fall back" to them would leak Seni's actual guest
-// data and messaging capability to an unrelated org. An Anthropic key isn't
-// tied to any tenant's operational data; every org has always shared the
-// one platform key for every AI feature (guest reply drafting, translation,
-// bill photo extraction, etc. — see aiReply.ts, translate.ts, billExtract.ts
-// et al.), and that's an intentional, existing default that should keep
-// working for any tenant who hasn't set their own. This resolver only adds
-// an org-level override on top of that unrestricted default, so a paying
-// tenant can plug in their own key (and pay their own Anthropic usage)
-// without changing behavior for anyone who doesn't.
+// Added 2026-08-05 ("bring your own Claude key" feature): an org can store
+// its own anthropic_api_key and pay its own Anthropic usage.
+//
+// SPEND-LEAK FIX (2026-08-17 audit): the global ANTHROPIC_API_KEY fallback
+// here USED to be ungated (returned config.anthropicApiKey for ANY org with
+// nothing stored) — the original rationale being that a Claude key "isn't
+// tied to any tenant's operational data" the way the OwnerRez/WhatsApp/
+// PriceLabs secrets above are. That reasoning missed the money angle
+// entirely: with open public signup (api/signup), ANY trial org that signs
+// up gets a working session that drives the platform owner's Anthropic key
+// via every AI route (guest reply drafting, translation, bill photo
+// extraction, reputation/revenue/lifecycle/content agents, chat widget —
+// see aiReply.ts, translate.ts, billExtract.ts et al.). That's unbounded
+// spend on Seni's key charged by strangers. So this fallback is now gated
+// the SAME way as the sibling resolvers above: only the default org (Legacy
+// Estate Rentals, the real tenant) may fall back to the platform key. A
+// non-default org with no key of its own gets an empty string, and the AI
+// callers already degrade on an empty key (translate.ts short-circuits to
+// "not configured"; aiReply.ts's Anthropic call fails as a caught
+// AiReplyError rather than a platform crash) — they never leak spend.
+//
+// The default org must keep using the platform key EXACTLY as today, so its
+// behavior is unchanged. Reuses the same isDefaultOrg() check as the
+// OwnerRez/WhatsApp/PriceLabs fallbacks so all four fail closed identically.
 export async function getAnthropicCredentials(organizationId: string): Promise<{ apiKey: string }> {
   const c = await getCredentials(organizationId, ["anthropic_api_key"]);
+  const allowFallback = await isDefaultOrg(organizationId);
   return {
-    apiKey: c.anthropic_api_key ?? config.anthropicApiKey,
+    apiKey: c.anthropic_api_key ?? (allowFallback ? config.anthropicApiKey : ""),
   };
 }
 

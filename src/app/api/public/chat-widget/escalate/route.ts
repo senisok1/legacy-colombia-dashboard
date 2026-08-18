@@ -3,7 +3,7 @@ import { sendWhatsAppText, WhatsAppError } from "@/lib/whatsapp";
 import { detectLanguageAndTranslateToEnglish } from "@/lib/translate";
 import { isWhatsAppConfigured, isDbConfigured } from "@/lib/config";
 import { checkRateLimit, corsHeaders, getClientIp, handlePreflight, isAllowedOrigin } from "@/lib/publicApiGuard";
-import { createChatEscalation, linkChatEscalationWamid } from "@/lib/chatEscalations";
+import { countChatEscalationsInLastDay, createChatEscalation, linkChatEscalationWamid } from "@/lib/chatEscalations";
 import { draftEscalationAnswerForApproval, ChatWidgetError } from "@/lib/chatWidget";
 import { logAiActivity } from "@/lib/aiActivity";
 
@@ -35,6 +35,30 @@ const RATE_LIMIT_WINDOW_SECONDS = 60 * 60; // 1 hour
 const MAX_FIELD_LENGTH = 200;
 const MAX_QUESTION_LENGTH = 1000;
 const MAX_SUMMARY_LENGTH = 2000;
+
+// Global (not per-IP) cap on escalations per rolling 24h (2026-08-17 audit).
+// Every escalation costs a Claude drafting call + a WhatsApp page to Seni,
+// and the per-IP limit above is trivially sidestepped by rotating IPs — this
+// is the backstop against a flood burning API spend and burying Seni's phone.
+// 50/day is ~10x any legitimate day this single-property widget has seen
+// while still bounding a worst-case flood to pocket change.
+const GLOBAL_DAILY_ESCALATION_CAP = 50;
+
+/**
+ * Validates the visitor-supplied phone as a plausible E.164 number and
+ * normalizes it to bare digits (the form Meta's `to` field takes). Returns
+ * null for anything implausible. WHY (2026-08-17 audit): this field was only
+ * length-checked (<= 200 chars) and then used VERBATIM as the WhatsApp `to`
+ * for the chat-reply template once Seni approves an answer — so an attacker
+ * could aim a Seni-approved template send at an arbitrary string. Digits with
+ * optional leading + / common separators, 8–15 digits total (ITU E.164 max
+ * is 15), nothing else.
+ */
+function normalizeVisitorPhone(raw: string): string | null {
+  const stripped = raw.replace(/[\s().-]/g, "");
+  if (!/^\+?\d{8,15}$/.test(stripped)) return null;
+  return stripped.replace(/^\+/, "");
+}
 
 export async function OPTIONS(req: NextRequest) {
   return handlePreflight(req);
@@ -80,6 +104,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "One of the fields is too long." }, { status: 400, headers });
   }
 
+  // Reject implausible phones up front (see normalizeVisitorPhone's comment)
+  // rather than storing something a later approved answer would be fired at.
+  // Rejecting (vs silently nulling) also gives a legitimate visitor who
+  // typo'd their number a chance to fix it while they're still on the page.
+  const normalizedPhone = normalizeVisitorPhone(visitorPhone);
+  if (!normalizedPhone) {
+    return NextResponse.json(
+      { error: "That phone number doesn't look valid — please include your country code, digits only." },
+      { status: 400, headers }
+    );
+  }
+
   if (!isWhatsAppConfigured()) {
     console.error("[chat-widget/escalate] WhatsApp isn't configured — can't notify Seni.");
     return NextResponse.json(
@@ -92,6 +128,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "Couldn't send your message right now — please try again later." },
       { status: 500, headers }
+    );
+  }
+
+  // Global daily spend cap (2026-08-17 audit) — checked AFTER the cheap
+  // validations but BEFORE the Claude drafting call and WhatsApp page, since
+  // those are exactly the costs being capped. Fails open on a DB read error:
+  // if the count can't be read the DB is likely down anyway (in which case
+  // createChatEscalation below fails and nothing is spent on WhatsApp), and
+  // blocking every legitimate visitor over a transient count failure would
+  // be the worse trade. NOTE: the WhatsApp-inquiry path (api/whatsapp/
+  // webhook's handlePublicWhatsAppInquiry) also creates escalations and is
+  // outside this file set — it counts TOWARD this cap (the counter is
+  // all-sources) but is not itself capped here.
+  const dailyCount = await countChatEscalationsInLastDay().catch(() => null);
+  if (dailyCount !== null && dailyCount >= GLOBAL_DAILY_ESCALATION_CAP) {
+    console.error(
+      `[chat-widget/escalate] Global daily escalation cap reached (${dailyCount}/${GLOBAL_DAILY_ESCALATION_CAP}) — refusing new escalation.`
+    );
+    return NextResponse.json(
+      { error: "We're getting a lot of questions right now — please email us directly and we'll get right back to you." },
+      { status: 429, headers }
     );
   }
 
@@ -124,7 +181,10 @@ export async function POST(req: NextRequest) {
       conversationSummary: conversationSummary || undefined,
       visitorName,
       visitorEmail,
-      visitorPhone,
+      // Store the NORMALIZED phone (validated E.164 digits) — this is the
+      // exact value the chat-reply template's `to` will be, so nothing
+      // unvalidated ever reaches a WhatsApp send (2026-08-17 audit).
+      visitorPhone: normalizedPhone,
       aiDraftAnswer,
       language: detected.language,
       questionEnglish: isForeign ? detected.english : undefined,
@@ -140,7 +200,7 @@ export async function POST(req: NextRequest) {
     const questionLine = isForeign
       ? `"${detected.english}"\n(${detected.language} original: "${question || "(no question captured)"}")`
       : `"${question || "(no question captured)"}"`;
-    const text = `🌐 Website chat — new question from ${visitorName} (${visitorEmail} / ${visitorPhone}):\n${questionLine}${draftLine}${summaryLine}`;
+    const text = `🌐 Website chat — new question from ${visitorName} (${visitorEmail} / ${normalizedPhone}):\n${questionLine}${draftLine}${summaryLine}`;
 
     try {
       const wamid = await sendWhatsAppText(text);
@@ -159,7 +219,7 @@ export async function POST(req: NextRequest) {
       agentDisplayName: AGENT_NAME,
       task: "Escalate visitor question",
       trigger: `Visitor ${visitorName} asked: "${question}"`,
-      dataReviewed: { visitorEmail, visitorPhone, conversationSummary },
+      dataReviewed: { visitorEmail, visitorPhone: normalizedPhone, conversationSummary },
       decision: aiDraftAnswer ?? "(no draft — needs Seni's own wording)",
       policyUsed: "Best-guess answer grounded in property facts + previously answered questions",
       actionTaken: "Created chat_escalations row, texted Seni for YES/NO/EDIT approval",

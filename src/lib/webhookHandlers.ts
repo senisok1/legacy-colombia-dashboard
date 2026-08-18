@@ -5,10 +5,13 @@ import {
   sendWhatsAppText,
 } from "@/lib/whatsapp";
 import { config } from "@/lib/config";
-import { draftEscalationAnswerForApproval } from "@/lib/chatWidget";
+import { draftGuestReply, type DraftedReply } from "@/lib/aiReply";
+import { detectLanguageAndTranslateToEnglish } from "@/lib/translate";
+import { getGlobalHostStyleExamples } from "@/lib/inbox";
 import { createPendingDraft, getPendingDraftByThreadId, linkWhatsAppMessageId } from "@/lib/pendingDrafts";
 import { logAiActivity } from "@/lib/aiActivity";
 import { getBookings, getTargetProperties } from "@/lib/ownerrez";
+import type { Booking } from "@/lib/types";
 
 // Handlers for the public /api/webhook endpoint (OwnerRez-style events).
 // Payload shapes are deliberately parsed defensively: OwnerRez's webhook
@@ -200,11 +203,83 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
 
     // Draft a reply with Claude. Non-fatal on failure — Seni can still
     // answer with "EDIT: <his own text>".
-    let aiDraftReply: string | undefined;
+    //
+    // REWORKED 2026-08-17 (audit): this used to call chatWidget.ts's
+    // draftEscalationAnswerForApproval — the ASSUMPTIVE prompt built for
+    // anonymous website visitors, which is explicitly allowed to invent
+    // pricing ballparks and scheduling guesses because "Seni will fix or
+    // reject anything off-base". Using it for a REAL booked guest's message
+    // meant (a) invented prices one distracted YES away from a paying
+    // guest, (b) `language` hard-defaulted to "English" so a Spanish
+    // guest's approved reply went out untranslated, and (c) service
+    // requests never set isServiceRequest, so the Gabriel flow never
+    // triggered from this path. Now it uses the same draftGuestReply()
+    // pipeline as the check-messages cron: booking context when the thread
+    // maps to a known booking (a synthesized minimal context otherwise —
+    // draftGuestReply treats unknown arrival/departure as "unknown" and its
+    // prompt forbids inventing prices/codes/availability either way),
+    // Seni's account-wide style pool, and real language detection with
+    // English previews for the approval text.
+    let drafted: DraftedReply | undefined;
+    let detectedLanguage = "English";
+    let guestMessageEnglish: string | undefined;
     try {
-      aiDraftReply = await draftEscalationAnswerForApproval(body);
+      // The thread's booking gives the drafting prompt its guest name,
+      // arrival/departure (which also gates sharing the exact address), and
+      // property. getBookings() is the same short-cache call the scope check
+      // above may already have made, so this is cheap. A webhook can fire
+      // for a thread not yet visible in the bookings list (brand-new
+      // booking, OwnerRez sync lag) — synthesize a minimal context then
+      // rather than falling back to the assumptive visitor prompt.
+      const bookingList = await getBookings().catch(() => [] as Booking[]);
+      const booking: Booking =
+        bookingList.find((b) => Array.isArray(b.threadIds) && b.threadIds.includes(threadId)) ?? {
+          id: num(m.bookingId ?? m.booking_id) ?? num(thread.booking_id) ?? 0,
+          propertyId: messagePropId ?? 0,
+          guestId: num(m.guestId ?? m.guest_id) ?? null,
+          guestName,
+          arrival: "", // draftGuestReply renders "" as "unknown" — the address gate then stays shut
+          departure: "",
+          nights: 0,
+          status: "Unknown",
+          source: "OwnerRez",
+          adults: 0,
+          children: 0,
+          totalAmount: 0,
+          isBlock: false,
+          threadIds: [threadId],
+        };
+
+      // Same account-wide host-voice corpus the cron/Inbox use (600s cache
+      // in lib/inbox.ts, so this is usually a warm read). Failure just means
+      // the prompt's built-in "no past host messages found" default tone.
+      const stylePool = await getGlobalHostStyleExamples(12).catch(() => [] as string[]);
+
+      drafted = await draftGuestReply({
+        guestMessage: body,
+        booking,
+        hostMessages: stylePool.map((styleBody) => ({
+          id: 0,
+          threadId,
+          body: styleBody,
+          isGuest: false,
+          fromRole: "co_host",
+        })),
+      });
+      detectedLanguage = drafted.language;
+      guestMessageEnglish = drafted.guestMessageEnglish;
     } catch (draftError) {
       console.error("[webhookHandlers] AI draft failed:", draftError);
+      // Even with no draft, still detect the guest's real language (instead
+      // of the old hard "English" default) so Seni's eventual "EDIT: <his
+      // English text>" gets translated back before it reaches the guest,
+      // and so his alert shows an English reading of the message. Degrades
+      // to English + original text on any failure.
+      const detected = await detectLanguageAndTranslateToEnglish(body).catch(() => null);
+      if (detected) {
+        detectedLanguage = detected.language;
+        guestMessageEnglish = detected.language !== "English" ? detected.english : undefined;
+      }
     }
 
     const pending = await createPendingDraft({
@@ -213,15 +288,26 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       guestId: num(m.guestId ?? m.guest_id) ?? null,
       guestName,
       guestMessage: body,
-      draftReply: aiDraftReply ?? "",
-      replyEnglish: aiDraftReply,
-      language: str(m.language) ?? "English",
+      draftReply: drafted?.reply ?? "",
+      // English previews for Seni's approval view — draftGuestReply already
+      // guarantees replyEnglish is an INDEPENDENT translation of the
+      // outgoing reply for non-English guests (2026-08-17 audit fix there).
+      replyEnglish: drafted?.replyEnglish,
+      guestMessageEnglish,
+      language: detectedLanguage,
+      isServiceRequest: drafted?.isServiceRequest ?? false,
     });
 
-    const draftLine = aiDraftReply
-      ? `Suggested reply:\n"${aiDraftReply}"\n\nReply YES to send it, NO to skip, or "EDIT: <your text>" to send your own wording.`
+    // Approval text shows Seni the ENGLISH readings (he only reads English);
+    // the native-language drafted.reply is what actually goes to the guest
+    // on YES — same convention as the check-messages cron's alert.
+    const alertGuestMessage = guestMessageEnglish ?? body;
+    const alertReply = drafted ? drafted.replyEnglish || drafted.reply : undefined;
+    const languageNote = detectedLanguage !== "English" ? ` [written in ${detectedLanguage}]` : "";
+    const draftLine = alertReply
+      ? `Suggested reply${languageNote}:\n"${alertReply}"\n\nReply YES to send it, NO to skip, or "EDIT: <your text>" to send your own wording.`
       : `No suggested reply could be drafted — reply "EDIT: <your text>" to send an answer, or NO to skip.`;
-    const approvalText = `New message from ${guestName} (thread #${threadId}):\n\n"${body}"\n\n${draftLine}`;
+    const approvalText = `New message from ${guestName} (thread #${threadId}):\n\n"${alertGuestMessage}"\n\n${draftLine}`;
 
     // Template first (delivers regardless of the 24h session window — the
     // exact silent-failure class that plagued this feature), free text as
@@ -231,8 +317,8 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       approvalWamid = await sendGuestReplyApprovalTemplate({
         guestName,
         propertyName: config.propertyName || "Legacy Colombia",
-        guestMessage: body,
-        suggestedReply: aiDraftReply ?? "N/A",
+        guestMessage: alertGuestMessage,
+        suggestedReply: alertReply ?? "N/A",
       });
     } catch {
       approvalWamid = await sendWhatsAppText(approvalText).catch(() => undefined);
@@ -249,7 +335,7 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       agentDisplayName: "AI Guest Experience Manager",
       task: "Draft reply to guest message (webhook)",
       trigger: `Guest message from ${guestName} on thread #${threadId}: "${body.slice(0, 200)}"`,
-      decision: aiDraftReply ? "drafted reply, awaiting owner approval" : "no draft — awaiting owner's own wording",
+      decision: drafted ? "drafted reply, awaiting owner approval" : "no draft — awaiting owner's own wording",
       actionTaken: approvalWamid
         ? "Sent approval request to Seni via WhatsApp; awaiting YES/NO/EDIT response"
         : "Created pending draft, but the WhatsApp approval send failed — visible in the dashboard Approvals tab",

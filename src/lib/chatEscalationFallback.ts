@@ -94,6 +94,13 @@ export async function sweepChatEscalationFallbacks(organizationId?: string): Pro
   }
 
   for (const escalation of stale) {
+    // Belt-and-suspenders (2026-08-17 audit): the query in
+    // getChatEscalationsNeedingFallback now filters to source = 'website',
+    // because WhatsApp-sourced inquiries are already delivered synchronously
+    // by the WhatsApp webhook's approval branch — re-sending them here was
+    // the double-delivery bug. Guard again at the point of send so a future
+    // query change (or a new caller) can't quietly reintroduce it.
+    if (escalation.source !== "website") continue;
     try {
       const channels = await deliverOne(escalation, organizationId);
       await markFallbackSent(escalation.id, channels.length ? channels.join("+") : "none", organizationId);

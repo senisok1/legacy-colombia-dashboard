@@ -93,12 +93,75 @@ export async function listOrganizations(): Promise<Organization[]> {
  * work at all — trialing or active. Used by Phase 3's per-tenant cron
  * loops so a lapsed/canceled customer's jobs stop running (and stop
  * incurring OwnerRez/Anthropic/WhatsApp API usage) without deleting their
- * data. */
+ * data.
+ *
+ * SCALING FIX (2026-08-17 audit): the old WHERE was just
+ * `subscription_status in ('trialing','active')`, which trusted that
+ * something eventually flips a lapsed trial OUT of 'trialing'. Nothing did —
+ * there was no sweep — so with open public signup (api/signup) every trial
+ * org EVER created stayed 'trialing' forever and stayed in this list forever.
+ * Every cron iterates this list, so that's unbounded per-org work each run,
+ * starving the one real tenant's cron-time/API budget. Two defenses, both
+ * here and in expireLapsedTrials() below:
+ *   1. A trialing org whose trial_ends_at is already in the past is excluded
+ *      IMMEDIATELY by this query (belt-and-suspenders) — it stops consuming
+ *      cron budget the moment the trial lapses, not only after the nightly
+ *      expire-trials sweep flips its status.
+ *   2. The nightly sweep (expireLapsedTrials) actually flips the stored
+ *      status to 'canceled' so the row also drops out of every other
+ *      status-based check, not just this one.
+ * A trialing org with a NULL trial_ends_at (shouldn't happen — createTrial
+ * always sets it — but defensive) is still treated as in-standing so we
+ * never silently strand a real trial on a data glitch.
+ *
+ * The DEFAULT org (the real business, Legacy Estate Rentals) is ALWAYS
+ * included regardless of subscription_status — billing logic must never be
+ * able to exclude the one live tenant from its own crons. It's seeded
+ * 'active' by migration 0015 so it already passed the old filter, but this
+ * makes that guarantee explicit and independent of its billing row. */
 export async function listActiveOrganizations(): Promise<Organization[]> {
+  const defaultOrgId = await getDefaultOrganizationId();
   const rows = await query<OrganizationRow>(
-    `select ${ORG_COLUMNS} from organizations where subscription_status in ('trialing', 'active') order by created_at asc`
+    `select ${ORG_COLUMNS} from organizations
+      where id = $1
+         or subscription_status = 'active'
+         or (subscription_status = 'trialing' and (trial_ends_at is null or trial_ends_at > now()))
+      order by created_at asc`,
+    [defaultOrgId]
   );
   return rows.map(fromRow);
+}
+
+/** Nightly sweep (see api/cron/expire-trials): flips any org still marked
+ * 'trialing' whose trial_ends_at has already passed to 'canceled'. Without
+ * this, nothing ever demotes an abandoned trial — see the long note on
+ * listActiveOrganizations above for why that's a real scaling/spend problem
+ * under open public signup. Returns how many rows it demoted so the cron can
+ * log/report it.
+ *
+ * 'canceled' is the existing terminal status in the SubscriptionStatus union
+ * and is exactly what the Stripe webhook (api/webhooks/stripe) already writes
+ * for a cancelled subscription, and what lib/billing.ts already treats as
+ * out-of-standing — there is no separate 'trial_expired' value in this app,
+ * so reusing 'canceled' keeps every downstream status check working with no
+ * new enum to teach it about.
+ *
+ * Excludes the default org explicitly (id <> $1): it's never 'trialing' so
+ * it can't match anyway, but this makes it structurally impossible for the
+ * sweep to ever cancel the real business's own row. */
+export async function expireLapsedTrials(): Promise<number> {
+  const defaultOrgId = await getDefaultOrganizationId();
+  const rows = await query<{ id: string }>(
+    `update organizations
+        set subscription_status = 'canceled', updated_at = now()
+      where subscription_status = 'trialing'
+        and trial_ends_at is not null
+        and trial_ends_at < now()
+        and id <> $1
+      returning id`,
+    [defaultOrgId]
+  );
+  return rows.length;
 }
 
 /** Temporary bridge for code that hasn't been refactored to resolve the

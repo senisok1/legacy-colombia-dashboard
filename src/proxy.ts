@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "./lib/session";
 import { getUserSessionEpoch } from "./lib/users";
+import { isBillingEnforced } from "./lib/config";
+import { getOrganizationById, getDefaultOrganizationId } from "./lib/organizations";
+import { isOrgLocked } from "./lib/billing";
 
 // Proxy (formerly "middleware") always runs on the Node.js runtime in
 // Next.js 16+, so node:crypto is available here without extra config — and,
@@ -53,6 +56,46 @@ async function currentSessionEpoch(email: string): Promise<number | null | "db-e
   } catch {
     // Don't cache a failure; fail open for this request only.
     return "db-error";
+  }
+}
+
+// --- Billing-lock cache (2026-08-17 audit) ------------------------------
+// enforceBillingLock() only ran in page.tsx files, so a lapsed/canceled org's
+// still-valid session could call every /api/* data route (and burn AI spend)
+// indefinitely — the "hard lock" was a UI redirect, not an enforcement
+// boundary. This adds the same lock at the proxy choke point so it covers
+// APIs too.
+//
+// THREE SAFETY RAILS, because wrongly locking the real business is far worse
+// than a lapsed trial reaching an API:
+//   1. Inert unless Stripe is actually configured (isBillingEnforced()), so
+//      it does NOTHING on this deployment today — pure future-proofing.
+//   2. The DEFAULT org (the real Legacy Estate Rentals tenant) is NEVER
+//      locked here regardless of subscription state.
+//   3. Any DB/load error fails OPEN (admits the request).
+// Cached per warm instance like the epoch check, for the same hot-path reason.
+type LockEntry = { locked: boolean; at: number };
+const lockCache = new Map<string, LockEntry>();
+let defaultOrgIdPromise: Promise<string> | undefined;
+
+async function isOrgBillingLocked(orgId: string): Promise<boolean> {
+  if (!isBillingEnforced()) return false; // rail #1 — no Stripe, no lock
+  const now = Date.now();
+  const cached = lockCache.get(orgId);
+  if (cached && now - cached.at < EPOCH_TTL_MS) return cached.locked;
+  try {
+    if (!defaultOrgIdPromise) defaultOrgIdPromise = getDefaultOrganizationId();
+    const defaultOrgId = await defaultOrgIdPromise;
+    if (orgId === defaultOrgId) {
+      lockCache.set(orgId, { locked: false, at: now }); // rail #2
+      return false;
+    }
+    const org = await getOrganizationById(orgId);
+    const locked = org ? isOrgLocked(org) : false;
+    lockCache.set(orgId, { locked, at: now });
+    return locked;
+  } catch {
+    return false; // rail #3 — fail open
   }
 }
 
@@ -172,6 +215,28 @@ export async function proxy(req: NextRequest) {
       // Proactively clear the dead cookie so the browser stops re-sending it.
       res.cookies.set(SESSION_COOKIE_NAME, "", { path: "/", maxAge: 0 });
       return res;
+    }
+
+    // BILLING LOCK ENFORCEMENT (2026-08-17 audit). A lapsed org may no longer
+    // reach data/AI routes — matching enforceBillingLock() on pages. Skipped
+    // for the paths a locked org needs to RECOVER (view the billing page, run
+    // checkout/portal, log out) and for its own password. Inert unless Stripe
+    // is configured and never applies to the default org — see
+    // isOrgBillingLocked's rails.
+    const billingExempt =
+      pathname.startsWith("/billing") ||
+      pathname.startsWith("/api/billing") ||
+      pathname === "/api/logout" ||
+      pathname === "/api/settings/password" ||
+      pathname === "/settings/account";
+    if (!billingExempt && session!.organizationId && (await isOrgBillingLocked(session!.organizationId))) {
+      if (pathname.startsWith("/api/")) {
+        return NextResponse.json(
+          { error: "This organization's subscription is inactive. Update billing to continue." },
+          { status: 402 }
+        );
+      }
+      return NextResponse.redirect(new URL("/billing", req.url));
     }
 
     // READ_ONLY role gate (2026-08-16, Seni's ask: a team login for

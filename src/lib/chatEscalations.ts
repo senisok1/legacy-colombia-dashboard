@@ -215,9 +215,21 @@ export async function getChatEscalationsNeedingFallback(
   organizationId?: string
 ): Promise<ChatEscalation[]> {
   const orgId = organizationId ?? (await getDefaultOrganizationId());
+  // source = 'website' (2026-08-17 audit): this sweep exists ONLY for the
+  // widget's "visitor closed the tab before Seni answered" case. WhatsApp-
+  // sourced inquiries are delivered synchronously by the WhatsApp webhook's
+  // approval branch the moment Seni replies YES/EDIT (see
+  // api/whatsapp/webhook's handleEscalationReply — sendWhatsAppTextTo inside
+  // the visitor's open 24h session window), and that path never sets
+  // delivered_via_widget or fallback_sent_at. Without this filter, every
+  // answered WhatsApp inquiry ALSO matched here once created_at aged past
+  // staleMinutes — so the visitor got the same answer a second time ~10
+  // minutes later via the chat-reply template, plus Seni got a spurious
+  // "Follow-up sent" ping for a conversation that was already closed.
   const rows = await query<ChatEscalationRow>(
     `select * from chat_escalations
      where status = 'answered'
+       and source = 'website'
        and delivered_via_widget = false
        and fallback_sent_at is null
        and (visitor_left_at is not null or created_at < now() - ($1 || ' minutes')::interval)
@@ -226,6 +238,26 @@ export async function getChatEscalationsNeedingFallback(
     [staleMinutes, orgId]
   );
   return rows.map(fromRow);
+}
+
+/**
+ * How many escalations (any source, any status) were created in the last 24
+ * hours — backs the global daily spend cap in
+ * api/public/chat-widget/escalate (2026-08-17 audit): each escalation costs
+ * a Claude drafting call plus a WhatsApp page to Seni, and the only guard
+ * was a per-IP rate limit (20/hr) that a botnet or rotating proxies trivially
+ * sidesteps. Counting ALL sources (website + whatsapp) is deliberate — it
+ * makes the cap strictly more conservative, and both sources page the same
+ * one human. Throws on DB failure; the caller decides fail-open vs closed.
+ */
+export async function countChatEscalationsInLastDay(organizationId?: string): Promise<number> {
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const row = await queryOne<{ count: string }>(
+    `select count(*)::text as count from chat_escalations
+     where created_at > now() - interval '24 hours' and organization_id = $1`,
+    [orgId]
+  );
+  return row ? Number(row.count) : 0;
 }
 
 export async function markFallbackSent(id: string, channel: string, organizationId?: string): Promise<void> {
