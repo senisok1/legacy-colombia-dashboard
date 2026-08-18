@@ -149,6 +149,19 @@ export async function upsertBookingOps(input: {
   );
 }
 
+/** Admin/Owner only (2026-08-18, Seni's ask: "add a delete tab under each
+ * 'log what you did' line item that can be deleted by admin / owner's
+ * only") — the CEO-only gate lives at the route layer
+ * (api/management/activities/route.ts's DELETE), not here; this is just the
+ * org-scoped delete itself. */
+export async function deleteTeamActivity(organizationId: string, id: string): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    `delete from team_activities where id = $1 and organization_id = $2 returning id`,
+    [id, organizationId]
+  );
+  return rows.length > 0;
+}
+
 export async function createTeamActivity(input: {
   organizationId: string;
   /** The property this activity belongs to (2026-08-17 audit — see

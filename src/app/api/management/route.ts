@@ -192,6 +192,13 @@ export async function GET(req: NextRequest) {
   const viewerLanguage = viewer?.language || "English";
   const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
 
+  // Per-viewer, like viewerLanguage above — NOT part of the shared Redis
+  // board snapshot (that's cached across every viewer of this property), so
+  // it's added on the way out rather than baked into buildBoard(). Powers
+  // the CEO-only "delete" action on Team Activity Log entries (2026-08-18,
+  // Seni's ask) — see components/TeamActivityLog.tsx.
+  const viewerRole = session.role;
+
   try {
     if (!fresh) {
       const cached = await redisGet(snapshotKey(orgId, groupId)).catch(() => null);
@@ -199,17 +206,17 @@ export async function GET(req: NextRequest) {
         // Serve the snapshot instantly; refresh it in the background so the
         // client's follow-up ?fresh=1 (and the next visitor) get current data.
         after(buildAndStore(orgId, groupId).catch(() => {}));
-        return NextResponse.json({ ...JSON.parse(cached), viewerLanguage });
+        return NextResponse.json({ ...JSON.parse(cached), viewerLanguage, viewerRole });
       }
     }
-    return NextResponse.json({ ...(await buildAndStore(orgId, groupId)), viewerLanguage });
+    return NextResponse.json({ ...(await buildAndStore(orgId, groupId)), viewerLanguage, viewerRole });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/management failed:", message);
     // Last resort: even a failed FRESH build should serve the snapshot
     // rather than erroring — stale stays beat a "failed to fetch" banner.
     const cached = await redisGet(snapshotKey(orgId, groupId)).catch(() => null);
-    if (cached) return NextResponse.json({ ...JSON.parse(cached), viewerLanguage });
+    if (cached) return NextResponse.json({ ...JSON.parse(cached), viewerLanguage, viewerRole });
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

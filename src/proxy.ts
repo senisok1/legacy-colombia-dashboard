@@ -330,7 +330,11 @@ export async function proxy(req: NextRequest) {
         pathname === "/api/logout" ||
         // The Management tab's own activity/notes endpoint — the one thing
         // the team is supposed to write (see api/management/activities).
-        pathname === "/api/management/activities" ||
+        // POST only (2026-08-18) — DELETE is CEO-only and deliberately NOT
+        // allowlisted here, so a team login can log activity but can't
+        // remove anyone's entries; the route's own role check is the real
+        // gate, this just keeps a READ_ONLY session from reaching it at all.
+        (pathname === "/api/management/activities" && req.method === "POST") ||
         // Per-stay event flag + date (see api/management/booking-ops) —
         // same on-site coordination scope as activities/notes.
         pathname === "/api/management/booking-ops" ||

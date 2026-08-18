@@ -45,8 +45,14 @@ function fmtWhen(iso: string): string {
 export function TeamActivityLog() {
   const [entries, setEntries] = useState<LogEntry[] | null>(null);
   const [viewerLanguage, setViewerLanguage] = useState<string | undefined>();
+  // Gates the Delete action below (2026-08-18, Seni's ask: "add a delete tab
+  // under each 'log what you did' line item that can be deleted by admin /
+  // owner's only"). This is a UI convenience only — the real gate is the
+  // CEO-only check in api/management/activities/route.ts's DELETE handler.
+  const [viewerRole, setViewerRole] = useState<string | undefined>();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Same guard as the Management board: a failed background refresh must
   // never blank out a list that's already on screen.
@@ -59,6 +65,7 @@ export function TeamActivityLog() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setEntries(json.activityLog ?? []);
       setViewerLanguage(json.viewerLanguage);
+      setViewerRole(json.viewerRole);
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
@@ -88,6 +95,26 @@ export function TeamActivityLog() {
       setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function remove(id: string) {
+    if (removingId || !window.confirm("Delete this log entry?")) return;
+    setRemovingId(id);
+    setError(null);
+    try {
+      const res = await fetch("/api/management/activities", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete.");
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -123,10 +150,24 @@ export function TeamActivityLog() {
         <ul className="space-y-1">
           {entries.map((a) => (
             <li key={a.id} className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
-              {textFor(a, viewerLanguage)}
-              <span className="ml-2 text-xs text-black/40 dark:text-white/40">
-                — {a.author}, {fmtWhen(a.at)}
-              </span>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  {textFor(a, viewerLanguage)}
+                  <span className="ml-2 text-xs text-black/40 dark:text-white/40">
+                    — {a.author}, {fmtWhen(a.at)}
+                  </span>
+                </div>
+                {/* Admin/Owner only (2026-08-18, Seni's ask). */}
+                {viewerRole === "CEO" && (
+                  <button
+                    onClick={() => void remove(a.id)}
+                    disabled={removingId === a.id}
+                    className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                  >
+                    {removingId === a.id ? "Deleting…" : "Delete"}
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
