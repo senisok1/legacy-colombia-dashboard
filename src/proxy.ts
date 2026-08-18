@@ -305,8 +305,9 @@ export async function proxy(req: NextRequest) {
         "/api/translate", // reading Spanish guest threads
         "/api/management", // Team Management board + notes, event flags, extras
         "/api/team-expenses", // Team Expense Requests
-        // (The Team Activity Log tab has no API of its own — it reads
-        // /api/management and writes /api/management/activities.)
+        "/api/team-requests", // Team Requests (2026-08-18) — accept/deny tasks tagged to a teammate
+        // (The Team Activity Log tab's own free-text feed has no API of its
+        // own — it reads /api/management and writes /api/management/activities.)
         "/api/settings/password", // their OWN password (target comes from the cookie)
         "/api/settings/property-group", // property switcher (re-checks propertyAccess)
         "/api/settings/theme",
@@ -352,6 +353,14 @@ export async function proxy(req: NextRequest) {
         // and marks them completed (PUT). Approval is PATCH, which is NOT
         // allowlisted — and the route independently requires a CEO role.
         (pathname === "/api/team-expenses" && (req.method === "POST" || req.method === "PUT")) ||
+        // Team Requests (2026-08-18): unlike expense approval, accept/deny
+        // (PATCH) here is meant for a TEAM MEMBER — whoever got tagged — so
+        // it IS allowlisted, unlike team-expenses' PATCH. The route itself
+        // still independently checks that the caller is the tagged person
+        // (or a CEO override); this allowlist entry only controls whether a
+        // READ_ONLY session can reach the route at all.
+        (pathname === "/api/team-requests" &&
+          (req.method === "POST" || req.method === "PATCH" || req.method === "PUT")) ||
         // Translation is a POST but modifies nothing — the team needs it to
         // read Spanish guest threads.
         pathname === "/api/translate";

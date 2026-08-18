@@ -32,6 +32,11 @@ export type AppUser = {
   language: string;
   /** Property-group ids this login may see; empty array = ALL properties. */
   propertyAccess: string[];
+  /** WhatsApp number for task-request notifications (2026-08-18). Nullable —
+   * only enforced as required for NEW logins, at the route layer (see
+   * api/settings/users/route.ts), not here. Free text, not strictly validated
+   * beyond "looks like it has a country code" at the point of entry. */
+  whatsappPhone: string | null;
   /** Session-invalidation counter (2026-08-17 audit). Baked into the signed
    * login token at creation and bumped whenever this account changes in a way
    * that must kill outstanding sessions (password/role change, deactivation).
@@ -51,7 +56,11 @@ type UserRow = {
   language?: string | null;
   property_access?: string | null;
   session_epoch?: number | null;
+  whatsapp_phone?: string | null;
 };
+
+const USER_COLUMNS =
+  "id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch, whatsapp_phone";
 
 function fromRow(row: UserRow): AppUser {
   return {
@@ -68,15 +77,46 @@ function fromRow(row: UserRow): AppUser {
       .map((x) => x.trim())
       .filter(Boolean),
     sessionEpoch: row.session_epoch ?? 0,
+    whatsappPhone: row.whatsapp_phone || null,
   };
 }
 
 export async function getUserByEmail(email: string): Promise<AppUser | null> {
   const row = await queryOne<UserRow>(
-    "select id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch from users where lower(email) = lower($1)",
+    `select ${USER_COLUMNS} from users where lower(email) = lower($1)`,
     [email]
   );
   return row ? fromRow(row) : null;
+}
+
+// Strips everything but digits, and a leading country-code "1" duplicate
+// isn't collapsed — good enough for "does this WhatsApp inbound sender match
+// a stored team-member number", the only thing this is used for (2026-08-18,
+// Team Requests WhatsApp accept/deny). Comparing digit-only avoids "+" /
+// spacing/dash mismatches between what Seni typed in Settings and what Meta
+// reports as the sender.
+function normalizePhoneDigits(n: string): string {
+  return n.replace(/\D/g, "");
+}
+
+/** Finds the team login whose stored WhatsApp number matches an inbound
+ * sender's number, within one organization. Used by the WhatsApp webhook to
+ * resolve a Team Request accept/deny reply to the right person — done as a
+ * small in-memory scan (rarely more than a handful of logins per org) rather
+ * than a SQL digit-strip, since not every environment's Postgres has the
+ * needed extension and this runs at most once per inbound non-Seni message. */
+export async function findUserByWhatsAppPhone(
+  organizationId: string,
+  phone: string
+): Promise<AppUser | null> {
+  const target = normalizePhoneDigits(phone);
+  if (!target) return null;
+  const rows = await query<UserRow>(
+    `select ${USER_COLUMNS} from users where organization_id = $1 and whatsapp_phone is not null and whatsapp_phone <> '' and active = true`,
+    [organizationId]
+  );
+  const match = rows.find((r) => normalizePhoneDigits(r.whatsapp_phone || "") === target);
+  return match ? fromRow(match) : null;
 }
 
 /** Current session-invalidation epoch for a login, resolved by email (the
@@ -115,25 +155,30 @@ export async function upsertUser(input: {
   organizationId?: string;
   language?: string;
   propertyAccess?: string[];
+  whatsappPhone?: string | null;
 }): Promise<AppUser> {
   const hash = await bcrypt.hash(input.password, 12);
   const organizationId = input.organizationId ?? (await getDefaultOrganizationId());
   const row = await queryOne<UserRow>(
-    `insert into users (email, password_hash, name, role, organization_id, language, property_access)
-     values ($1, $2, $3, $4, $5, $6, $7)
+    `insert into users (email, password_hash, name, role, organization_id, language, property_access, whatsapp_phone)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
      on conflict (email) do update set
        password_hash = excluded.password_hash,
        name = excluded.name,
        role = excluded.role,
        language = excluded.language,
        property_access = excluded.property_access,
+       -- Only overwrite a stored number when a new one is actually supplied —
+       -- resetting an existing login's password (the common on-conflict path)
+       -- must not silently blank out a phone that was set earlier.
+       whatsapp_phone = coalesce($8, users.whatsapp_phone),
        active = true,
        -- Session invalidation (2026-08-17 audit): this is the password/role
        -- reset path (scripts/seed-user, admin/set-user-password), so bump the
        -- epoch to kill any cookie minted under the OLD password/role. On the
        -- initial insert the column just defaults to 0.
        session_epoch = users.session_epoch + 1
-     returning id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch`,
+     returning ${USER_COLUMNS}`,
     [
       input.email.toLowerCase(),
       hash,
@@ -142,6 +187,7 @@ export async function upsertUser(input: {
       organizationId,
       input.language ?? "English",
       input.propertyAccess && input.propertyAccess.length > 0 ? input.propertyAccess.join(",") : null,
+      input.whatsappPhone?.trim() || null,
     ]
   );
   if (!row) throw new Error("Failed to create user.");
@@ -153,7 +199,7 @@ export async function upsertUser(input: {
  * type (AppUser) but callers exposing this over HTTP must strip them. */
 export async function listUsers(organizationId: string): Promise<AppUser[]> {
   const rows = await query<UserRow>(
-    `select id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch
+    `select ${USER_COLUMNS}
      from users where organization_id = $1
      order by role, lower(coalesce(name, email))`,
     [organizationId]
@@ -195,6 +241,7 @@ export async function updateUser(
     role?: Role;
     language?: string;
     propertyAccess?: string[];
+    whatsappPhone?: string | null;
   }
 ): Promise<AppUser | null> {
   const sets: string[] = [];
@@ -210,6 +257,7 @@ export async function updateUser(
   if (fields.language !== undefined) push("language", fields.language);
   if (fields.propertyAccess !== undefined)
     push("property_access", fields.propertyAccess.length > 0 ? fields.propertyAccess.join(",") : null);
+  if (fields.whatsappPhone !== undefined) push("whatsapp_phone", fields.whatsappPhone?.trim() || null);
   if (fields.password) push("password_hash", await bcrypt.hash(fields.password, 12));
   if (sets.length === 0) return null;
 
@@ -228,7 +276,7 @@ export async function updateUser(
   const row = await queryOne<UserRow>(
     `update users set ${sets.join(", ")}
      where id = $1 and organization_id = $2
-     returning id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch`,
+     returning ${USER_COLUMNS}`,
     values
   );
   return row ? fromRow(row) : null;
@@ -273,7 +321,7 @@ export async function createUserForSignup(input: {
     `insert into users (email, password_hash, name, role, organization_id)
      values ($1, $2, $3, $4, $5)
      on conflict (email) do nothing
-     returning id, email, password_hash, name, role, active, organization_id, language, property_access, session_epoch`,
+     returning ${USER_COLUMNS}`,
     [input.email.toLowerCase(), hash, input.name ?? null, input.role, input.organizationId]
   );
   return row ? fromRow(row) : null;

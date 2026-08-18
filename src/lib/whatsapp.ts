@@ -80,6 +80,10 @@ function isAdminReplyNotificationConfigured(creds: WhatsAppCredentials): boolean
   return Boolean(creds.accessToken && creds.phoneNumberId && creds.recipientNumber && config.whatsappAdminReplyNotificationTemplate);
 }
 
+function isTeamTaskRequestConfigured(creds: WhatsAppCredentials): boolean {
+  return Boolean(creds.accessToken && creds.phoneNumberId && config.whatsappTeamTaskRequestTemplate);
+}
+
 /** Shared POST to the Graph API messages endpoint — both plain-text sends
  * (to Seni) and template sends (to Gabriel) funnel through this. */
 async function postWhatsAppMessage(payload: Record<string, unknown>, creds: WhatsAppCredentials): Promise<string> {
@@ -419,6 +423,57 @@ export async function sendAdminReplyNotificationTemplate(
               { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
               { type: "text", text: templateParam(params.guestMessage.slice(0, 350)) },
               { type: "text", text: templateParam(params.adminReply.slice(0, 350)) },
+            ],
+          },
+        ],
+      },
+    },
+    creds
+  );
+}
+
+/**
+ * Notifies a tagged team member that a Team Request needs their accept/deny
+ * (2026-08-18, Seni's ask — see lib/teamRequests.ts). Recipient varies per
+ * call (whichever teammate was tagged), same shape as notifyVendorOfWorkOrder
+ * above. Params fill {{1}}..{{4}}: requester name, task title, needed-by
+ * (or "no specific date"), description. Throws WhatsAppError if not
+ * configured/approved yet — callers should catch and fall back to
+ * sendWhatsAppTextTo (best-effort free text, only deliverable if that
+ * person's 24h session window happens to be open) same as every other
+ * template in this file.
+ */
+export async function sendTeamTaskRequestTemplate(
+  params: {
+    to: string;
+    requesterName: string;
+    title: string;
+    neededBy: string;
+    description: string;
+  },
+  organizationId?: string
+): Promise<string> {
+  const creds = await resolveWhatsAppCredentials(organizationId);
+  if (!isTeamTaskRequestConfigured(creds)) {
+    throw new WhatsAppError("Team task-request template isn't configured/approved yet.");
+  }
+
+  return postTemplateWithLanguageFallback(
+    {
+      messaging_product: "whatsapp",
+      to: params.to,
+      type: "template",
+      template: {
+        name: config.whatsappTeamTaskRequestTemplate,
+        language: { code: config.whatsappTemplateLanguage },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: templateParam(params.requesterName.slice(0, 60) || "A teammate") },
+              { type: "text", text: templateParam(params.title.slice(0, 100)) },
+              { type: "text", text: templateParam(params.neededBy.slice(0, 60)) },
+              { type: "text", text: templateParam(params.description.slice(0, 350)) },
             ],
           },
         ],

@@ -11,6 +11,16 @@ import { isEmailSendConfigured } from "@/lib/config";
 // property-group ids; an EMPTY list deliberately means ALL properties, so
 // every login that existed before this feature keeps working unchanged and
 // future properties are visible by default unless explicitly restricted.
+// WhatsApp number validation (2026-08-18, Seni's ask: "make whatsapp number a
+// mandatory field when adding a team member moving forward"). Loose on
+// purpose — same posture as OwnerRez guest phone numbers elsewhere in this
+// app — just enough to reject an obviously-wrong entry (too short, no
+// digits) before it's used as a WhatsApp send target for Team Requests.
+function looksLikePhone(raw: string): boolean {
+  const digits = raw.replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15;
+}
+
 function sanitizePropertyAccess(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) return undefined;
   const valid = new Set(PROPERTY_GROUPS.map((g) => g.id));
@@ -51,6 +61,7 @@ export async function GET(req: NextRequest) {
         role: u.role,
         language: u.language,
         propertyAccess: u.propertyAccess,
+        whatsappPhone: u.whatsappPhone,
         active: u.active,
         isYou: u.email.toLowerCase() === session.email.toLowerCase(),
       })),
@@ -106,6 +117,7 @@ export async function POST(req: NextRequest) {
         role?: string;
         language?: string;
         propertyAccess?: string[];
+        whatsappPhone?: string;
         /** Set false to create the login without emailing them. */
         sendWelcomeEmail?: boolean;
         /** Send the welcome email to this address instead (for a test send). */
@@ -119,6 +131,16 @@ export async function POST(req: NextRequest) {
   }
   if (!body?.password || body.password.length < 8) {
     return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+  }
+  // Mandatory on NEW logins going forward (2026-08-18, Seni's ask) — Team
+  // Requests need a real number to notify whoever gets tagged, and the
+  // gap (no team-member phone stored anywhere) is exactly what made that
+  // feature impossible until now. Existing logins created before this date
+  // are untouched — see upsertUser's coalesce($8, users.whatsapp_phone), so
+  // resetting an existing person's password here doesn't force one either.
+  const whatsappPhone = body.whatsappPhone?.trim() || "";
+  if (whatsappPhone && !looksLikePhone(whatsappPhone)) {
+    return NextResponse.json({ error: "That doesn't look like a valid phone number." }, { status: 400 });
   }
   const role = body.role === "CEO" ? ("CEO" as const) : ("READ_ONLY" as const);
   // Team-member language (2026-08-16): they read the Management tab and
@@ -138,10 +160,23 @@ export async function POST(req: NextRequest) {
   try {
     // Hijack guard: upsertUser's on-conflict(email) update is global —
     // without this check, "creating" an email that belongs to ANOTHER
-    // organization would silently take over that account.
+    // organization would silently take over that account. Also doubles as
+    // the "is this a brand-new login" check for the mandatory-phone rule
+    // below — one lookup, not two.
     const existing = await getUserByEmail(email);
     if (existing && existing.organizationId !== session.organizationId) {
       return NextResponse.json({ error: "That email is already in use." }, { status: 409 });
+    }
+    // Mandatory on NEW logins going forward (2026-08-18, Seni's ask). Team
+    // Requests needs a real number to notify whoever gets tagged, and the
+    // gap — no team-member phone stored anywhere — is exactly what made that
+    // feature impossible until now. Resetting an EXISTING login's password
+    // never requires one (upsertUser's coalesce keeps whatever was there).
+    if (!existing && !looksLikePhone(whatsappPhone)) {
+      return NextResponse.json(
+        { error: "A WhatsApp number is required for new team members (e.g. +57 320 750 7474)." },
+        { status: 400 }
+      );
     }
 
     const user = await upsertUser({
@@ -151,6 +186,7 @@ export async function POST(req: NextRequest) {
       role,
       language,
       propertyAccess: sanitizePropertyAccess(body.propertyAccess) ?? [],
+      whatsappPhone: whatsappPhone || undefined,
       organizationId: session.organizationId,
     });
     const mail =
@@ -168,6 +204,7 @@ export async function POST(req: NextRequest) {
         role: user.role,
         language: user.language,
         propertyAccess: user.propertyAccess,
+        whatsappPhone: user.whatsappPhone,
         active: user.active,
       },
       reset: Boolean(existing),
@@ -217,6 +254,7 @@ export async function PUT(req: NextRequest) {
         role?: string;
         language?: string;
         propertyAccess?: string[];
+        whatsappPhone?: string;
       }
     | null;
   if (!body?.userId) return NextResponse.json({ error: "userId is required." }, { status: 400 });
@@ -227,6 +265,10 @@ export async function PUT(req: NextRequest) {
   }
   if (body.password && body.password.length < 8) {
     return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
+  }
+  const whatsappPhone = body.whatsappPhone?.trim();
+  if (whatsappPhone && !looksLikePhone(whatsappPhone)) {
+    return NextResponse.json({ error: "That doesn't look like a valid phone number." }, { status: 400 });
   }
 
   const ALLOWED = ["English", "Spanish", "Portuguese"];
@@ -257,6 +299,7 @@ export async function PUT(req: NextRequest) {
       ...(role ? { role } : {}),
       ...(language ? { language } : {}),
       ...(propertyAccess !== undefined ? { propertyAccess } : {}),
+      ...(body.whatsappPhone !== undefined ? { whatsappPhone } : {}),
     });
     if (!updated) return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
 
@@ -269,6 +312,7 @@ export async function PUT(req: NextRequest) {
         role: updated.role,
         language: updated.language,
         propertyAccess: updated.propertyAccess,
+        whatsappPhone: updated.whatsappPhone,
         active: updated.active,
       },
       // A changed email/password invalidates nothing server-side, but the

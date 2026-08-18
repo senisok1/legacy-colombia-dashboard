@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
       role: u.role,
       roleLabel: u.role === "CEO" ? "Owner/Admin" : "Team member",
       language: u.language,
+      whatsappPhone: u.whatsappPhone,
       active: u.active,
       propertyAccess: u.propertyAccess.length > 0 ? u.propertyAccess : ["(all properties)"],
       propertyLabels: allowedPropertyGroups(u.propertyAccess).map((g) => g.label),

@@ -23,6 +23,7 @@ type ManagedUser = {
   role: string;
   language?: string;
   propertyAccess?: string[];
+  whatsappPhone?: string | null;
   active: boolean;
   isYou: boolean;
 };
@@ -68,7 +69,7 @@ export function TeamLoginsManager() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English", whatsappPhone: "" });
   const [formProperties, setFormProperties] = useState<string[]>([]);
   // Welcome email (2026-08-17): on by default — a new teammate gets their
   // login details plus plain-language instructions for every tab.
@@ -76,7 +77,7 @@ export function TeamLoginsManager() {
   // Inline edit (2026-08-16): change a teammate's email/password/name/
   // language/access without deleting and recreating the login.
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+  const [editForm, setEditForm] = useState({ name: "", email: "", password: "", role: "READ_ONLY", language: "English", whatsappPhone: "" });
   const [editProperties, setEditProperties] = useState<string[]>([]);
 
   function startEdit(u: ManagedUser) {
@@ -88,6 +89,7 @@ export function TeamLoginsManager() {
       password: "",
       role: u.role,
       language: u.language || "English",
+      whatsappPhone: u.whatsappPhone || "",
     });
     setEditProperties(u.propertyAccess ?? []);
   }
@@ -173,7 +175,7 @@ export function TeamLoginsManager() {
           ? `Updated ${json.user.email} — new password is set.`
           : `Created ${json.user.email}.`) + mailNote
       );
-      setForm({ name: "", email: "", password: "", role: "READ_ONLY", language: "English" });
+      setForm({ name: "", email: "", password: "", role: "READ_ONLY", language: "English", whatsappPhone: "" });
       setFormProperties([]);
       setError(null);
       await load();
@@ -268,6 +270,11 @@ export function TeamLoginsManager() {
                     .join(", ")}
                 </span>
               )}
+              {u.whatsappPhone ? (
+                <span className="text-xs text-black/40 dark:text-white/40">{u.whatsappPhone}</span>
+              ) : (
+                <span className="text-xs text-amber-600 dark:text-amber-400">no WhatsApp number on file</span>
+              )}
               {u.isYou && <span className="text-xs text-black/40 dark:text-white/40">(you)</span>}
               {!u.active && <span className="text-xs text-red-500">deactivated</span>}
               <span className="ml-auto flex gap-1.5">
@@ -351,6 +358,15 @@ export function TeamLoginsManager() {
                       <option value="Portuguese">Portuguese (Português)</option>
                     </select>
                   </label>
+                  <label className="text-xs text-black/60 dark:text-white/60">
+                    WhatsApp number
+                    <input
+                      className="mt-0.5 block w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+                      value={editForm.whatsappPhone}
+                      onChange={(e) => setEditForm((f) => ({ ...f, whatsappPhone: e.target.value }))}
+                      placeholder="+57 320 750 7474"
+                    />
+                  </label>
                   <button
                     type="submit"
                     disabled={busy}
@@ -420,6 +436,16 @@ export function TeamLoginsManager() {
             <option value="Spanish">Spanish (Español)</option>
             <option value="Portuguese">Portuguese (Português)</option>
           </select>
+        </label>
+        <label className="text-xs text-black/60 dark:text-white/60">
+          WhatsApp number
+          <input
+            required
+            className="mt-0.5 block w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.whatsappPhone}
+            onChange={(e) => setForm((f) => ({ ...f, whatsappPhone: e.target.value }))}
+            placeholder="+57 320 750 7474"
+          />
         </label>
         <label className="flex items-center gap-1.5 pb-1.5 text-xs text-black/60 dark:text-white/60">
           <input

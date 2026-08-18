@@ -1,4 +1,5 @@
 import { TeamActivityLog } from "@/components/TeamActivityLog";
+import { TeamRequests } from "@/components/TeamRequests";
 import { getServerSession } from "@/lib/session";
 import { enforceBillingLock } from "@/lib/billingGate";
 
@@ -21,6 +22,7 @@ export default async function TeamLogPage() {
           logged what and when.
         </p>
       </div>
+      <TeamRequests />
       <TeamActivityLog />
     </div>
   );

@@ -133,6 +133,14 @@ export const config = {
   whatsappDailySummaryTemplate: (process.env.WHATSAPP_DAILY_SUMMARY_TEMPLATE || "daily_summary_alert").trim(),
   whatsappBookingNotificationTemplate: (process.env.WHATSAPP_BOOKING_NOTIFICATION_TEMPLATE || "booking_notification").trim(),
   whatsappAdminReplyNotificationTemplate: (process.env.WHATSAPP_ADMIN_REPLY_NOTIFICATION_TEMPLATE || "admin_reply_notification").trim(),
+  // Team Requests (2026-08-18): notifies a TAGGED TEAM MEMBER (Gabriel, Ahmed,
+  // Geo, …) that something needs their accept/deny — recipient varies per
+  // request, unlike the templates above which always go to Seni's own
+  // number. Requires Meta approval like every other template here; falls
+  // back to free text (only deliverable if that person already has an open
+  // 24h session with this WhatsApp number) until then — see
+  // lib/teamRequestNotify.ts.
+  whatsappTeamTaskRequestTemplate: (process.env.WHATSAPP_TEAM_TASK_REQUEST_TEMPLATE || "team_task_request").trim(),
 
   // --- WhatsApp — public chat widget answer fallback ---
   // Used only when a website visitor who asked an escalated question has

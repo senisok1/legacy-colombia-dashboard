@@ -32,7 +32,14 @@ import { translateToLanguage } from "@/lib/translate";
 import { notifyGabrielIfServiceRequest } from "@/lib/serviceRequestNotify";
 import { logAiActivity } from "@/lib/aiActivity";
 import { handleBillForward } from "@/lib/billForward";
+import { resolveTeamRequestForPhone, setDecision as setTeamRequestDecision } from "@/lib/teamRequests";
+import { notifyRequesterOfDecision } from "@/lib/teamRequestNotify";
+import { getUserByEmail } from "@/lib/users";
+import { getDefaultOrganizationId } from "@/lib/organizations";
+import { createTeamActivity } from "@/lib/teamActivities";
 import type { PendingDraft, ChatEscalation } from "@/lib/types";
+import type { AppUser } from "@/lib/users";
+import type { TeamRequest } from "@/lib/teamRequests";
 
 // Downloading a WhatsApp media file + running Claude vision extraction
 // (see lib/billForward.ts) can take longer than the platform's default 10s
@@ -193,6 +200,105 @@ async function handlePublicWhatsAppInquiry(msg: Extract<IncomingWhatsAppMessage,
     actionTaken: "Sent approval request to Seni via WhatsApp; acknowledged the inquirer",
     result: "pending",
   });
+}
+
+const TEAM_REQUEST_AGENT_KEY = "team_requests";
+const TEAM_REQUEST_AGENT_NAME = "Team Requests";
+
+/**
+ * Handles a team member accepting/declining a Team Request by replying
+ * YES/NO on WhatsApp, from THEIR OWN number (2026-08-18, Seni's ask —
+ * "should be able to accept/deny by replying on WhatsApp"). Bilingual
+ * yes/no since Gabriel and others write in Spanish — see
+ * lib/teamWelcomeEmail.ts for the same audience. Kept entirely separate from
+ * the guest-reply/escalation YES/NO/EDIT: protocol above: this only ever
+ * triggers for a sender who (a) isn't Seni's own authorized number and
+ * (b) has a stored WhatsApp number matching a team login with something
+ * pending — resolved by the caller (resolveTeamRequestForPhone) before this
+ * is ever invoked.
+ */
+async function handleTeamRequestReply(
+  rawText: string,
+  match: { user: AppUser; request: TeamRequest },
+  organizationId: string
+): Promise<void> {
+  const { user, request } = match;
+  const reply = rawText.trim();
+  const isYes = /^(y(es)?|s(i|í)|accept(ed)?|acepto)$/i.test(reply);
+  const isNo = /^(n(o)?|deny|declin(e|ed)?|rechazo|no acepto)$/i.test(reply);
+
+  if (!isYes && !isNo) {
+    const hintEnglish = `Reply YES to accept or NO to decline "${request.title}".`;
+    const hint =
+      user.language && user.language !== "English"
+        ? await translateToLanguage(hintEnglish, user.language, organizationId).catch(() => hintEnglish)
+        : hintEnglish;
+    await sendWhatsAppTextTo(user.whatsappPhone || "", hint, organizationId).catch(() => {});
+    return;
+  }
+
+  const updated = await setTeamRequestDecision({
+    organizationId,
+    id: request.id,
+    accepted: isYes,
+    declined: isNo,
+    byEmail: user.email,
+    byName: user.name,
+  });
+  if (!updated) {
+    await sendWhatsAppTextTo(
+      user.whatsappPhone || "",
+      "That request isn't available anymore — check the Team Activity Log tab.",
+      organizationId
+    ).catch(() => {});
+    return;
+  }
+
+  const confirmEnglish = isYes ? `✅ Accepted "${request.title}".` : `Declined "${request.title}".`;
+  const confirm =
+    user.language && user.language !== "English"
+      ? await translateToLanguage(confirmEnglish, user.language, organizationId).catch(() => confirmEnglish)
+      : confirmEnglish;
+  await sendWhatsAppTextTo(user.whatsappPhone || "", confirm, organizationId).catch(() => {});
+
+  const requester = await getUserByEmail(updated.requestedByEmail).catch(() => null);
+  if (requester) {
+    await notifyRequesterOfDecision(
+      updated,
+      {
+        email: requester.email,
+        name: requester.name,
+        phone: requester.whatsappPhone,
+        language: requester.language || "English",
+      },
+      "https://crm.legacyestaterentals.com/team-log",
+      organizationId
+    ).catch(() => {});
+  }
+
+  await createTeamActivity({
+    organizationId,
+    propertyGroupId: updated.propertyGroupId,
+    authorEmail: user.email,
+    authorName: user.name,
+    kind: "activity",
+    body: isYes
+      ? `Accepted: "${updated.title}" (requested by ${updated.requestedByName || updated.requestedByEmail}).`
+      : `Declined: "${updated.title}" (requested by ${updated.requestedByName || updated.requestedByEmail}).`,
+  }).catch(() => {});
+
+  await logAiActivity(
+    {
+      agentKey: TEAM_REQUEST_AGENT_KEY,
+      agentDisplayName: TEAM_REQUEST_AGENT_NAME,
+      task: "Resolve team request via WhatsApp",
+      trigger: `${user.name || user.email} replied "${isYes ? "YES" : "NO"}" via WhatsApp for request ${request.id}`,
+      decision: isYes ? "accepted" : "declined",
+      actionTaken: "Recorded decision and notified the requester",
+      result: isYes ? "accepted" : "declined",
+    },
+    organizationId
+  ).catch(() => {});
 }
 
 // Rolling log of Meta's delivery-status callbacks (sent/delivered/read/
@@ -356,14 +462,36 @@ export async function POST(req: NextRequest) {
     }
 
     if (!isFromAuthorizedSender(msg.from)) {
-      // Not Seni. Gabriel occasionally texts this same number too — that's
-      // never a business inquiry, just ignore it (same as before this
-      // feature existed). Anyone else texting in is a genuine public
-      // inquiry — most likely someone who clicked the "Message" button on
-      // the Google Business Profile, since that's the only place this
-      // number is published for outside contact — so route it through the
-      // same AI-draft + approval pathway as chat-widget escalations rather
-      // than silently dropping it.
+      // Team Requests (2026-08-18): check BEFORE the Gabriel/public-inquiry
+      // branches below — Gabriel now also has a team login, and without this
+      // check first, his "YES" to a task-request notification would either
+      // be silently ignored (the isFromGabriel branch) or misread as a
+      // random public inquiry. Any non-Seni sender whose number matches an
+      // active team login with something pending routes here instead.
+      if (msg.type === "text") {
+        try {
+          const orgId = await getDefaultOrganizationId();
+          const teamMatch = await resolveTeamRequestForPhone(orgId, msg.from, msg.contextWamid);
+          if (teamMatch) {
+            await handleTeamRequestReply(msg.text, teamMatch, orgId);
+            continue;
+          }
+        } catch (err) {
+          console.error("[whatsapp webhook] team-request resolution failed:", err);
+          // Fall through to the existing branches below rather than dropping
+          // the message outright — worst case it's treated as a public
+          // inquiry, same as before this feature existed.
+        }
+      }
+
+      // Not Seni, not a team-request reply. Gabriel occasionally texts this
+      // same number too for other reasons — that's never a business inquiry,
+      // just ignore it (same as before this feature existed). Anyone else
+      // texting in is a genuine public inquiry — most likely someone who
+      // clicked the "Message" button on the Google Business Profile, since
+      // that's the only place this number is published for outside contact —
+      // so route it through the same AI-draft + approval pathway as
+      // chat-widget escalations rather than silently dropping it.
       if (isFromGabriel(msg.from)) continue;
       if (msg.type === "text") await handlePublicWhatsAppInquiry(msg);
       continue;
