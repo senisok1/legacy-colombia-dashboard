@@ -954,6 +954,40 @@ export async function getQuotedNightlyRateCents(date: string, organizationId?: s
   return null;
 }
 
+// One-off diagnostic (2026-08-18, building the Team Management "transactions
+// on hover / balance owed" feature — Seni: "you can pull this data from the
+// ownerrez transactions section"). Same discipline as every other field in
+// this file's normalizers: confirm the REAL field names against a live
+// response before building anything that touches money, rather than
+// guessing from docs. Returns the raw /bookings/{id} payload (to check for
+// a computed total_paid/balance field already on the booking itself) plus
+// whatever /bookings/{id}/transactions returns (200 with the itemized
+// ledger, or the error if that path doesn't exist on this API version) —
+// see api/admin/ownerrez-transactions-probe/route.ts for the ADMIN_SECRET-
+// gated route that calls this. Safe to leave deployed; read-only.
+export async function probeBookingFinancials(
+  bookingId: number,
+  organizationId?: string
+): Promise<{ booking: Record<string, unknown> | { error: string }; transactions: unknown }> {
+  const creds = await resolveOwnerRezCredentials(organizationId);
+
+  let booking: Record<string, unknown> | { error: string };
+  try {
+    booking = await orFetch<Record<string, unknown>>(`/bookings/${bookingId}`, undefined, creds);
+  } catch (err) {
+    booking = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  let transactions: unknown;
+  try {
+    transactions = await orFetch<unknown>(`/bookings/${bookingId}/transactions`, undefined, creds);
+  } catch (err) {
+    transactions = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return { booking, transactions };
+}
+
 export async function testConnection(organizationId?: string): Promise<{ ok: boolean; message: string }> {
   const creds = await resolveOwnerRezCredentials(organizationId);
   if (!isLive(creds)) {
