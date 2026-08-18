@@ -36,6 +36,23 @@ export const PROPERTY_GROUPS: PropertyGroup[] = [
 export const DEFAULT_PROPERTY_GROUP_ID = "legacy-colombia";
 export const PROPERTY_GROUP_COOKIE = "lc_property_group";
 
+// Temporary scope pull-back (2026-08-18, Seni's explicit ask): "I'm still
+// getting whatsapp messages to 732-689-5070 for properties other than
+// Legacy Colombia. For now, all I need is Legacy Colombia until I tell you
+// further." The 2026-08-17 multi-property expansion made several background
+// crons (guest-message drafting + WhatsApp approval, admin-reply FYIs,
+// new-booking alerts, review-response detection) loop over every property
+// in PROPERTY_GROUPS — this pulls that back to Colombia-only WITHOUT
+// touching any of that multi-property plumbing (getBookings/getGuests
+// scoping, per-property drafting context, etc.), so re-enabling the other
+// four later is just changing this one array back to PROPERTY_GROUPS (or
+// adding specific ids). The Team Management dashboard's manual property
+// switcher is untouched — Seni can still browse Alva/Pompano/Miami/Beach
+// House on demand; this only gates unattended background automation.
+export const AUTOMATION_PROPERTY_GROUPS: PropertyGroup[] = PROPERTY_GROUPS.filter(
+  (g) => g.id === DEFAULT_PROPERTY_GROUP_ID
+);
+
 export function isValidPropertyGroupId(id: unknown): id is string {
   return typeof id === "string" && PROPERTY_GROUPS.some((g) => g.id === id);
 }

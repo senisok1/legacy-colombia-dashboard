@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { config, isDbConfigured } from "@/lib/config";
 import { buildTrendReport, deliverTrendReport } from "@/lib/trendReport";
 import { listActiveOrganizations } from "@/lib/organizations";
-import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
+import { AUTOMATION_PROPERTY_GROUPS } from "@/lib/propertyGroups";
 
 // Weekly trend report (see lib/trendReport.ts's header comment) — runs once
 // a week via vercel.json's cron entry, same guard pattern as
@@ -70,7 +70,10 @@ export async function GET(req: NextRequest) {
       // Per-property fan-out — see the header note. One report built and
       // delivered per property group.
       const perProperty: Record<string, unknown> = {};
-      for (const group of PROPERTY_GROUPS) {
+      // Scoped to Legacy Colombia only for now (2026-08-18, Seni's ask: the
+      // weekly WhatsApp trend report was going out for all five properties)
+      // — see lib/propertyGroups.ts's AUTOMATION_PROPERTY_GROUPS comment.
+      for (const group of AUTOMATION_PROPERTY_GROUPS) {
         try {
           const report = await buildTrendReport(org.id, group.id);
           const delivery = await deliverTrendReport(

@@ -3,7 +3,7 @@ import { config, isDbConfigured } from "@/lib/config";
 import { buildExecutiveReport, deliverExecutiveReport } from "@/lib/executiveReport";
 import { listActiveOrganizations } from "@/lib/organizations";
 import { listUsers } from "@/lib/users";
-import { PROPERTY_GROUPS, allowedPropertyGroups } from "@/lib/propertyGroups";
+import { AUTOMATION_PROPERTY_GROUPS, allowedPropertyGroups } from "@/lib/propertyGroups";
 
 // Daily executive report, 5:10am ET.
 //
@@ -89,7 +89,12 @@ export async function GET(req: NextRequest) {
       }
 
       const perProperty: Record<string, unknown> = {};
-      for (const group of PROPERTY_GROUPS) {
+      // Scoped to Legacy Colombia only for now (2026-08-18, Seni's ask: the
+      // daily WhatsApp summary was going out for all five properties) — see
+      // lib/propertyGroups.ts's AUTOMATION_PROPERTY_GROUPS comment. The
+      // manual admin/run-daily-report route is untouched, since that's a
+      // deliberate on-demand trigger, not unattended automation.
+      for (const group of AUTOMATION_PROPERTY_GROUPS) {
         const recipients = recipientsByGroup.get(group.id);
         if (!recipients || recipients.length === 0) continue; // nobody can see it
 

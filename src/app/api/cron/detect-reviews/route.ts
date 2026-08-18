@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { config, isDbConfigured } from "@/lib/config";
 import { detectAndDraftResponses } from "@/lib/reputationManager";
 import { listActiveOrganizations } from "@/lib/organizations";
-import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
+import { AUTOMATION_PROPERTY_GROUPS } from "@/lib/propertyGroups";
 
 // Daily scan for reviews with no host response yet — drafts an AI response
 // for each and notifies Seni once over WhatsApp (see
@@ -65,7 +65,11 @@ export async function GET(req: NextRequest) {
       // Per-property fan-out — see the header note. detectAndDraftResponses
       // scopes both the review listing and the drafted rows to the group id.
       const perProperty: Record<string, unknown> = {};
-      for (const group of PROPERTY_GROUPS) {
+      // Scoped to Legacy Colombia only for now (2026-08-18, Seni's ask: he
+      // was getting review-response WhatsApp pings for the other four
+      // properties too) — see lib/propertyGroups.ts's
+      // AUTOMATION_PROPERTY_GROUPS comment.
+      for (const group of AUTOMATION_PROPERTY_GROUPS) {
         try {
           perProperty[group.id] = await detectAndDraftResponses(org.id, group.id);
         } catch (groupErr) {

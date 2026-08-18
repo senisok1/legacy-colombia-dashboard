@@ -23,7 +23,7 @@ import { trailingGuestMessages, combineGuestMessageBodies } from "@/lib/guestMes
 import { sweepChatEscalationFallbacks } from "@/lib/chatEscalationFallback";
 import { checkNewBookingAlerts } from "@/lib/bookingAlerts";
 import { listActiveOrganizations } from "@/lib/organizations";
-import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
+import { AUTOMATION_PROPERTY_GROUPS } from "@/lib/propertyGroups";
 import type { Booking, ThreadMessage } from "@/lib/types";
 
 const AGENT_KEY = "guest_experience";
@@ -155,7 +155,9 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
   let newBookingResults: Record<string, unknown> = { skipped: "WhatsApp not configured yet." };
   if (isWhatsAppConfigured()) {
     const perGroup: Record<string, unknown> = {};
-    for (const group of PROPERTY_GROUPS) {
+    // Scoped to Legacy Colombia only for now (2026-08-18, Seni's ask) — see
+    // lib/propertyGroups.ts's AUTOMATION_PROPERTY_GROUPS comment.
+    for (const group of AUTOMATION_PROPERTY_GROUPS) {
       try {
         const [bookingsForAlert, guestsForAlert] = await Promise.all([
           getBookings(orgId, group.id),
@@ -243,7 +245,9 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
   // comment for the full reasoning.
   const runStartedAt = Date.now();
 
-  for (const group of PROPERTY_GROUPS) {
+  // Scoped to Legacy Colombia only for now (2026-08-18, Seni's ask) — see
+  // lib/propertyGroups.ts's AUTOMATION_PROPERTY_GROUPS comment.
+  for (const group of AUTOMATION_PROPERTY_GROUPS) {
     try {
       const [allBookings, guests] = await Promise.all([
         getBookings(orgId, group.id),
