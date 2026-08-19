@@ -468,6 +468,25 @@ const STRINGS: Dict = {
     Portuguese: "Somente o proprietário pode aprovar ou liquidar isso — você está visualizando.",
   },
   "comm.loading": { English: "Loading commissions…", Spanish: "Cargando comisiones…", Portuguese: "Carregando comissões…" },
+  "comm.logExtra": { English: "Log an extra", Spanish: "Registrar un extra", Portuguese: "Registrar um extra" },
+  "comm.editExtraLine": { English: "Edit extra", Spanish: "Editar extra", Portuguese: "Editar extra" },
+  "comm.selectStay": { English: "Which stay?", Spanish: "¿Qué estadía?", Portuguese: "Qual estadia?" },
+  "comm.chooseStay": { English: "Choose a stay…", Spanish: "Elige una estadía…", Portuguese: "Escolha uma estadia…" },
+  "comm.noStays": { English: "No stays found for this property.", Spanish: "No se encontraron estadías para esta propiedad.", Portuguese: "Nenhuma estadia encontrada para esta propriedade." },
+  "comm.kind": { English: "Type", Spanish: "Tipo", Portuguese: "Tipo" },
+  "comm.describeExtra": { English: "Describe the extra", Spanish: "Describe el extra", Portuguese: "Descreva o extra" },
+  "comm.serviceDateField": { English: "Date (defaults to arrival)", Spanish: "Fecha (por defecto la llegada)", Portuguese: "Data (padrão: chegada)" },
+  "comm.guestPaidField": { English: "Guest paid", Spanish: "Pagó el huésped", Portuguese: "Hóspede pagou" },
+  "comm.vendorPaidField": { English: "Paid to vendor", Spanish: "Pagado al proveedor", Portuguese: "Pago ao fornecedor" },
+  "comm.notesField": { English: "Notes (optional)", Spanish: "Notas (opcional)", Portuguese: "Notas (opcional)" },
+  "comm.saveExtra": { English: "Save extra", Spanish: "Guardar extra", Portuguese: "Salvar extra" },
+  "comm.markSettled": { English: "Settled", Spanish: "Liquidado", Portuguese: "Liquidado" },
+  "comm.settleThisLine": { English: "Settle this line", Spanish: "Liquidar esta línea", Portuguese: "Liquidar esta linha" },
+  "comm.alreadyPaidHelp": {
+    English: "For when Gabriel already collected this in cash — marks it paid and logs it to settlement history.",
+    Spanish: "Para cuando Gabriel ya cobró esto en efectivo — lo marca como pagado y lo registra en el historial de liquidaciones.",
+    Portuguese: "Para quando Gabriel já recebeu isso em dinheiro — marca como pago e registra no histórico de liquidações.",
+  },
 };
 
 /** Every valid translation key — for editor autocomplete on call sites that

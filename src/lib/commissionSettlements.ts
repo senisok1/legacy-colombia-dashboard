@@ -123,18 +123,37 @@ export async function createCommissionSettlement(input: {
       const settlement = rows[0];
       if (!settlement) throw new Error("Failed to create the settlement record.");
 
+      // Approval is stamped here too (via COALESCE, so an already-approved
+      // row keeps its real approver/timestamp) rather than required as a
+      // precondition — the owner-only quick "Settled" action (2026-08-19,
+      // Seni's ask: "mark that as settled if paid by Gabriel already") can
+      // settle a line that was never formally approved first, e.g. Gabriel
+      // already collected cash directly. WHICH ids land here is still
+      // entirely controlled by the caller (route.ts) — the bulk "Settle
+      // payout" button only ever passes already-approved ids, so its
+      // behavior is unchanged.
       if (input.extraIds.length > 0) {
         await client.query(
-          `update booking_extras set settled_at = now(), settlement_id = $1
-           where organization_id = $2 and id = any($3::uuid[]) and approved = true and settled_at is null`,
-          [settlement.id, input.organizationId, input.extraIds]
+          `update booking_extras set
+             approved = true,
+             approved_by_email = coalesce(approved_by_email, $4),
+             approved_by_name  = coalesce(approved_by_name, $5),
+             approved_at       = coalesce(approved_at, now()),
+             settled_at = now(), settlement_id = $1
+           where organization_id = $2 and id = any($3::uuid[]) and declined = false and settled_at is null`,
+          [settlement.id, input.organizationId, input.extraIds, input.settledByEmail, input.settledByName]
         );
       }
       if (input.directBookingIds.length > 0) {
         await client.query(
-          `update direct_booking_commissions set settled_at = now(), settlement_id = $1
-           where organization_id = $2 and id = any($3::uuid[]) and approved = true and settled_at is null`,
-          [settlement.id, input.organizationId, input.directBookingIds]
+          `update direct_booking_commissions set
+             approved = true,
+             approved_by_email = coalesce(approved_by_email, $4),
+             approved_by_name  = coalesce(approved_by_name, $5),
+             approved_at       = coalesce(approved_at, now()),
+             settled_at = now(), settlement_id = $1
+           where organization_id = $2 and id = any($3::uuid[]) and declined = false and settled_at is null`,
+          [settlement.id, input.organizationId, input.directBookingIds, input.settledByEmail, input.settledByName]
         );
       }
 

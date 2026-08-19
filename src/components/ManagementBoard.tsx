@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { StayExtras } from "./StayExtras";
-import type { BookingExtra } from "@/lib/bookingExtrasShared";
 import { useCurrency } from "@/components/CurrencyProvider";
 import { useT, useLanguage } from "@/components/LanguageProvider";
 import { plural } from "@/lib/i18n";
@@ -55,9 +53,6 @@ type Stay = {
   eventDate?: string | null;
   eventTime?: string | null;
   eventGuestCount?: number | null;
-  /** Paid extras (2026-08-17) — always [] on properties other than Legacy
-   * Colombia, where the server doesn't even query for them. */
-  extras?: BookingExtra[];
   notes: StayNote[];
 };
 
@@ -78,8 +73,6 @@ type CalendarStay = { bookingId: number; guestName: string; arrival?: string; de
 type BoardData = {
   stays: Stay[];
   calendarStays?: CalendarStay[];
-  /** Server-side gate: true only for Legacy Colombia (2026-08-17). */
-  extrasEnabled?: boolean;
   activityLog: LogEntry[];
   viewerRole?: string;
   viewerLanguage?: string;
@@ -647,15 +640,6 @@ export function ManagementBoard() {
                   </span>
                 )}
               </div>
-              {data.extrasEnabled && (
-                <StayExtras
-                  bookingId={s.bookingId}
-                  extras={s.extras ?? []}
-                  stayDates={stayDates(s.arrival, s.departure)}
-                  onChanged={() => void load(true)}
-                  onError={setError}
-                />
-              )}
               {s.notes.length > 0 && (
                 <ul className="space-y-1">
                   {s.notes.map((n) => (

@@ -51,9 +51,12 @@ type ExtraLine = {
   bookingId: number;
   guestName: string | null;
   serviceDate: string | null;
+  kind: string;
+  customLabel: string | null;
   label: string;
   guestPaid: number;
   vendorPaid: number;
+  notes: string | null;
   houseAmount: number;
   gabrielAmount: number;
   createdBy: string | null;
@@ -90,9 +93,12 @@ function toExtraLine(e: BookingExtra, bookingsById: Map<number, Booking>): Extra
     bookingId: e.bookingId,
     guestName: b?.guestName ?? null,
     serviceDate: e.serviceDate,
+    kind: e.kind,
+    customLabel: e.customLabel,
     label: e.kind === "other" ? e.customLabel || "Other" : e.kind,
     guestPaid: e.guestPaid,
     vendorPaid: e.vendorPaid,
+    notes: e.notes,
     houseAmount: e.houseShare,
     gabrielAmount: e.gabrielShare,
     createdBy: e.createdBy,
@@ -136,12 +142,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       enabled: false,
       viewerIsOwner,
+      viewerEmail: session.email,
       extras: [],
       directBookings: [],
       settlements: [],
       pendingTotalUsd: 0,
       payableTotalUsd: 0,
       previewRate: null,
+      stays: [],
     });
   }
 
@@ -171,15 +179,34 @@ export async function GET(req: NextRequest) {
     // trusted from this earlier read.
     const previewRate = await getUsdToRate("COP").catch(() => null);
 
+    // Stay picker for "log an extra" (2026-08-19: the Add Extra form moved
+    // here from Team Management, so it needs its own booking list instead
+    // of inheriting stay context from a card it used to be nested inside).
+    // Not date-filtered — an extra can legitimately be logged for a stay
+    // that already departed (Gabriel remembering a chef he arranged last
+    // week), same reasoning stayDates() used to allow in StayExtras.tsx.
+    const stays = bookings
+      .filter((b) => !b.isBlock && b.status !== "Cancelled")
+      .sort((a, b) => new Date(b.arrival || 0).getTime() - new Date(a.arrival || 0).getTime())
+      .slice(0, 300)
+      .map((b) => ({
+        bookingId: b.id,
+        guestName: b.guestName || "Guest",
+        arrival: b.arrival || null,
+        departure: b.departure || null,
+      }));
+
     return NextResponse.json({
       enabled: true,
       viewerIsOwner,
+      viewerEmail: session.email,
       extras: extraLines,
       directBookings: directLines,
       settlements,
       pendingTotalUsd,
       payableTotalUsd,
       previewRate,
+      stays,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -240,7 +267,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Commissions are only tracked for Legacy Colombia." }, { status: 400 });
   }
 
-  const body = (await req.json().catch(() => null)) as { fxBufferPct?: unknown; note?: string } | null;
+  const body = (await req.json().catch(() => null)) as
+    | { fxBufferPct?: unknown; note?: string; only?: { type?: "extra" | "direct_booking"; id?: string } }
+    | null;
   const bufferRaw = Number(body?.fxBufferPct ?? 0);
   // Clamped, not just validated — a visible buffer is the whole point (see
   // the "match anything containing Gabriel" conversation this replaced a
@@ -248,18 +277,49 @@ export async function POST(req: NextRequest) {
   // shouldn't be able to 10x a payout.
   const fxBufferPct = Number.isFinite(bufferRaw) ? Math.min(Math.max(bufferRaw, 0), 50) : 0;
   const note = typeof body?.note === "string" && body.note.trim() ? body.note.trim().slice(0, 500) : null;
+  const only = body?.only && (body.only.type === "extra" || body.only.type === "direct_booking") && body.only.id
+    ? { type: body.only.type, id: body.only.id }
+    : null;
 
   try {
     const bookings = await getBookings(session.organizationId, groupId);
     const bookingsById = new Map(bookings.map((b) => [b.id, b]));
 
-    const extrasByBooking = await listBookingExtras(session.organizationId);
-    const payableExtras = [...extrasByBooking.values()]
-      .flat()
-      .filter((e) => e.approved && !e.declined && !e.settledAt);
+    let payableExtras: BookingExtra[];
+    let payableDirect: DirectBookingCommission[];
 
-    const directFlat = await listDirectBookingCommissions(session.organizationId);
-    const payableDirect = directFlat.filter((d) => d.approved && !d.declined && !d.settledAt);
+    if (only) {
+      // Owner-only quick "Settled" action (2026-08-19, Seni's ask: "mark
+      // that as settled if paid by Gabriel already") — settles exactly one
+      // line, regardless of whether it was ever formally approved first
+      // (createCommissionSettlement stamps the approval alongside the
+      // settlement in that case). Still excludes declined/already-settled
+      // lines, same as the bulk path below.
+      if (only.type === "extra") {
+        const all = [...(await listBookingExtras(session.organizationId)).values()].flat();
+        const line = all.find((e) => e.id === only.id && !e.declined && !e.settledAt);
+        payableExtras = line ? [line] : [];
+        payableDirect = [];
+      } else {
+        const all = await listDirectBookingCommissions(session.organizationId);
+        const line = all.find((d) => d.id === only.id && !d.declined && !d.settledAt);
+        payableExtras = [];
+        payableDirect = line ? [line] : [];
+      }
+      if (payableExtras.length === 0 && payableDirect.length === 0) {
+        return NextResponse.json(
+          { error: "No such commission, or it's already been declined or settled." },
+          { status: 404 }
+        );
+      }
+    } else {
+      const extrasByBooking = await listBookingExtras(session.organizationId);
+      payableExtras = [...extrasByBooking.values()].flat().filter((e) => e.approved && !e.declined && !e.settledAt);
+
+      const directFlat = await listDirectBookingCommissions(session.organizationId);
+      payableDirect = directFlat.filter((d) => d.approved && !d.declined && !d.settledAt);
+    }
+
     const payableDirectWithSplit = payableDirect
       .map((d) => ({ commission: d, split: computeSplit(d, bookingsById.get(d.bookingId)) }))
       .filter((x): x is { commission: DirectBookingCommission; split: NonNullable<ReturnType<typeof computeSplit>> } => x.split !== null);
@@ -273,7 +333,11 @@ export async function POST(req: NextRequest) {
 
     if (totalUsd <= 0) {
       return NextResponse.json(
-        { error: "Nothing approved and unsettled to settle right now." },
+        {
+          error: only
+            ? "Couldn't settle that — the booking behind it is no longer available."
+            : "Nothing approved and unsettled to settle right now.",
+        },
         { status: 400 }
       );
     }
