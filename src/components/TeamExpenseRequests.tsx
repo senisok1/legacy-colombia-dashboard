@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sumByCurrency, formatCurrencyTotals } from "@/lib/currencyTotals";
+import { useT, useLanguage } from "@/components/LanguageProvider";
+import { categoryLabel } from "@/lib/i18n";
 
 // Team Expense Request tab (2026-08-17, Seni's ask). Anyone on the team can
 // raise a request; the owner ticks "Owner approved"; whoever buys it ticks
@@ -82,6 +84,8 @@ const EMPTY_FORM = {
 };
 
 export function TeamExpenseRequests() {
+  const t = useT();
+  const lang = useLanguage();
   const [requests, setRequests] = useState<ExpenseRequest[] | null>(null);
   const [isOwner, setIsOwner] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +136,7 @@ export function TeamExpenseRequests() {
       setError(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't send that request.");
+      setError(err instanceof Error ? err.message : t("exp.couldntSend"));
     } finally {
       setBusy(false);
     }
@@ -152,7 +156,7 @@ export function TeamExpenseRequests() {
       setError(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't save that.");
+      setError(err instanceof Error ? err.message : t("exp.couldntSave"));
       await load();
     } finally {
       setBusy(false);
@@ -163,7 +167,7 @@ export function TeamExpenseRequests() {
     let actualAmount: string | null = null;
     if (completed) {
       const answer = window.prompt(
-        `What did "${r.title}" actually cost? (leave blank if you don't know yet)`,
+        `${t("exp.whatDid")} "${r.title}" ${t("exp.costPrompt")}`,
         r.estimatedAmount === null ? "" : String(r.estimatedAmount)
       );
       if (answer === null) return; // cancelled
@@ -193,7 +197,7 @@ export function TeamExpenseRequests() {
   }
 
   function decline(r: ExpenseRequest) {
-    const reason = window.prompt(`Why are you turning down "${r.title}"? (optional)`, "");
+    const reason = window.prompt(`${t("exp.declineReasonPrompt")} "${r.title}"? (${t("exp.optional")})`, "");
     if (reason === null) return;
     void call("PATCH", { id: r.id, approved: false, declined: true, declinedReason: reason });
   }
@@ -202,7 +206,7 @@ export function TeamExpenseRequests() {
     return <p className="text-sm text-red-600 dark:text-red-400">{error}</p>;
   }
   if (!requests) {
-    return <p className="text-sm text-black/50 dark:text-white/50">Loading requests…</p>;
+    return <p className="text-sm text-black/50 dark:text-white/50">{t("exp.loadingRequests")}</p>;
   }
 
   const open = requests.filter((r) => !r.completed);
@@ -228,21 +232,21 @@ export function TeamExpenseRequests() {
             onClick={() => setTab("open")}
             className={`rounded-md px-3 py-1 ${tab === "open" ? "bg-black/10 dark:bg-white/10 font-medium" : ""}`}
           >
-            Open ({open.length})
+            {t("exp.open")} ({open.length})
           </button>
           <button
             onClick={() => setTab("completed")}
             className={`rounded-md px-3 py-1 ${tab === "completed" ? "bg-black/10 dark:bg-white/10 font-medium" : ""}`}
           >
-            Completed ({done.length})
+            {t("exp.completed")} ({done.length})
           </button>
         </div>
 
         {waiting.length > 0 && (
           <span className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-sm text-amber-700 dark:text-amber-400">
-            {waiting.length} waiting on the owner
+            {waiting.length} {t("exp.waitingOnOwner")}
             {pendingTotals.length > 0 && (
-              <> · {formatCurrencyTotals(pendingTotals, (a, c) => money(a, c))} estimated</>
+              <> · {formatCurrencyTotals(pendingTotals, (a, c) => money(a, c))} {t("exp.estimated")}</>
             )}
           </span>
         )}
@@ -255,7 +259,7 @@ export function TeamExpenseRequests() {
           }}
           className="ml-auto rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
         >
-          {showForm ? "Cancel" : "Request an expense"}
+          {showForm ? t("common.cancel") : t("exp.requestExpense")}
         </button>
       </div>
 
@@ -267,24 +271,22 @@ export function TeamExpenseRequests() {
           className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3"
         >
           <p className="text-xs text-black/50 dark:text-white/50">
-            {editingId
-              ? "Editing this request. Saving records who edited it and when — and because the details changed, it goes back to the owner for approval."
-              : "The more detail you give, the faster the owner can approve it. Write in your own language — it's translated automatically."}
+            {editingId ? t("exp.editingHelp") : t("exp.newHelp")}
           </p>
 
           <div className="flex flex-wrap gap-3">
             <label className="text-xs text-black/60 dark:text-white/60">
-              What do you need? *
+              {t("exp.whatDoYouNeed")} *
               <input
                 required
                 className="mt-0.5 block w-64 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-                placeholder="New pool pump, gas refill, mattress for room 2…"
+                placeholder={t("exp.whatPlaceholder")}
                 value={form.title}
                 onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
               />
             </label>
             <label className="text-xs text-black/60 dark:text-white/60">
-              Type
+              {t("exp.type")}
               <select
                 className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
                 value={form.category}
@@ -292,31 +294,31 @@ export function TeamExpenseRequests() {
               >
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c}>
-                    {c}
+                    {categoryLabel(c, lang)}
                   </option>
                 ))}
               </select>
             </label>
             <label className="text-xs text-black/60 dark:text-white/60">
-              How urgent?
+              {t("exp.howUrgent")}
               <select
                 className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
                 value={form.urgency}
                 onChange={(e) => setForm((f) => ({ ...f, urgency: e.target.value }))}
               >
-                <option value="low">Low — whenever</option>
-                <option value="normal">Normal</option>
-                <option value="urgent">Urgent — affects guests</option>
+                <option value="low">{t("exp.urgencyLow")}</option>
+                <option value="normal">{t("exp.urgencyNormal")}</option>
+                <option value="urgent">{t("exp.urgencyUrgent")}</option>
               </select>
             </label>
           </div>
 
           <label className="block text-xs text-black/60 dark:text-white/60">
-            Why is it needed? What exactly should be bought or fixed?
+            {t("exp.whyNeeded")}
             <textarea
               rows={3}
               className="mt-0.5 block w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-              placeholder="The pump has been leaking since Monday, the pool is cloudy and we have guests arriving Friday. Same model as the current one, 1.5 HP."
+              placeholder={t("exp.whyPlaceholder")}
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
             />
@@ -324,7 +326,7 @@ export function TeamExpenseRequests() {
 
           <div className="flex flex-wrap gap-3">
             <label className="text-xs text-black/60 dark:text-white/60">
-              Estimated cost
+              {t("exp.estimatedCost")}
               <input
                 type="number"
                 step="0.01"
@@ -335,7 +337,7 @@ export function TeamExpenseRequests() {
               />
             </label>
             <label className="text-xs text-black/60 dark:text-white/60">
-              Currency
+              {t("exp.currency")}
               <select
                 className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
                 value={form.currency}
@@ -346,16 +348,16 @@ export function TeamExpenseRequests() {
               </select>
             </label>
             <label className="text-xs text-black/60 dark:text-white/60">
-              Where / which vendor
+              {t("exp.vendor")}
               <input
                 className="mt-0.5 block w-48 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-                placeholder="Homecenter, local plumber…"
+                placeholder={t("exp.vendorPlaceholder")}
                 value={form.vendor}
                 onChange={(e) => setForm((f) => ({ ...f, vendor: e.target.value }))}
               />
             </label>
             <label className="text-xs text-black/60 dark:text-white/60">
-              Needed by
+              {t("exp.neededBy")}
               <input
                 type="date"
                 className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
@@ -364,7 +366,7 @@ export function TeamExpenseRequests() {
               />
             </label>
             <label className="text-xs text-black/60 dark:text-white/60">
-              Link to a quote or photo
+              {t("exp.referenceLink")}
               <input
                 type="url"
                 className="mt-0.5 block w-56 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
@@ -380,14 +382,14 @@ export function TeamExpenseRequests() {
             disabled={busy}
             className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
           >
-            {busy ? "Saving…" : editingId ? "Save changes" : "Send request"}
+            {busy ? t("common.saving") : editingId ? t("exp.saveChanges") : t("exp.sendRequest")}
           </button>
         </form>
       )}
 
       {shown.length === 0 ? (
         <p className="text-sm text-black/50 dark:text-white/50">
-          {tab === "open" ? "No open requests right now." : "Nothing completed yet."}
+          {tab === "open" ? t("exp.noOpen") : t("exp.noCompleted")}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -408,14 +410,14 @@ export function TeamExpenseRequests() {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{r.title}</span>
-                <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">{r.category}</span>
+                <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">{categoryLabel(r.category, lang)}</span>
                 {r.urgency === "urgent" && !r.completed && (
                   <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-600 dark:text-red-400">
-                    Urgent
+                    {t("exp.urgent")}
                   </span>
                 )}
                 {r.declined && (
-                  <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">Declined</span>
+                  <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">{t("exp.declined")}</span>
                 )}
                 <span className="ml-auto tabular-nums">
                   {r.completed && r.actualAmount !== null ? (
@@ -440,36 +442,36 @@ export function TeamExpenseRequests() {
 
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-black/50 dark:text-white/50">
                 <span>
-                  Requested by <strong>{r.requestedByName || r.requestedByEmail}</strong> · {when(r.requestedAt)}
+                  {t("exp.requestedBy")} <strong>{r.requestedByName || r.requestedByEmail}</strong> · {when(r.requestedAt)}
                 </span>
-                {r.vendor && <span>Vendor: {r.vendor}</span>}
-                {r.neededBy && <span>Needed by {r.neededBy}</span>}
+                {r.vendor && <span>{t("exp.vendorLabel")}: {r.vendor}</span>}
+                {r.neededBy && <span>{t("exp.neededBy")} {r.neededBy}</span>}
                 {r.referenceUrl && (
                   <a href={r.referenceUrl} target="_blank" rel="noreferrer" className="underline">
-                    Quote / photo
+                    {t("exp.quotePhoto")}
                   </a>
                 )}
               </div>
 
               {r.approved && r.approvedAt && (
                 <div className="mt-0.5 text-xs text-blue-600 dark:text-blue-400">
-                  Approved by {r.approvedByName || "the owner"} · {when(r.approvedAt)}
+                  {t("exp.approvedBy")} {r.approvedByName || t("exp.theOwner")} · {when(r.approvedAt)}
                 </div>
               )}
               {r.declined && (
                 <div className="mt-0.5 text-xs text-black/50 dark:text-white/50">
-                  Declined by {r.approvedByName || "the owner"} · {when(r.approvedAt)}
+                  {t("exp.declinedBy")} {r.approvedByName || t("exp.theOwner")} · {when(r.approvedAt)}
                   {r.declinedReason ? ` — ${r.declinedReason}` : ""}
                 </div>
               )}
               {r.editedAt && (
                 <div className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
-                  Edited by {r.editedByName || "a teammate"} · {when(r.editedAt)}
+                  {t("exp.editedBy")} {r.editedByName || t("exp.aTeammate")} · {when(r.editedAt)}
                 </div>
               )}
               {r.completed && (
                 <div className="mt-0.5 text-xs text-emerald-600 dark:text-emerald-400">
-                  Completed by {r.completedByName || "the team"} · {when(r.completedAt)}
+                  {t("exp.completedBy")} {r.completedByName || t("exp.theTeam")} · {when(r.completedAt)}
                 </div>
               )}
 
@@ -489,7 +491,7 @@ export function TeamExpenseRequests() {
                       void call("PATCH", { id: r.id, approved: e.target.checked, declined: false })
                     }
                   />
-                  Owner approved
+                  {t("exp.ownerApproved")}
                 </label>
 
                 <label className="flex items-center gap-1.5 text-xs">
@@ -500,9 +502,9 @@ export function TeamExpenseRequests() {
                     disabled={busy || (!r.approved && !r.completed)}
                     onChange={(e) => complete(r, e.target.checked)}
                   />
-                  Completed
+                  {t("exp.completed")}
                   {!r.approved && !r.completed && (
-                    <span className="text-black/40 dark:text-white/40">(needs approval first)</span>
+                    <span className="text-black/40 dark:text-white/40">{t("exp.needsApprovalFirst")}</span>
                   )}
                 </label>
 
@@ -512,7 +514,7 @@ export function TeamExpenseRequests() {
                     disabled={busy}
                     className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"
                   >
-                    Decline
+                    {t("exp.decline")}
                   </button>
                 )}
                 <span className="ml-auto flex gap-1.5">
@@ -524,18 +526,18 @@ export function TeamExpenseRequests() {
                       disabled={busy}
                       className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"
                     >
-                      Edit
+                      {t("common.edit")}
                     </button>
                   )}
                   {isOwner && (
                     <button
                       onClick={() => {
-                        if (window.confirm(`Delete the request "${r.title}"?`)) void call("DELETE", { id: r.id });
+                        if (window.confirm(`${t("exp.deleteConfirm")} "${r.title}"?`)) void call("DELETE", { id: r.id });
                       }}
                       disabled={busy}
                       className="rounded-md border border-red-500/40 px-2 py-0.5 text-xs text-red-500 hover:bg-red-500/10 disabled:opacity-40"
                     >
-                      Delete
+                      {t("common.delete")}
                     </button>
                   )}
                 </span>

@@ -4,6 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { StayExtras } from "./StayExtras";
 import type { BookingExtra } from "@/lib/bookingExtrasShared";
 import { useCurrency } from "@/components/CurrencyProvider";
+import { useT, useLanguage } from "@/components/LanguageProvider";
+import { plural } from "@/lib/i18n";
+
+const DOW_BY_LANG: Record<string, string[]> = {
+  English: ["S", "M", "T", "W", "T", "F", "S"],
+  Spanish: ["D", "L", "M", "M", "J", "V", "S"],
+  Portuguese: ["D", "S", "T", "Q", "Q", "S", "S"],
+};
 
 // Client half of the Management tab (see app/management/page.tsx). One
 // fetch renders everything; posting a note/activity optimistically
@@ -100,6 +108,8 @@ function fmtDate(iso?: string): string {
  * drift a day off depending on the visitor's own timezone. Visible to
  * every role — arrival/departure aren't financial data. */
 function CountdownBadge({ arrival, departure }: { arrival?: string; departure?: string }) {
+  const t = useT();
+  const lang = useLanguage();
   if (!arrival) return null;
   const arrivalDay = new Date(`${arrival.slice(0, 10)}T00:00:00Z`);
   if (Number.isNaN(arrivalDay.getTime())) return null;
@@ -110,7 +120,7 @@ function CountdownBadge({ arrival, departure }: { arrival?: string; departure?: 
   let label: string;
   let className: string;
   if (daysUntil > 0) {
-    label = `${daysUntil} day${daysUntil === 1 ? "" : "s"} to arrival`;
+    label = `${daysUntil} ${plural(daysUntil, "countdown.day", "countdown.days", lang)} ${t("countdown.toArrival")}`;
     className =
       daysUntil <= 3
         ? "bg-red-500/15 text-red-600 dark:text-red-400"
@@ -118,13 +128,13 @@ function CountdownBadge({ arrival, departure }: { arrival?: string; departure?: 
           ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
           : "bg-black/10 dark:bg-white/10 text-black/60 dark:text-white/60";
   } else if (daysUntil === 0) {
-    label = "Arrives today";
+    label = t("countdown.arrivesToday");
     className = "bg-red-500/15 text-red-600 dark:text-red-400";
   } else {
     // Already arrived — still "in house" until departure passes too.
     const departureDay = departure ? new Date(`${departure.slice(0, 10)}T00:00:00Z`) : null;
     const stillInHouse = departureDay && !Number.isNaN(departureDay.getTime()) && +departureDay >= +todayDay;
-    label = stillInHouse ? "In house" : "Departed";
+    label = stillInHouse ? t("countdown.inHouse") : t("countdown.departed");
     className = stillInHouse
       ? "bg-[var(--accent)]/15 text-[var(--accent)]"
       : "bg-black/10 dark:bg-white/10 text-black/40 dark:text-white/40";
@@ -137,8 +147,6 @@ function fmtWhen(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
-
-const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 
 /** Half-hour options 6:00 AM → 11:30 PM for the event-time dropdown. */
 const EVENT_TIMES: { value: string; label: string }[] = (() => {
@@ -171,6 +179,9 @@ function fmtTime(hhmm?: string | null): string | null {
  * of the stays list. Occupied nights are filled, event days get a red ring,
  * and hovering any day shows the guest name(s) via the native tooltip. */
 function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: CalendarStay[] }) {
+  const t = useT();
+  const lang = useLanguage();
+  const dow = DOW_BY_LANG[lang] ?? DOW_BY_LANG.English;
   const [monthOffset, setMonthOffset] = useState(0);
   const now = new Date();
   const view = new Date(Date.UTC(now.getFullYear(), now.getMonth() + monthOffset, 1));
@@ -214,7 +225,7 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
         <button
           onClick={() => setMonthOffset((o) => o - 1)}
           className="rounded px-2 py-0.5 text-sm hover:bg-black/5 dark:hover:bg-white/10"
-          aria-label="Previous month"
+          aria-label={t("cal.previousMonth")}
         >
           ‹
         </button>
@@ -222,13 +233,13 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
         <button
           onClick={() => setMonthOffset((o) => o + 1)}
           className="rounded px-2 py-0.5 text-sm hover:bg-black/5 dark:hover:bg-white/10"
-          aria-label="Next month"
+          aria-label={t("cal.nextMonth")}
         >
           ›
         </button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-black/40 dark:text-white/40">
-        {DOW.map((d, i) => (
+        {dow.map((d, i) => (
           <div key={i}>{d}</div>
         ))}
       </div>
@@ -244,10 +255,10 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
           const hasEvent = Boolean(info && info.events.length > 0);
           const tooltip = info && (info.guests.length > 0 || info.events.length > 0)
             ? [
-                ...info.guests.map((g) => `Guest: ${g}`),
-                ...info.events.map((g) => `🎉 EVENT — ${g}`),
+                ...info.guests.map((g) => `${t("table.guest")}: ${g}`),
+                ...info.events.map((g) => `🎉 ${t("mgmt.event")} — ${g}`),
               ].join("\n")
-            : "Available";
+            : t("common.available");
           // Blue = booked (past or future, so real booking history shows);
           // gray = available. Deliberately NO red here (2026-08-16, Seni's
           // ask) — a past unbooked night reads as available, not an alert.
@@ -267,16 +278,16 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
       </div>
       <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-black/50 dark:text-white/50">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-sm bg-blue-500/80" /> Booked
+          <span className="inline-block h-3 w-3 rounded-sm bg-blue-500/80" /> {t("common.booked")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-sm bg-black/[0.06] dark:bg-white/10" /> Available
+          <span className="inline-block h-3 w-3 rounded-sm bg-black/[0.06] dark:bg-white/10" /> {t("common.available")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-sm ring-2 ring-amber-400" /> Event day
+          <span className="inline-block h-3 w-3 rounded-sm ring-2 ring-amber-400" /> {t("cal.eventDay")}
         </span>
       </div>
-      <p className="mt-1 text-[11px] text-black/40 dark:text-white/40">Hover a day to see who&apos;s at the house.</p>
+      <p className="mt-1 text-[11px] text-black/40 dark:text-white/40">{t("common.hoverDay")}</p>
     </aside>
   );
 }
@@ -284,17 +295,16 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
 /** Event-only list under the calendar (2026-08-16, Seni's ask): every
  * flagged event with guest, date, time and headcount — soonest first. */
 function EventsList({ stays }: { stays: Stay[] }) {
+  const t = useT();
   const events = stays
     .filter((s) => s.eventScheduled)
     .sort((a, b) => (a.eventDate ?? "9999").localeCompare(b.eventDate ?? "9999"));
 
   return (
     <aside className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
-      <h3 className="mb-2 text-sm font-semibold">Events ({events.length})</h3>
+      <h3 className="mb-2 text-sm font-semibold">{t("events.title")} ({events.length})</h3>
       {events.length === 0 ? (
-        <p className="text-sm text-black/50 dark:text-white/50">
-          No events booked yet. Check &ldquo;Event deposit paid&rdquo; on a stay to add one.
-        </p>
+        <p className="text-sm text-black/50 dark:text-white/50">{t("events.none")}</p>
       ) : (
         <ul className="max-h-80 space-y-2 overflow-y-auto pr-1">
           {events.map((e) => (
@@ -314,14 +324,14 @@ function EventsList({ stays }: { stays: Stay[] }) {
                       year: "numeric",
                       timeZone: "UTC",
                     })
-                  : "date TBD"}
-                {fmtTime(e.eventTime) ? ` · ${fmtTime(e.eventTime)}` : " · time TBD"}
+                  : t("events.dateTbd")}
+                {fmtTime(e.eventTime) ? ` · ${fmtTime(e.eventTime)}` : ` · ${t("events.timeTbd")}`}
               </div>
               <div className="text-black/60 dark:text-white/60">
-                {e.eventGuestCount ? `${e.eventGuestCount} people attending` : "headcount TBD"}
+                {e.eventGuestCount ? `${e.eventGuestCount} ${t("events.peopleAttending")}` : t("events.headcountTbd")}
               </div>
               <div className="mt-0.5 text-[11px] text-black/40 dark:text-white/40">
-                Stay: {fmtDate(e.arrival)} → {fmtDate(e.departure)}
+                {t("events.stay")}: {fmtDate(e.arrival)} → {fmtDate(e.departure)}
                 {e.propertyName ? ` · ${e.propertyName}` : ""}
               </div>
             </li>
@@ -343,6 +353,7 @@ function EventsList({ stays }: { stays: Stay[] }) {
  * equivalent, so that's what this shows. */
 function TransactionsHover({ stay }: { stay: Stay }) {
   const { format: formatMoney } = useCurrency();
+  const t = useT();
   if (stay.balanceOwed === undefined || stay.totalPaid === undefined || stay.totalAmount === undefined) return null;
   const owed = stay.balanceOwed;
   return (
@@ -354,22 +365,22 @@ function TransactionsHover({ stay }: { stay: Stay }) {
             : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
         }`}
       >
-        {owed > 0.01 ? `Balance owed: ${formatMoney(owed)}` : "Paid in full"}
+        {owed > 0.01 ? `${t("tx.balanceOwed")}: ${formatMoney(owed)}` : t("tx.paidInFull")}
       </span>
       <span
         className="pointer-events-none absolute left-0 top-full z-10 mt-1 hidden w-64 rounded-lg border border-black/10 bg-white p-3 text-xs shadow-lg group-hover:block dark:border-white/10 dark:bg-neutral-900"
       >
         <div className="mb-1.5 space-y-0.5">
           <div className="flex justify-between">
-            <span className="text-black/50 dark:text-white/50">Total</span>
+            <span className="text-black/50 dark:text-white/50">{t("tx.total")}</span>
             <span className="font-medium">{formatMoney(stay.totalAmount)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-black/50 dark:text-white/50">Paid</span>
+            <span className="text-black/50 dark:text-white/50">{t("tx.paid")}</span>
             <span className="font-medium">{formatMoney(stay.totalPaid)}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-black/50 dark:text-white/50">Balance owed</span>
+            <span className="text-black/50 dark:text-white/50">{t("tx.balanceOwed")}</span>
             <span className={`font-medium ${owed > 0.01 ? "text-red-600 dark:text-red-400" : ""}`}>
               {formatMoney(owed)}
             </span>
@@ -391,6 +402,8 @@ function TransactionsHover({ stay }: { stay: Stay }) {
 }
 
 export function ManagementBoard() {
+  const t = useT();
+  const lang = useLanguage();
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [noteDrafts, setNoteDrafts] = useState<Record<number, string>>({});
@@ -424,8 +437,8 @@ export function ManagementBoard() {
     // right behind it, then a 2-minute refresh loop (2026-08-16).
     void load();
     void load(true);
-    const t = setInterval(() => void load(true), 120_000);
-    return () => clearInterval(t);
+    const interval = setInterval(() => void load(true), 120_000);
+    return () => clearInterval(interval);
   }, [load]);
 
   async function setEvent(
@@ -459,7 +472,7 @@ export function ManagementBoard() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save event flag.");
+      setError(err instanceof Error ? err.message : t("mgmt.failedEventFlag"));
       void load(true); // resync — the optimistic flip was wrong
     }
   }
@@ -478,7 +491,7 @@ export function ManagementBoard() {
       if (bookingId !== undefined) setNoteDrafts((d) => ({ ...d, [bookingId]: "" }));
       await load(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save.");
+      setError(err instanceof Error ? err.message : t("mgmt.failedSave"));
     } finally {
       setBusy(false);
     }
@@ -488,7 +501,7 @@ export function ManagementBoard() {
     return <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-500">{error}</div>;
   }
   if (!data) {
-    return <div className="rounded-xl border border-black/10 dark:border-white/10 p-6 text-sm text-black/50 dark:text-white/50">Loading stays…</div>;
+    return <div className="rounded-xl border border-black/10 dark:border-white/10 p-6 text-sm text-black/50 dark:text-white/50">{t("mgmt.loadingStays")}</div>;
   }
 
   return (
@@ -497,9 +510,9 @@ export function ManagementBoard() {
 
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
       <section className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
-        <h2 className="text-sm font-semibold">Upcoming &amp; in-house stays ({data.stays.length})</h2>
+        <h2 className="text-sm font-semibold">{t("mgmt.upcomingInHouse")} ({data.stays.length})</h2>
         {data.stays.length === 0 && (
-          <p className="text-sm text-black/50 dark:text-white/50">No upcoming stays on the calendar.</p>
+          <p className="text-sm text-black/50 dark:text-white/50">{t("mgmt.noUpcomingStays")}</p>
         )}
         <div className="space-y-3">
           {data.stays.map((s) => (
@@ -508,17 +521,17 @@ export function ManagementBoard() {
                 <span className="font-medium">{s.guestName}</span>
                 <span className="text-sm text-black/60 dark:text-white/60">
                   {fmtDate(s.arrival)} → {fmtDate(s.departure)}
-                  {s.nights ? ` · ${s.nights} night${s.nights === 1 ? "" : "s"}` : ""}
+                  {s.nights ? ` · ${s.nights} ${plural(s.nights, "mgmt.night", "mgmt.nights", lang)}` : ""}
                 </span>
                 {(s.adults || s.children) && (
                   <span className="text-sm text-black/60 dark:text-white/60">
-                    {s.adults ?? 0} adult{(s.adults ?? 0) === 1 ? "" : "s"}
-                    {s.children ? ` + ${s.children} kid${s.children === 1 ? "" : "s"}` : ""}
+                    {s.adults ?? 0} {plural(s.adults ?? 0, "mgmt.adult", "mgmt.adults", lang)}
+                    {s.children ? ` + ${s.children} ${plural(s.children, "mgmt.kid", "mgmt.kids", lang)}` : ""}
                   </span>
                 )}
                 {s.extrasRequested && (
                   <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
-                    Paid extras requested
+                    {t("mgmt.paidExtrasRequested")}
                   </span>
                 )}
                 <TransactionsHover stay={s} />
@@ -536,7 +549,7 @@ export function ManagementBoard() {
                     </a>
                   )}
                   {s.guestPhoneProxy && (
-                    <span className="text-black/50 dark:text-white/50">📞 Proxy (via platform)</span>
+                    <span className="text-black/50 dark:text-white/50">{t("mgmt.phoneProxy")}</span>
                   )}
                   {s.guestEmail && (
                     <a href={`mailto:${s.guestEmail}`} className="text-[var(--accent)] hover:underline break-all">
@@ -544,7 +557,7 @@ export function ManagementBoard() {
                     </a>
                   )}
                   {s.guestEmailProxy && (
-                    <span className="text-black/50 dark:text-white/50">✉️ Proxy (via platform)</span>
+                    <span className="text-black/50 dark:text-white/50">{t("mgmt.emailProxy")}</span>
                   )}
                 </div>
               )}
@@ -564,7 +577,7 @@ export function ManagementBoard() {
                     }
                     className="h-6 w-6 cursor-pointer accent-red-600"
                   />
-                  Event deposit paid &amp; scheduled during stay
+                  {t("mgmt.eventCheckbox")}
                 </label>
                 {s.eventScheduled && (
                   <select
@@ -572,7 +585,7 @@ export function ManagementBoard() {
                     onChange={(e) => void setEvent(s, true, e.target.value || null, s.eventTime ?? null, s.eventGuestCount ?? null)}
                     className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
-                    <option value="">Pick the event date…</option>
+                    <option value="">{t("mgmt.pickEventDate")}</option>
                     {stayDates(s.arrival, s.departure).map((d) => (
                       <option key={d} value={d}>
                         {new Date(`${d}T00:00:00Z`).toLocaleDateString("en-US", {
@@ -591,10 +604,10 @@ export function ManagementBoard() {
                     onChange={(e) => void setEvent(s, true, s.eventDate ?? null, e.target.value || null, s.eventGuestCount ?? null)}
                     className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
-                    <option value="">Pick the time…</option>
-                    {EVENT_TIMES.map((t) => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
+                    <option value="">{t("mgmt.pickTime")}</option>
+                    {EVENT_TIMES.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
                       </option>
                     ))}
                   </select>
@@ -613,24 +626,24 @@ export function ManagementBoard() {
                     }
                     className="rounded-md border-2 border-red-500 bg-transparent px-2 py-1 text-sm"
                   >
-                    <option value="">People attending…</option>
+                    <option value="">{t("mgmt.peopleAttending")}</option>
                     {EVENT_GUEST_COUNTS.map((n) => (
                       <option key={n} value={n}>
-                        {n} {n === 1 ? "person" : "people"}
+                        {n} {n === 1 ? t("mgmt.person") : t("mgmt.people")}
                       </option>
                     ))}
                   </select>
                 )}
                 {s.eventScheduled && s.eventDate && (
                   <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-semibold text-red-600 dark:text-red-400">
-                    EVENT{" "}
+                    {t("mgmt.event")}{" "}
                     {new Date(`${s.eventDate}T00:00:00Z`).toLocaleDateString("en-US", {
                       month: "short",
                       day: "numeric",
                       timeZone: "UTC",
                     })}
                     {fmtTime(s.eventTime) ? ` · ${fmtTime(s.eventTime)}` : ""}
-                    {s.eventGuestCount ? ` · ${s.eventGuestCount} ppl` : ""}
+                    {s.eventGuestCount ? ` · ${s.eventGuestCount} ${t("mgmt.people")}` : ""}
                   </span>
                 )}
               </div>
@@ -667,7 +680,7 @@ export function ManagementBoard() {
               >
                 <input
                   className="flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
-                  placeholder="Add a note (wedding/event, chef booked, early check-in…)"
+                  placeholder={t("mgmt.notePlaceholder")}
                   value={noteDrafts[s.bookingId] ?? ""}
                   onChange={(e) => setNoteDrafts((d) => ({ ...d, [s.bookingId]: e.target.value }))}
                 />
@@ -676,7 +689,7 @@ export function ManagementBoard() {
                   disabled={busy || !(noteDrafts[s.bookingId] ?? "").trim()}
                   className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1 text-sm text-white dark:text-black disabled:opacity-40"
                 >
-                  Add
+                  {t("common.add")}
                 </button>
               </form>
             </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "@/components/LanguageProvider";
 
 // Team Requests (2026-08-18, Seni's ask: "add an activity under the Team
 // Activity Log tab like 'tour guide requested on August 25th, please accept
@@ -73,14 +74,15 @@ function fmtWhen(iso: string): string {
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function statusBadge(r: TeamRequestEntry): { label: string; className: string } {
-  if (r.completed) return { label: "Completed", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" };
-  if (r.declined) return { label: "Declined", className: "bg-red-500/15 text-red-600 dark:text-red-400" };
-  if (r.accepted) return { label: "Accepted", className: "bg-[var(--accent)]/15 text-[var(--accent)]" };
-  return { label: "Awaiting decision", className: "bg-black/10 dark:bg-white/10 text-black/60 dark:text-white/60" };
+function statusBadge(r: TeamRequestEntry, t: (key: string) => string): { label: string; className: string } {
+  if (r.completed) return { label: t("req.statusCompleted"), className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" };
+  if (r.declined) return { label: t("req.statusDeclined"), className: "bg-red-500/15 text-red-600 dark:text-red-400" };
+  if (r.accepted) return { label: t("req.statusAccepted"), className: "bg-[var(--accent)]/15 text-[var(--accent)]" };
+  return { label: t("req.statusAwaiting"), className: "bg-black/10 dark:bg-white/10 text-black/60 dark:text-white/60" };
 }
 
 export function TeamRequests() {
+  const t = useT();
   const [entries, setEntries] = useState<TeamRequestEntry[] | null>(null);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [viewerEmail, setViewerEmail] = useState("");
@@ -157,7 +159,7 @@ export function TeamRequests() {
     if (busyId) return;
     let declineReason: string | undefined;
     if (!accepted) {
-      declineReason = window.prompt("Reason (optional):") || undefined;
+      declineReason = window.prompt(t("req.reasonPrompt")) || undefined;
     }
     setBusyId(id);
     setError(null);
@@ -257,7 +259,7 @@ export function TeamRequests() {
   }
 
   async function remove(id: string) {
-    if (busyId || !window.confirm("Remove this request?")) return;
+    if (busyId || !window.confirm(t("req.removeConfirm"))) return;
     setBusyId(id);
     setError(null);
     try {
@@ -280,16 +282,14 @@ export function TeamRequests() {
     <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold">Requests needing accept or deny</h2>
-          <p className="text-xs text-black/50 dark:text-white/50">
-            Tag a teammate to approve something — they&apos;re notified on WhatsApp and email.
-          </p>
+          <h2 className="text-sm font-semibold">{t("req.heading")}</h2>
+          <p className="text-xs text-black/50 dark:text-white/50">{t("req.subtext")}</p>
         </div>
         <button
           onClick={() => setShowForm((s) => !s)}
           className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1.5 text-sm text-white dark:text-black"
         >
-          {showForm ? "Cancel" : "New request"}
+          {showForm ? t("common.cancel") : t("req.newRequest")}
         </button>
       </div>
 
@@ -300,21 +300,21 @@ export function TeamRequests() {
         <form onSubmit={submit} className="space-y-2 rounded-lg border border-black/10 dark:border-white/10 p-3">
           <input
             className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            placeholder='What do you need? (e.g. "Tour guide for Aug 25 group")'
+            placeholder={t("req.titlePlaceholder")}
             value={form.title}
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
             required
           />
           <textarea
             className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            placeholder="Any details they should know (optional)"
+            placeholder={t("req.detailsPlaceholder")}
             rows={2}
             value={form.description}
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           />
           <div className="flex flex-wrap gap-2">
             <label className="text-xs text-black/60 dark:text-white/60">
-              Needed by
+              {t("req.neededBy")}
               <input
                 type="date"
                 className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
@@ -323,18 +323,18 @@ export function TeamRequests() {
               />
             </label>
             <label className="text-xs text-black/60 dark:text-white/60">
-              Tag someone to decide
+              {t("req.tagSomeone")}
               <select
                 required
                 className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
                 value={form.taggedEmail}
                 onChange={(e) => setForm((f) => ({ ...f, taggedEmail: e.target.value }))}
               >
-                <option value="">Choose…</option>
+                <option value="">{t("req.choose")}</option>
                 {teamMembers.map((m) => (
                   <option key={m.email} value={m.email}>
                     {m.name || m.email}
-                    {m.isYou ? " (you)" : ""}
+                    {m.isYou ? ` ${t("req.you")}` : ""}
                   </option>
                 ))}
               </select>
@@ -344,20 +344,20 @@ export function TeamRequests() {
               disabled={creating || !form.title.trim() || !form.taggedEmail}
               className="ml-auto self-end rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
             >
-              {creating ? "Sending…" : "Send request"}
+              {creating ? t("req.sending") : t("req.sendRequest")}
             </button>
           </div>
         </form>
       )}
 
       {!entries ? (
-        <p className="text-sm text-black/50 dark:text-white/50">Loading…</p>
+        <p className="text-sm text-black/50 dark:text-white/50">{t("common.loading")}</p>
       ) : entries.length === 0 ? (
-        <p className="text-sm text-black/50 dark:text-white/50">No requests yet.</p>
+        <p className="text-sm text-black/50 dark:text-white/50">{t("req.noRequestsYet")}</p>
       ) : (
         <ul className="space-y-2">
           {entries.map((r) => {
-            const badge = statusBadge(r);
+            const badge = statusBadge(r, t);
             // Only the tagged person may decide (2026-08-18, Seni: "whoever
             // is tagged in that request should be the only one who can
             // accept or deny that request") — no CEO override.
@@ -381,20 +381,20 @@ export function TeamRequests() {
                   <div className="space-y-2 rounded-lg border border-black/10 dark:border-white/10 p-2">
                     <input
                       className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-                      placeholder="What do you need?"
+                      placeholder={t("req.titlePlaceholder")}
                       value={editForm.title}
                       onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
                     />
                     <textarea
                       className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-                      placeholder="Any details they should know (optional)"
+                      placeholder={t("req.detailsPlaceholder")}
                       rows={2}
                       value={editForm.description}
                       onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
                     />
                     <div className="flex flex-wrap gap-2">
                       <label className="text-xs text-black/60 dark:text-white/60">
-                        Needed by
+                        {t("req.neededBy")}
                         <input
                           type="date"
                           className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
@@ -403,7 +403,7 @@ export function TeamRequests() {
                         />
                       </label>
                       <label className="text-xs text-black/60 dark:text-white/60">
-                        Tag someone to decide
+                        {t("req.tagSomeone")}
                         <select
                           className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
                           value={editForm.taggedEmail}
@@ -412,7 +412,7 @@ export function TeamRequests() {
                           {teamMembers.map((m) => (
                             <option key={m.email} value={m.email}>
                               {m.name || m.email}
-                              {m.isYou ? " (you)" : ""}
+                              {m.isYou ? ` ${t("req.you")}` : ""}
                             </option>
                           ))}
                         </select>
@@ -423,14 +423,14 @@ export function TeamRequests() {
                           disabled={savingEdit}
                           className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1.5 text-xs disabled:opacity-40"
                         >
-                          Cancel
+                          {t("common.cancel")}
                         </button>
                         <button
                           onClick={() => void saveEdit(r.id)}
                           disabled={savingEdit || !editForm.title.trim() || !editForm.taggedEmail}
                           className="rounded-md bg-[var(--accent)] px-2.5 py-1.5 text-xs text-white disabled:opacity-40"
                         >
-                          {savingEdit ? "Saving…" : "Save"}
+                          {savingEdit ? t("common.saving") : t("common.save")}
                         </button>
                       </div>
                     </div>
@@ -441,24 +441,24 @@ export function TeamRequests() {
                       <span className="font-medium">{r.title}</span>
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge.className}`}>{badge.label}</span>
                       {r.neededBy && (
-                        <span className="text-xs text-black/50 dark:text-white/50">needed by {fmtDate(r.neededBy)}</span>
+                        <span className="text-xs text-black/50 dark:text-white/50">{t("req.neededByInline")} {fmtDate(r.neededBy)}</span>
                       )}
                     </div>
                     {body && <p className="text-black/70 dark:text-white/70">{body}</p>}
                     <p className="text-xs text-black/40 dark:text-white/40">
-                      {r.requestedByName || r.requestedByEmail} tagged {r.taggedName || r.taggedEmail} —{" "}
+                      {r.requestedByName || r.requestedByEmail} {t("req.tagged")} {r.taggedName || r.taggedEmail} —{" "}
                       {fmtWhen(r.requestedAt)}
                       {r.decidedAt && (
                         <>
                           {" · "}
-                          {r.accepted ? "accepted" : "declined"} by {r.decidedByName || r.taggedName || r.taggedEmail},{" "}
+                          {r.accepted ? t("req.accepted") : t("req.declined")} {t("req.by")} {r.decidedByName || r.taggedName || r.taggedEmail},{" "}
                           {fmtWhen(r.decidedAt)}
                           {r.declineReason ? ` — ${r.declineReason}` : ""}
                         </>
                       )}
                       {r.completedAt && (
                         <>
-                          {" · "}completed by {r.completedByName}, {fmtWhen(r.completedAt)}
+                          {" · "}{t("req.completedBy")} {r.completedByName}, {fmtWhen(r.completedAt)}
                         </>
                       )}
                     </p>
@@ -473,14 +473,14 @@ export function TeamRequests() {
                         disabled={busyId === r.id}
                         className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs text-white disabled:opacity-40"
                       >
-                        Accept
+                        {t("req.accept")}
                       </button>
                       <button
                         onClick={() => void decide(r.id, false)}
                         disabled={busyId === r.id}
                         className="rounded-md border border-red-500/40 px-2.5 py-1 text-xs text-red-500 hover:bg-red-500/10 disabled:opacity-40"
                       >
-                        Deny
+                        {t("req.deny")}
                       </button>
                     </>
                   )}
@@ -490,7 +490,7 @@ export function TeamRequests() {
                       disabled={busyId === r.id}
                       className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"
                     >
-                      Mark completed
+                      {t("req.markCompleted")}
                     </button>
                   )}
                   {r.completed && (
@@ -499,7 +499,7 @@ export function TeamRequests() {
                       disabled={busyId === r.id}
                       className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40"
                     >
-                      Undo completed
+                      {t("req.undoCompleted")}
                     </button>
                   )}
                   {(canEdit || canRemove) && (
@@ -512,7 +512,7 @@ export function TeamRequests() {
                           disabled={busyId === r.id}
                           className="rounded-md px-2.5 py-1 text-xs text-black/40 hover:text-[var(--accent)] dark:text-white/40 disabled:opacity-40"
                         >
-                          Edit
+                          {t("common.edit")}
                         </button>
                       )}
                       {canRemove && (
@@ -521,7 +521,7 @@ export function TeamRequests() {
                           disabled={busyId === r.id}
                           className="rounded-md px-2.5 py-1 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
                         >
-                          Remove
+                          {t("common.remove")}
                         </button>
                       )}
                     </div>
@@ -556,7 +556,7 @@ export function TeamRequests() {
                   >
                     <input
                       className="flex-1 rounded-md border border-black/15 bg-transparent px-2 py-1 text-xs dark:border-white/15"
-                      placeholder="Add a note…"
+                      placeholder={t("req.addNotePlaceholder")}
                       value={noteDrafts[r.id] ?? ""}
                       onChange={(e) => setNoteDrafts((d) => ({ ...d, [r.id]: e.target.value }))}
                     />
@@ -565,7 +565,7 @@ export function TeamRequests() {
                       disabled={postingNoteId === r.id || !(noteDrafts[r.id] ?? "").trim()}
                       className="rounded-md bg-black/80 px-2.5 py-1 text-xs text-white disabled:opacity-40 dark:bg-white/80 dark:text-black"
                     >
-                      {postingNoteId === r.id ? "Posting…" : "Post"}
+                      {postingNoteId === r.id ? t("common.posting") : t("common.post")}
                     </button>
                   </form>
                 </div>

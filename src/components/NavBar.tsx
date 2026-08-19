@@ -11,6 +11,7 @@ import {
   type NavTab,
 } from "@/lib/navGroups";
 import { useCurrency } from "@/components/CurrencyProvider";
+import { useT } from "@/components/LanguageProvider";
 import { PROPERTY_GROUPS, propertyGroupById } from "@/lib/propertyGroups";
 
 type NavPropertyGroup = { id: string; label: string };
@@ -143,10 +144,24 @@ function Badge({ count, active }: { count: number; active: boolean }) {
 // typing the URL doesn't get around it.
 const TEAM_HIDDEN_LABELS = new Set(["Messaging", "Marketing", "Reports", "Bill Pay"]);
 
+// Maps each nav entry's internal (English) label to its i18n key — the
+// `label` field itself stays a fixed English string used for the
+// TEAM_HIDDEN_LABELS/Settings-collapse logic above; this is purely a display
+// lookup. Entries with no mapping (admin-only groups a translated team login
+// never sees) just render their English label untranslated.
+const NAV_LABEL_KEYS: Record<string, string> = {
+  Dashboard: "nav.dashboard",
+  "Team Management": "nav.management",
+  "Team Expense Request": "nav.expenses",
+  "Team Activity Log": "nav.activityLog",
+  Settings: "nav.settings",
+};
+
 // Wordmark property switcher (2026-08-16, Seni's ask): clicking the brand
 // opens a dropdown of the account's property views; picking one sets the
 // lc_property_group cookie and reloads, re-scoping the whole dashboard.
 function PropertySwitcher({ activeGroupId, groups }: { activeGroupId: string; groups: NavPropertyGroup[] }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   // position:fixed dropdown, same fix as the nav group panels: the header's
@@ -192,7 +207,7 @@ function PropertySwitcher({ activeGroupId, groups }: { activeGroupId: string; gr
         title="Switch property"
       >
         <span className="w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden />
-        {switching ? "Switching…" : active.label}
+        {switching ? t("nav.switching") : active.label}
         <span className="text-xs opacity-60">▾</span>
       </button>
       {open && menuPos && (
@@ -238,6 +253,8 @@ export function NavBar({
       : navEntries;
   const pathname = usePathname();
   const router = useRouter();
+  const t = useT();
+  const navLabel = (label: string) => (NAV_LABEL_KEYS[label] ? t(NAV_LABEL_KEYS[label]) : label);
   const [pendingCount, setPendingCount] = useState(0);
   const [billsNeedingAttention, setBillsNeedingAttention] = useState(0);
   const [leadsNeedingAttention, setLeadsNeedingAttention] = useState(0);
@@ -443,7 +460,7 @@ export function NavBar({
                       : "text-black/70 hover:bg-black/5 dark:text-white/70 dark:hover:bg-white/10"
                   }`}
                 >
-                  {entry.label}
+                  {navLabel(entry.label)}
                   <Badge count={count} active={!!active} />
                 </Link>
               );
@@ -508,7 +525,7 @@ export function NavBar({
             onClick={logout}
             className="px-3 py-1.5 rounded-md text-sm text-black/50 hover:bg-black/5 dark:text-white/50 dark:hover:bg-white/10 shrink-0 whitespace-nowrap"
           >
-            Log out
+            {t("nav.logout")}
           </button>
         </nav>
       </div>

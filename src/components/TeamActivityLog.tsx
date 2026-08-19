@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "@/components/LanguageProvider";
 
 // Team Activity Log — its own tab as of 2026-08-17 (Seni's ask: "move 'Team
 // Activity Log' from the bottom of the Management Tab to its own Tab right
@@ -43,6 +44,7 @@ function fmtWhen(iso: string): string {
 }
 
 export function TeamActivityLog() {
+  const t = useT();
   const [entries, setEntries] = useState<LogEntry[] | null>(null);
   const [viewerLanguage, setViewerLanguage] = useState<string | undefined>();
   // Gates the Delete action below (2026-08-18, Seni's ask: "add a delete tab
@@ -99,7 +101,7 @@ export function TeamActivityLog() {
   }
 
   async function remove(id: string) {
-    if (removingId || !window.confirm("Delete this log entry?")) return;
+    if (removingId || !window.confirm(t("log.deleteConfirm"))) return;
     setRemovingId(id);
     setError(null);
     try {
@@ -112,7 +114,7 @@ export function TeamActivityLog() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       await load(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete.");
+      setError(err instanceof Error ? err.message : t("log.failedDelete"));
     } finally {
       setRemovingId(null);
     }
@@ -127,7 +129,7 @@ export function TeamActivityLog() {
       <form className="flex gap-2" onSubmit={submit}>
         <input
           className="flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-          placeholder="Log what you did (pool cleaned, towels restocked, gas refilled…)"
+          placeholder={t("log.placeholder")}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
@@ -136,16 +138,16 @@ export function TeamActivityLog() {
           disabled={busy || !draft.trim()}
           className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1.5 text-sm text-white dark:text-black disabled:opacity-40"
         >
-          Log it
+          {t("log.logIt")}
         </button>
       </form>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {!entries ? (
-        <p className="text-sm text-black/50 dark:text-white/50">Loading activity…</p>
+        <p className="text-sm text-black/50 dark:text-white/50">{t("log.loadingActivity")}</p>
       ) : entries.length === 0 ? (
-        <p className="text-sm text-black/50 dark:text-white/50">Nothing logged yet.</p>
+        <p className="text-sm text-black/50 dark:text-white/50">{t("log.nothingLogged")}</p>
       ) : (
         <ul className="space-y-1">
           {entries.map((a) => (
@@ -164,7 +166,7 @@ export function TeamActivityLog() {
                     disabled={removingId === a.id}
                     className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
                   >
-                    {removingId === a.id ? "Deleting…" : "Delete"}
+                    {removingId === a.id ? t("common.deleting") : t("common.delete")}
                   </button>
                 )}
               </div>

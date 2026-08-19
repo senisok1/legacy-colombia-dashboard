@@ -15,6 +15,7 @@ import { OccupancyCalendar } from "@/components/OccupancyCalendar";
 import { RevenueBySourceChart } from "@/components/RevenueBySourceChart";
 import { listBookingExtras, EXTRAS_PROPERTY_GROUP_ID } from "@/lib/bookingExtras";
 import { summarizeExtras, yearStartIso, EMPTY_EXTRAS_SUMMARY } from "@/lib/extrasAnalytics";
+import { t } from "@/lib/i18n";
 
 export const dynamic = "force-dynamic";
 
@@ -78,13 +79,14 @@ export default async function DashboardPage() {
       : EMPTY_EXTRAS_SUMMARY;
   const showExtras = extrasSummary.count > 0;
   const totalRevenueYtd = stats.ytdRevenue + extrasSummary.houseRevenue;
+  const lang = viewer?.language;
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Dashboard</h1>
+        <h1 className="text-xl font-semibold">{t("dash.title", lang)}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
-          Live snapshot of bookings, occupancy, and revenue for {propertyGroupById(groupId).label}.
+          {t("dash.subtitle", lang)} {propertyGroupById(groupId).label}.
         </p>
       </div>
 
@@ -104,7 +106,7 @@ export default async function DashboardPage() {
             }
           />
         )}
-        <StatCard label="Occupancy (90d)" value={`${stats.occupancyRate90d}%`} hint="Booked nights / available nights" />
+        <StatCard label={t("dash.occupancy90d", lang)} value={`${stats.occupancyRate90d}%`} hint={t("dash.occupancyHint", lang)} />
         {!isTeam && (
           <StatCard
             label="Avg nightly rate"
@@ -114,15 +116,21 @@ export default async function DashboardPage() {
             hint="Year to date · gross / net"
           />
         )}
-        <StatCard label="Avg length of stay" value={`${stats.avgLengthOfStay} nights`} hint="Year to date" />
+        <StatCard label={t("dash.avgLengthOfStay", lang)} value={`${stats.avgLengthOfStay} ${t("mgmt.nights", lang)}`} hint={t("dash.yearToDate", lang)} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-          <h2 className="text-sm font-semibold mb-3">Currently checked in ({stats.currentGuests.length})</h2>
-          <BookingsTable bookings={withNames(stats.currentGuests)} emptyLabel="No guests on-property right now." showTotal={!isTeam} />
+          <h2 className="text-sm font-semibold mb-3">
+            {t("dash.currentlyCheckedIn", lang)} ({stats.currentGuests.length})
+          </h2>
+          <BookingsTable
+            bookings={withNames(stats.currentGuests)}
+            emptyLabel={t("dash.noGuestsOnProperty", lang)}
+            showTotal={!isTeam}
+          />
 
-          <h2 className="text-sm font-semibold mt-6 mb-3">Upcoming arrivals</h2>
+          <h2 className="text-sm font-semibold mt-6 mb-3">{t("dash.upcomingArrivals", lang)}</h2>
           <UpcomingArrivals bookings={allUpcoming} showTotal={!isTeam} />
         </div>
 

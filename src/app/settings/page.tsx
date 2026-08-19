@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Theme } from "@/lib/themes";
+import { useT } from "@/components/LanguageProvider";
 
 // Phase 2 onboarding/settings screen: lets a signed-in user store their own
 // organization's OwnerRez/WhatsApp/PriceLabs credentials (encrypted — see
@@ -50,6 +51,7 @@ const SECTIONS: { title: string; description?: string; fields: Field[] }[] = [
 ];
 
 export default function SettingsPage() {
+  const t = useT();
   const router = useRouter();
   const [storedKeys, setStoredKeys] = useState<Set<string>>(new Set());
   const [values, setValues] = useState<Record<string, string>>({});
@@ -169,18 +171,18 @@ export default function SettingsPage() {
     return (
       <div className="mx-auto max-w-2xl px-6 py-8 space-y-6">
         <div>
-          <h1 className="text-lg font-semibold">Settings</h1>
+          <h1 className="text-lg font-semibold">{t("settings.title")}</h1>
           <p className="text-sm text-black/50 dark:text-white/50 mt-1">
-            Account connections are managed by the property owner. Here&apos;s what you can change.
+            {t("settings.restrictedSubtitle")}
           </p>
         </div>
         <Link
           href="/settings/account"
           className="block rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 hover:border-black/20 dark:hover:border-white/20"
         >
-          <span className="text-sm font-medium">Change your password →</span>
+          <span className="text-sm font-medium">{t("settings.changePassword")}</span>
           <span className="block text-xs text-black/50 dark:text-white/50 mt-0.5">
-            Set a new password for your own login.
+            {t("settings.changePasswordHint")}
           </span>
         </Link>
       </div>

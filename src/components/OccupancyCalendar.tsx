@@ -16,6 +16,13 @@ import {
 import type { Booking } from "@/lib/types";
 import { isRevenueCounting, netAmount } from "@/lib/finance";
 import { useCurrency } from "@/components/CurrencyProvider";
+import { useT, useLanguage } from "@/components/LanguageProvider";
+
+const DOW_BY_LANG: Record<string, string[]> = {
+  English: ["S", "M", "T", "W", "T", "F", "S"],
+  Spanish: ["D", "L", "M", "M", "J", "V", "S"],
+  Portuguese: ["D", "S", "T", "Q", "Q", "S", "S"],
+};
 
 const OCCUPIED_STATUSES = new Set(["Booked", "Checked In", "Checked Out", "Hold"]);
 
@@ -28,6 +35,9 @@ const MONTHS_RANGE = 12;
 export function OccupancyCalendar({ bookings, showFinancials = true }: { bookings: Booking[]; showFinancials?: boolean }) {
   // Aliased to avoid clashing with date-fns's own `format` import above.
   const { format: formatMoney } = useCurrency();
+  const t = useT();
+  const lang = useLanguage();
+  const dow = DOW_BY_LANG[lang] ?? DOW_BY_LANG.English;
   const today = startOfDay(new Date());
   const currentMonthStart = startOfMonth(today);
   const [monthOffset, setMonthOffset] = useState(0);
@@ -99,7 +109,7 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
         <button
           onClick={() => setMonthOffset((m) => Math.max(-MONTHS_RANGE, m - 1))}
           disabled={!canGoBack}
-          aria-label="Previous month"
+          aria-label={t("cal.previousMonth")}
           className="w-6 h-6 flex items-center justify-center rounded-md text-sm text-black/50 dark:text-white/50 hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent"
         >
           ‹
@@ -108,7 +118,7 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
         <button
           onClick={() => setMonthOffset((m) => Math.min(MONTHS_RANGE, m + 1))}
           disabled={!canGoForward}
-          aria-label="Next month"
+          aria-label={t("cal.nextMonth")}
           className="w-6 h-6 flex items-center justify-center rounded-md text-sm text-black/50 dark:text-white/50 hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent"
         >
           ›
@@ -120,12 +130,12 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
           onClick={() => setMonthOffset(0)}
           className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline mb-2 block"
         >
-          Back to today
+          {t("common.backToToday")}
         </button>
       )}
 
       <div className="grid grid-cols-7 gap-1 text-xs text-center text-black/40 dark:text-white/40 mb-1">
-        {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+        {dow.map((d, i) => (
           <div key={i}>{d}</div>
         ))}
       </div>
@@ -140,8 +150,8 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
           // (2026-08-16): "Guest: <name>" plus the channel it came from.
           const label =
             state === "booked"
-              ? `Guest: ${booking!.guestName ?? "Guest"}${booking!.source ? ` (${booking!.source})` : ""}`
-              : "Available";
+              ? `${t("table.guest")}: ${booking!.guestName ?? t("table.guest")}${booking!.source ? ` (${booking!.source})` : ""}`
+              : t("common.available");
           return (
             <div
               key={day.toISOString()}
@@ -159,29 +169,29 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
       </div>
       <div className="flex items-center gap-4 mt-3 text-xs text-black/50 dark:text-white/50 flex-wrap">
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-3 rounded-sm bg-blue-500/80" /> Booked
+          <span className="inline-block w-3 h-3 rounded-sm bg-blue-500/80" /> {t("common.booked")}
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block w-3 h-3 rounded-sm bg-black/[0.06] dark:bg-white/10" /> Available
+          <span className="inline-block w-3 h-3 rounded-sm bg-black/[0.06] dark:bg-white/10" /> {t("common.available")}
         </span>
         <span className="w-full text-[11px] text-black/40 dark:text-white/40">
-          Hover a day to see who&apos;s at the house.
+          {t("common.hoverDay")}
         </span>
       </div>
 
       <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-black/10 dark:border-white/10">
         {showFinancials && (
-          <MiniStat label="Revenue MTD" value={formatMoney(monthRevenue)} subValue={`Net ${formatMoney(monthNetRevenue)}`} />
+          <MiniStat label={t("cal.revenueMtd")} value={formatMoney(monthRevenue)} subValue={`${t("cal.net")} ${formatMoney(monthNetRevenue)}`} />
         )}
-        <MiniStat label="Occupancy MTD" value={`${occupancyPct}%`} />
+        <MiniStat label={t("cal.occupancyMtd")} value={`${occupancyPct}%`} />
         {showFinancials && (
           <MiniStat
-            label="Avg nightly rate"
+            label={t("cal.avgNightlyRate")}
             value={formatMoney(avgNightlyRate)}
-            subValue={`Net ${formatMoney(avgNetNightlyRate)}`}
+            subValue={`${t("cal.net")} ${formatMoney(avgNetNightlyRate)}`}
           />
         )}
-        <MiniStat label="Avg length of stay" value={`${Math.round(avgLengthOfStay * 10) / 10} nights`} />
+        <MiniStat label={t("dash.avgLengthOfStay")} value={`${Math.round(avgLengthOfStay * 10) / 10} ${t("mgmt.nights")}`} />
       </div>
     </div>
   );

@@ -1,6 +1,10 @@
+"use client";
+
 import type { Booking } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { Money } from "@/components/Money";
+import { useT, useLanguage } from "@/components/LanguageProvider";
+import { statusLabel } from "@/lib/i18n";
 
 const statusColors: Record<string, string> = {
   Booked: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
@@ -14,9 +18,11 @@ const statusColors: Record<string, string> = {
 };
 
 // showTotal=false hides the money column (READ_ONLY team dashboards, 2026-08-16).
-export function BookingsTable({ bookings, emptyLabel = "No bookings to show.", showTotal = true }: { bookings: Booking[]; emptyLabel?: string; showTotal?: boolean }) {
+export function BookingsTable({ bookings, emptyLabel, showTotal = true }: { bookings: Booking[]; emptyLabel?: string; showTotal?: boolean }) {
+  const t = useT();
+  const lang = useLanguage();
   if (bookings.length === 0) {
-    return <p className="text-sm text-black/50 dark:text-white/50 py-6 text-center">{emptyLabel}</p>;
+    return <p className="text-sm text-black/50 dark:text-white/50 py-6 text-center">{emptyLabel ?? t("table.noBookings")}</p>;
   }
 
   return (
@@ -24,13 +30,13 @@ export function BookingsTable({ bookings, emptyLabel = "No bookings to show.", s
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-black/50 dark:text-white/50 border-b border-black/10 dark:border-white/10">
-            <th className="py-2 pr-4 font-medium">Guest</th>
-            <th className="py-2 pr-4 font-medium">Arrival</th>
-            <th className="py-2 pr-4 font-medium">Departure</th>
-            <th className="py-2 pr-4 font-medium">Nights</th>
-            <th className="py-2 pr-4 font-medium">Source</th>
-            <th className="py-2 pr-4 font-medium">Status</th>
-            {showTotal && <th className="py-2 pr-4 font-medium text-right">Total</th>}
+            <th className="py-2 pr-4 font-medium">{t("table.guest")}</th>
+            <th className="py-2 pr-4 font-medium">{t("table.arrival")}</th>
+            <th className="py-2 pr-4 font-medium">{t("table.departure")}</th>
+            <th className="py-2 pr-4 font-medium">{t("table.nights")}</th>
+            <th className="py-2 pr-4 font-medium">{t("table.source")}</th>
+            <th className="py-2 pr-4 font-medium">{t("table.status")}</th>
+            {showTotal && <th className="py-2 pr-4 font-medium text-right">{t("table.total")}</th>}
           </tr>
         </thead>
         <tbody>
@@ -43,7 +49,7 @@ export function BookingsTable({ bookings, emptyLabel = "No bookings to show.", s
               <td className="py-2 pr-4">{b.source}</td>
               <td className="py-2 pr-4">
                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[b.status] ?? statusColors.Unknown}`}>
-                  {b.status}
+                  {statusLabel(b.status, lang)}
                 </span>
               </td>
               {showTotal && (

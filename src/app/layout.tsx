@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { NavBar } from "@/components/NavBar";
 import { StatusBanner } from "@/components/StatusBanner";
 import { CurrencyProvider } from "@/components/CurrencyProvider";
+import { LanguageProvider } from "@/components/LanguageProvider";
 import { PwaRegister } from "@/components/PwaRegister";
 import { getServerSession } from "@/lib/session";
 import { cookies } from "next/headers";
@@ -78,8 +79,9 @@ export default async function RootLayout({
   const me = session ? await getUserByEmail(session.email).catch(() => null) : null;
   const propertyGroupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, me?.propertyAccess);
   const allowedGroups = allowedPropertyGroups(me?.propertyAccess).map((g) => ({ id: g.id, label: g.label }));
+  const htmlLang = me?.language === "Spanish" ? "es" : me?.language === "Portuguese" ? "pt" : "en";
   return (
-    <html lang="en" className="h-full antialiased" data-theme={theme.id}>
+    <html lang={htmlLang} className="h-full antialiased" data-theme={theme.id}>
       {/* No hardcoded bg-neutral-50/dark:bg-neutral-950 here anymore — body's
           background/text now come entirely from the --background/--foreground
           CSS variables in globals.css, which is what lets a forced-dark theme
@@ -93,13 +95,15 @@ export default async function RootLayout({
             The org-level secondaryCurrency setting still drives WHETHER the
             feature exists; this decides which property it applies to. Passing
             null disables the toggle and renders every figure in USD. */}
-        <CurrencyProvider
-          secondaryCurrency={propertyGroupId === DEFAULT_PROPERTY_GROUP_ID ? secondaryCurrency : null}
-        >
-          <NavBar role={session?.role} propertyGroupId={propertyGroupId} propertyGroups={allowedGroups} />
-          <StatusBanner />
-          <main className="flex-1">{children}</main>
-        </CurrencyProvider>
+        <LanguageProvider language={me?.language}>
+          <CurrencyProvider
+            secondaryCurrency={propertyGroupId === DEFAULT_PROPERTY_GROUP_ID ? secondaryCurrency : null}
+          >
+            <NavBar role={session?.role} propertyGroupId={propertyGroupId} propertyGroups={allowedGroups} />
+            <StatusBanner />
+            <main className="flex-1">{children}</main>
+          </CurrencyProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useT } from "@/components/LanguageProvider";
 
 // Settings → My Account (2026-08-17). Anyone with a personal login — admin
 // or team member — can change their own password here. The server verifies
 // the current password and only ever touches the caller's own row (see
 // api/settings/password).
 export function ChangePasswordForm() {
+  const t = useT();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -20,7 +22,7 @@ export function ChangePasswordForm() {
     setError(null);
     setDone(false);
     if (next !== confirm) {
-      setError("The two new passwords don't match.");
+      setError(t("pw.mismatch"));
       return;
     }
     setBusy(true);
@@ -37,7 +39,7 @@ export function ChangePasswordForm() {
       setNext("");
       setConfirm("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't change the password.");
+      setError(err instanceof Error ? err.message : t("pw.couldntChange"));
     } finally {
       setBusy(false);
     }
@@ -45,14 +47,11 @@ export function ChangePasswordForm() {
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <p className="text-xs text-black/50 dark:text-white/50">
-        Pick something only you know — at least 8 characters. You&apos;ll use the new password the next time
-        you sign in.
-      </p>
+      <p className="text-xs text-black/50 dark:text-white/50">{t("pw.helper")}</p>
 
       <div className="flex flex-wrap items-end gap-2">
         <label className="text-xs text-black/60 dark:text-white/60">
-          Current password
+          {t("pw.current")}
           <input
             type="password"
             required
@@ -63,7 +62,7 @@ export function ChangePasswordForm() {
           />
         </label>
         <label className="text-xs text-black/60 dark:text-white/60">
-          New password
+          {t("pw.new")}
           <input
             type="password"
             required
@@ -75,7 +74,7 @@ export function ChangePasswordForm() {
           />
         </label>
         <label className="text-xs text-black/60 dark:text-white/60">
-          Repeat new password
+          {t("pw.repeat")}
           <input
             type="password"
             required
@@ -91,15 +90,13 @@ export function ChangePasswordForm() {
           disabled={busy}
           className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
         >
-          {busy ? "Saving…" : "Save new password"}
+          {busy ? t("common.saving") : t("pw.saveNew")}
         </button>
       </div>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       {done && (
-        <p className="text-sm text-emerald-600 dark:text-emerald-400">
-          Password changed. Use the new one next time you sign in.
-        </p>
+        <p className="text-sm text-emerald-600 dark:text-emerald-400">{t("pw.success")}</p>
       )}
     </form>
   );
