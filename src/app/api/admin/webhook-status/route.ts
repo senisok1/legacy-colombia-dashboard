@@ -23,6 +23,47 @@ export async function GET(req: NextRequest) {
     "User-Agent": config.userAgent,
   };
 
+  // ?resubscribe=1 — deletes THIS app's webhook subscriptions and creates
+  // fresh ones (2026-08-19, "Shlomo's inquiry never arrived"): OwnerRez
+  // silently stopped delivering to the existing subscriptions after
+  // 2026-08-18 01:11 UTC (webhook:raw-samples went dead while the endpoint
+  // itself verifiably worked — a signed webhook_test POST returned 200 and
+  // was sampled), and no `inquiry`-type subscription had ever been created
+  // at all, so handleOwnerRezInquiryEvent was unreachable dead code.
+  // Recreating resets any failed/disabled delivery state on OwnerRez's side
+  // and adds the missing inquiry type. Only touches subscriptions pointing
+  // at THIS app's /api/webhook URL — the other connection's AWS-gateway
+  // subscriptions are someone else's and are left alone.
+  if (req.nextUrl.searchParams.get("resubscribe") === "1") {
+    const webhookUrl = `https://legacy-colombia-dashboard.vercel.app/api/webhook?secret=${(process.env.WEBHOOK_SECRET || "").trim()}`;
+    const listRes = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
+      headers: authHeaders,
+      cache: "no-store",
+    });
+    const listBody = (await listRes.json().catch(() => null)) as { items?: { id: number; type: string; webhook_url: string }[] } | null;
+    const mine = (listBody?.items ?? []).filter((s) =>
+      s.webhook_url.startsWith("https://legacy-colombia-dashboard.vercel.app/api/webhook")
+    );
+    const deleted: Record<number, number> = {};
+    for (const sub of mine) {
+      const del = await fetch(`https://api.ownerrez.com/v2/webhooksubscriptions/${sub.id}`, {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      deleted[sub.id] = del.status;
+    }
+    const created: Record<string, unknown> = {};
+    for (const type of ["message", "booking", "inquiry"]) {
+      const res = await fetch("https://api.ownerrez.com/v2/webhooksubscriptions", {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ type, action: "entity_create", webhook_url: webhookUrl }),
+      });
+      created[type] = { status: res.status, body: await res.json().catch(() => null) };
+    }
+    return NextResponse.json({ ok: true, deleted, created });
+  }
+
   // ?message_id=X — fetch the raw OwnerRez message entity, since the
   // webhook's `entity` field is documented to be exactly this object.
   // The fastest way to learn the REAL field names of a payload we mishandled.

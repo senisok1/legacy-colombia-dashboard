@@ -144,23 +144,22 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       return;
     }
 
-    // Property scope check FIRST — before any branch that could ping Seni.
-    // Real payloads carry it at thread.property_id (confirmed 2026-08-16).
+    // Property scope check FIRST — before any branch that could draft or
+    // page. Real payloads carry it at thread.property_id (2026-08-16).
+    // CHANGED 2026-08-19 ("Shlomo's message never arrived"): out-of-scope is
+    // no longer a silent drop. The AI-drafting/approval pipeline stays
+    // Legacy Colombia-only (Seni's 2026-08-18 pullback), but a GUEST writing
+    // on ANY property now produces a notify-only WhatsApp — the cron is
+    // Colombia-scoped too, so a silent skip here meant zero signal anywhere
+    // for the other four properties.
+    let outOfScope = false;
     const messagePropId = num(m.property_id ?? m.propertyId) ?? num(thread.property_id);
     if (messagePropId !== undefined) {
       const allowed = await allowedPropertyIds();
-      if (!allowed || !allowed.has(messagePropId)) {
-        console.log(`[webhookHandlers] Message on thread ${threadId} is for property ${messagePropId} — outside this dashboard's scope, skipping`);
-        return;
-      }
+      if (!allowed || !allowed.has(messagePropId)) outOfScope = true;
     } else {
       const inScope = await isThreadForAllowedProperty(threadId);
-      if (inScope !== true) {
-        console.log(
-          `[webhookHandlers] Thread ${threadId} ${inScope === false ? "belongs to another property" : "can't be property-verified"} — skipping (cron is the backstop)`
-        );
-        return;
-      }
+      if (inScope !== true) outOfScope = true;
     }
 
     // let, not const (2026-08-18): real OwnerRez message payloads carry no
@@ -170,6 +169,47 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
     const fromRole = (str(m.fromRole ?? m.from_role ?? m.senderType ?? m.sender_type) ?? "").toLowerCase();
     const isGuestMessage = m.isGuest === true || m.is_guest === true || fromRole === "guest";
     const isHostMessage = ["admin", "owner", "host", "co_host", "cohost"].includes(fromRole);
+
+    if (outOfScope) {
+      // Other-property GUEST message → notify-only ping (no draft, no
+      // YES/NO protocol — Seni answers in OwnerRez himself). Host/system
+      // messages out of scope stay silent: pinging Seni for Geo's own
+      // Miami replies would be pure noise. Rides the approved New Inquiry
+      // template so it delivers regardless of the 24h window.
+      if (!isGuestMessage) return;
+      console.log(`[webhookHandlers] Guest message on out-of-scope thread ${threadId} — notify-only alert`);
+      let sent = false;
+      let sendError: string | undefined;
+      try {
+        await sendNewInquiryTemplate({
+          guestName,
+          question: `(guest message — reply in OwnerRez, thread #${threadId}) ${body.slice(0, 300)}`,
+        });
+        sent = true;
+      } catch (tmplErr) {
+        sendError = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
+        try {
+          await sendWhatsAppText(
+            `💬 New guest message from ${guestName} (thread #${threadId}, another property):\n"${body.slice(0, 300)}"\n\nReply in OwnerRez.`
+          );
+          sent = true;
+        } catch (textErr) {
+          sendError = textErr instanceof Error ? textErr.message : String(textErr);
+        }
+      }
+      await logAiActivity({
+        agentKey: "guest_experience",
+        agentDisplayName: "AI Guest Experience Manager",
+        task: "Notify guest message (other property)",
+        trigger: `Guest message on out-of-scope thread #${threadId}: "${body.slice(0, 200)}"`,
+        actionTaken: sent
+          ? "Sent notify-only WhatsApp to Seni (no AI draft — drafting stays Legacy Colombia-only)"
+          : "FAILED to deliver the notify-only WhatsApp",
+        result: sent ? "notified" : "failed",
+        error: sent ? undefined : sendError,
+      }).catch(() => {});
+      return;
+    }
 
     if (isHostMessage && !isGuestMessage) {
       // Another admin (or automation) replied to the guest in OwnerRez —
@@ -496,18 +536,13 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
 
     const inq = (event.entity ?? event.inquiry ?? event.data ?? {}) as Record<string, unknown>;
 
-    // Property scope: only Legacy Colombia + Nukak Casa #19 may ping.
-    const inqPropId = num(inq.property_id ?? inq.propertyId) ?? num((inq.property as Record<string, unknown> | undefined)?.id);
-    if (inqPropId === undefined) {
-      console.warn("[webhookHandlers] Inquiry event has no property id — skipping ping (strict 2-property scope)");
-      return;
-    }
-    const allowed = await allowedPropertyIds();
-    if (!allowed || !allowed.has(inqPropId)) {
-      console.log(`[webhookHandlers] Inquiry for property ${inqPropId} — outside this dashboard's scope, skipping`);
-      return;
-    }
-
+    // Scope widened 2026-08-19 ("Shlomo's inquiry never arrived"): a new
+    // inquiry on ANY property now pings — a missed inquiry is a missed
+    // booking, and this is a pure notification (no drafting/automation, so
+    // the 2026-08-18 Colombia-only automation pullback doesn't apply). Note
+    // this handler was previously unreachable anyway: no `inquiry`-type
+    // webhook subscription existed on OwnerRez until the 2026-08-19
+    // resubscribe (see api/admin/webhook-status ?resubscribe=1).
     const guestName = str(inq.guestName ?? inq.guest_name ?? inq.name) ?? "Guest";
     const question = str(inq.message ?? inq.question ?? inq.body) ?? "(no message provided)";
 
