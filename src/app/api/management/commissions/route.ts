@@ -182,20 +182,40 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [bookings, guests] = await Promise.all([
-      getBookings(session.organizationId, groupId),
-      getGuests(session.organizationId, groupId).catch(() => []),
-    ]);
+    // PERF (2026-08-19, Seni: "commissions tab took about 20 seconds to load
+    // initially"): everything independent now runs concurrently instead of
+    // one-after-another. The dominant cost is OwnerRez itself on a cold Data
+    // Cache (getGuests alone fans out to one request per guest on a miss —
+    // see lib/ownerrez.ts's fetchGuestsByIds; the every-minute check-messages
+    // cron keeps it warm, but the first hit right after a fresh deploy pays
+    // full price). The DB reads (extras/settlements) and the FX preview never
+    // depended on that fetch, so they no longer wait behind it; only the
+    // direct-bookings list waits for the sync (which needs bookings first).
+    const bookingsPromise = getBookings(session.organizationId, groupId);
+    const guestsPromise = getGuests(session.organizationId, groupId).catch(() => [] as Guest[]);
+    const extrasPromise = listBookingExtras(session.organizationId);
+    const settlementsPromise = listCommissionSettlements(session.organizationId);
+    // Read-only preview for the UI before Seni actually settles — the real
+    // rate used in a settlement is fetched fresh again at settle time, never
+    // trusted from this earlier read.
+    const previewRatePromise = getUsdToRate("COP").catch(() => null);
+
+    const bookings = await bookingsPromise;
     const bookingsById = new Map(bookings.map((b) => [b.id, b]));
-    const guestsById = buildGuestsById(guests);
 
     await syncDirectBookingCommissions({ organizationId: session.organizationId, bookings }).catch((err) =>
       console.error("[commissions] syncDirectBookingCommissions failed:", err)
     );
 
-    const extrasByBooking = await listBookingExtras(session.organizationId);
+    const [guests, extrasByBooking, directAllFlat, settlements, previewRate] = await Promise.all([
+      guestsPromise,
+      extrasPromise,
+      listDirectBookingCommissions(session.organizationId),
+      settlementsPromise,
+      previewRatePromise,
+    ]);
+    const guestsById = buildGuestsById(guests);
     const extrasAllFlat = [...extrasByBooking.values()].flat();
-    const directAllFlat = await listDirectBookingCommissions(session.organizationId);
 
     const extraLinesAll = extrasAllFlat.map((e) => toExtraLine(e, bookingsById, guestsById));
     const directLinesAll = directAllFlat
@@ -216,12 +236,6 @@ export async function GET(req: NextRequest) {
     const pending = [...extraLines, ...directLines].filter((l) => !l.approved && !l.declined);
     const payableTotalUsd = Math.round(payable.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
     const pendingTotalUsd = Math.round(pending.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
-
-    const settlements = await listCommissionSettlements(session.organizationId);
-    // Read-only preview for the UI before Seni actually settles — the real
-    // rate used in a settlement is fetched fresh again at settle time, never
-    // trusted from this earlier read.
-    const previewRate = await getUsdToRate("COP").catch(() => null);
 
     // Stay picker for "log an extra" (2026-08-19: the Add Extra form moved
     // here from Team Management, so it needs its own booking list instead

@@ -19,12 +19,34 @@ export async function GET(req: NextRequest) {
   if (!config.adminSecret || secret !== config.adminSecret) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
+  // Free-text search mode (2026-08-19, "Edgar's WhatsApp alert never
+  // arrived"): ?q=Edgar searches the same columns by name/keyword instead of
+  // a thread id — the /activity UI truncates to the last 100 rows org-wide,
+  // so a busy afternoon buries exactly the entry being hunted, same failure
+  // mode this route was originally built for (see header comment).
+  const q = req.nextUrl.searchParams.get("q")?.trim();
   const threadId = Number(req.nextUrl.searchParams.get("threadId"));
-  if (!threadId) {
-    return NextResponse.json({ error: "?threadId= required." }, { status: 400 });
+  if (!threadId && !q) {
+    return NextResponse.json({ error: "?threadId= or ?q= required." }, { status: 400 });
   }
   if (!isDbConfigured()) {
     return NextResponse.json({ error: "DATABASE_URL isn't set on this deployment." }, { status: 400 });
+  }
+
+  if (q && !threadId) {
+    const rows = await query<Record<string, unknown>>(
+      `select l.occurred_at, o.slug as org_slug, a.key as agent_key, l.task, l.trigger,
+              l.action_taken, l.communication_sent, l.result, l.error
+       from ai_activity_log l
+       left join agents a on a.id = l.agent_id
+       left join organizations o on o.id = l.organization_id
+       where l.trigger ilike $1 or l.data_reviewed::text ilike $1
+          or l.communication_sent::text ilike $1 or l.task ilike $1
+       order by l.occurred_at desc
+       limit 30`,
+      [`%${q}%`]
+    );
+    return NextResponse.json({ ok: true, q, rows });
   }
 
   const activityRows = await query<{
