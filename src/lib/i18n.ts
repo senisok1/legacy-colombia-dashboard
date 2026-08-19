@@ -514,7 +514,11 @@ const STRINGS: Dict = {
   "comm.vendorPaidField": { English: "Paid to vendor", Spanish: "Pagado al proveedor", Portuguese: "Pago ao fornecedor" },
   "comm.notesField": { English: "Notes (optional)", Spanish: "Notas (opcional)", Portuguese: "Notas (opcional)" },
   "comm.saveExtra": { English: "Save extra", Spanish: "Guardar extra", Portuguese: "Salvar extra" },
-  "comm.markSettled": { English: "Settled", Spanish: "Liquidado", Portuguese: "Liquidado" },
+  "comm.markSettled": {
+    English: "Confirm paid → settle",
+    Spanish: "Confirmar pagado → liquidar",
+    Portuguese: "Confirmar pago → liquidar",
+  },
   "comm.settleThisLine": { English: "Settle this line", Spanish: "Liquidar esta línea", Portuguese: "Liquidar esta linha" },
   "comm.alreadyPaidHelp": {
     English: "For when Gabriel already collected this in cash — marks it paid and logs it to settlement history.",
