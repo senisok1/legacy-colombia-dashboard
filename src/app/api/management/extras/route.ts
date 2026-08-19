@@ -20,6 +20,13 @@ export const dynamic = "force-dynamic";
 // UI — the property group comes from the same cookie the board reads, so a
 // request made while another property is selected is rejected rather than
 // silently writing an extra that would then surface under the wrong house.
+//
+// APPROVAL LOCK (2026-08-19, Seni's ask): editing/deleting an extra used to
+// have NO owner gate at all — see the removed proxy.ts comment this fixes.
+// PATCH is now blocked server-side (in updateBookingExtra's WHERE clause)
+// once approved or settled, and DELETE is CEO-only. Approve/decline itself
+// lives in /api/management/commissions, not here — this route only ever
+// creates/edits/deletes an extra's raw figures.
 
 // Resolved the same way the board itself resolves it, INCLUDING the user's
 // propertyAccess — so someone whose access doesn't include Legacy Colombia
@@ -43,7 +50,7 @@ type Body = {
   customLabel?: string | null;
   serviceDate?: string | null;
   guestPaid?: unknown;
-  housePaid?: unknown;
+  vendorPaid?: unknown;
   notes?: string | null;
 };
 
@@ -52,7 +59,7 @@ function validate(body: Body | null): { error: string } | {
   customLabel: string | null;
   serviceDate: string | null;
   guestPaid: number;
-  housePaid: number;
+  vendorPaid: number;
   notes: string | null;
 } {
   if (!body) return { error: "Invalid body." };
@@ -69,18 +76,19 @@ function validate(body: Body | null): { error: string } | {
     typeof body.serviceDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.serviceDate) ? body.serviceDate : null;
 
   const guestPaid = parseMoney(body.guestPaid ?? 0);
-  const housePaid = parseMoney(body.housePaid ?? 0);
+  const vendorPaid = parseMoney(body.vendorPaid ?? 0);
   if (guestPaid === null) return { error: "Amount paid by guest isn't a valid number." };
-  if (housePaid === null) return { error: "Amount paid to the house isn't a valid number." };
-  // Commission is derived as guestPaid - housePaid, so this would render a
-  // negative commission. Catch it at the door with a plain-English reason
+  if (vendorPaid === null) return { error: "Amount paid to the vendor isn't a valid number." };
+  // Margin is guestPaid - vendorPaid, split 50/50 between the house and
+  // Gabriel — so a vendor cost above what the guest paid would render a
+  // negative margin. Catch it at the door with a plain-English reason
   // rather than displaying a number that looks like a bug.
-  if (housePaid > guestPaid) {
-    return { error: "Amount to the house can't be more than the guest paid — that would make the commission negative." };
+  if (vendorPaid > guestPaid) {
+    return { error: "Amount paid to the vendor can't be more than the guest paid — that would make the margin negative." };
   }
 
   const notes = typeof body.notes === "string" && body.notes.trim() ? body.notes.trim().slice(0, 500) : null;
-  return { kind, customLabel, serviceDate, guestPaid, housePaid, notes };
+  return { kind, customLabel, serviceDate, guestPaid, vendorPaid, notes };
 }
 
 export async function POST(req: NextRequest) {
@@ -132,8 +140,17 @@ export async function PATCH(req: NextRequest) {
       id: body.id,
       ...parsed,
       updatedBy: session.email,
+      requesterIsOwner: session.role === "CEO",
     });
-    if (!extra) return NextResponse.json({ error: "That extra no longer exists." }, { status: 404 });
+    if (!extra) {
+      return NextResponse.json(
+        {
+          error:
+            "That extra no longer exists, it's already been approved or settled and can't be edited, or it belongs to someone else.",
+        },
+        { status: 404 }
+      );
+    }
     return NextResponse.json({ ok: true, extra });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -142,9 +159,16 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
+// CEO-only (2026-08-19, Seni's ask). Same posture as team-expenses' DELETE —
+// deleting a commission line entirely is the owner's call, not the team
+// member who logged it. proxy.ts no longer reaches this for a READ_ONLY
+// session at all; this check is the real gate either way.
 export async function DELETE(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
+  if (session.role !== "CEO") {
+    return NextResponse.json({ error: "Only the owner can delete an extra." }, { status: 403 });
+  }
   if ((await activeGroup(req, session.email)) !== EXTRAS_PROPERTY_GROUP_ID) {
     return NextResponse.json({ error: "Extras are only tracked for Legacy Colombia." }, { status: 400 });
   }

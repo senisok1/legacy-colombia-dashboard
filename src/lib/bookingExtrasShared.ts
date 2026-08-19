@@ -40,11 +40,23 @@ export type BookingExtra = {
   customLabel: string | null;
   serviceDate: string | null; // YYYY-MM-DD
   guestPaid: number;
-  housePaid: number;
-  /** Always guestPaid - housePaid. Derived, never stored — see migration 0034. */
-  commission: number;
+  vendorPaid: number;
+  /** guestPaid - vendorPaid, split 50/50 below. Derived, never stored — see
+   * migration 0034/0039. houseShare + gabrielShare always equals margin
+   * exactly (any odd cent goes to houseShare so the two never round to more
+   * than the actual margin). */
+  margin: number;
+  houseShare: number;
+  gabrielShare: number;
   notes: string | null;
   createdBy: string | null;
   updatedBy: string | null;
   updatedAt: string;
+  approved: boolean;
+  approvedByName: string | null;
+  approvedAt: string | null;
+  declined: boolean;
+  declinedReason: string | null;
+  settledAt: string | null;
+  settlementId: string | null;
 };

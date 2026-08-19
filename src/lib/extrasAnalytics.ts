@@ -125,8 +125,12 @@ export function summarizeExtras(
 
       count += 1;
       guestPaid += extra.guestPaid;
-      houseRevenue += extra.housePaid;
-      commission += extra.commission;
+      // 2026-08-19 fix: houseRevenue/commission now come from the corrected
+      // 50/50 margin split (guestPaid - vendorPaid, halved) rather than the
+      // old "the house gets whatever's typed in, Gabriel gets 100% of the
+      // rest" formula — see migration 0039 and bookingExtras.ts's toExtra().
+      houseRevenue += extra.houseShare;
+      commission += extra.gabrielShare;
       bookingIdsWithExtras.add(bookingId);
 
       const label = extraKindLabel(extra.kind, extra.customLabel);
@@ -143,8 +147,8 @@ export function summarizeExtras(
       };
       row.count += 1;
       row.guestPaid += extra.guestPaid;
-      row.houseRevenue += extra.housePaid;
-      row.commission += extra.commission;
+      row.houseRevenue += extra.houseShare;
+      row.commission += extra.gabrielShare;
       byKind.set(key, row);
     }
   }

@@ -303,7 +303,14 @@ export async function proxy(req: NextRequest) {
       const TEAM_API_ALLOWLIST = [
         "/api/logout",
         "/api/translate", // reading Spanish guest threads
-        "/api/management", // Team Management board + notes, event flags, extras
+        // Team Management board + notes, event flags, extras, and (2026-08-19)
+        // the Commissions ledger at /api/management/commissions — this
+        // prefix covers all of them. Commissions' GET is fine to reach here
+        // (Gabriel views the shared ledger); its PUT (approve/decline) and
+        // POST (settle) are deliberately NOT in the write allowlist below,
+        // so a READ_ONLY session gets a 403 before the route's own CEO
+        // check even runs.
+        "/api/management",
         "/api/team-expenses", // Team Expense Requests
         "/api/team-requests", // Team Requests (2026-08-18) — accept/deny tasks tagged to a teammate
         // (The Team Activity Log tab's own free-text feed has no API of its
@@ -341,12 +348,13 @@ export async function proxy(req: NextRequest) {
         // Paid extras per stay (2026-08-17, see api/management/extras).
         // Gabriel is the one who actually arranges chefs/massages/jet skis,
         // so he has to be able to record them or they never get logged.
-        // NOTE this means a team member enters the two figures his own
-        // commission is derived from. Every row is stamped with created_by /
-        // updated_by and the whole list is visible to the owner, so it's
-        // auditable rather than blind — but if that trade stops being
-        // acceptable, remove this line and extras become admin-only entry.
-        pathname === "/api/management/extras" ||
+        // POST (create) and PATCH (edit) only — DELETE is CEO-only
+        // (2026-08-19 fix) and deliberately excluded here, same posture as
+        // team-expenses' DELETE below. The route itself independently locks
+        // PATCH once an extra is approved/settled and rejects editing
+        // someone else's entry — this allowlist entry only controls whether
+        // a READ_ONLY session can reach the route method at all.
+        (pathname === "/api/management/extras" && (req.method === "POST" || req.method === "PATCH")) ||
         // Property-view switcher (a cookie-only view preference).
         pathname === "/api/settings/property-group" ||
         // Their OWN password (api/settings/password resolves the target user

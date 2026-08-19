@@ -41,6 +41,9 @@ const navEntries: NavEntry[] = [
   // Team Activity Log sits to the RIGHT of Team Expense Request (2026-08-17,
   // Seni's ask) — it was briefly the other way round.
   { type: "link", href: "/team-log", label: "Team Activity Log" },
+  // Commissions (2026-08-19) — shared by Seni and Gabriel: extras commission
+  // + direct-booking referrals, owner approves/settles, Gabriel views.
+  { type: "link", href: "/commissions", label: "Commissions" },
   { type: "group", label: "Messaging", tabs: MESSAGING_GROUP_TABS },
   { type: "group", label: "Marketing", tabs: MARKETING_GROUP_TABS },
   { type: "group", label: "Reports", tabs: REPORTS_GROUP_TABS },
@@ -154,6 +157,7 @@ const NAV_LABEL_KEYS: Record<string, string> = {
   "Team Management": "nav.management",
   "Team Expense Request": "nav.expenses",
   "Team Activity Log": "nav.activityLog",
+  Commissions: "nav.commissions",
   Settings: "nav.settings",
 };
 

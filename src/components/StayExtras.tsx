@@ -7,10 +7,17 @@ import { EXTRA_KINDS, extraKindLabel, type BookingExtra } from "@/lib/bookingExt
 // stay card on the Team Management tab, Legacy Colombia only.
 //
 // Gabriel arranges add-on experiences during a stay. The guest pays one
-// amount, part goes to the house, and the difference is his commission.
-// Commission is shown but never typed: it's derived from the two amounts
-// above it, so the three figures cannot contradict each other. See
-// db/migrations/0034_booking_extras.sql.
+// amount, Gabriel pays the vendor another, and the difference (the margin)
+// is split 50/50 between the house and Gabriel (2026-08-19 fix — the split
+// used to hand Gabriel the whole margin, which was never actually the deal).
+// Both shares are shown but never typed directly: they're derived from the
+// two amounts above them, so the figures cannot contradict each other. See
+// db/migrations/0034_booking_extras.sql and 0039_commissions.sql.
+//
+// APPROVAL LOCK (2026-08-19): once the owner approves an extra (see the
+// Commissions tab), it's locked — Edit/Delete disappear here. That's
+// enforced server-side in api/management/extras' PATCH/DELETE, this is just
+// the matching display.
 
 function money(n: number): string {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
@@ -21,7 +28,7 @@ type Draft = {
   customLabel: string;
   serviceDate: string;
   guestPaid: string;
-  housePaid: string;
+  vendorPaid: string;
   notes: string;
 };
 
@@ -30,7 +37,7 @@ const EMPTY_DRAFT: Draft = {
   customLabel: "",
   serviceDate: "",
   guestPaid: "",
-  housePaid: "",
+  vendorPaid: "",
   notes: "",
 };
 
@@ -40,17 +47,20 @@ function toDraft(e: BookingExtra): Draft {
     customLabel: e.customLabel ?? "",
     serviceDate: e.serviceDate ?? "",
     guestPaid: String(e.guestPaid),
-    housePaid: String(e.housePaid),
+    vendorPaid: String(e.vendorPaid),
     notes: e.notes ?? "",
   };
 }
 
-/** Live preview of the derived commission while typing. */
-function previewCommission(d: Draft): number | null {
+/** Live preview of the derived house/Gabriel split while typing. */
+function previewSplit(d: Draft): { houseShare: number; gabrielShare: number } | null {
   const g = Number(d.guestPaid.replace(/[$,\s]/g, ""));
-  const h = Number(d.housePaid.replace(/[$,\s]/g, "") || 0);
-  if (!Number.isFinite(g) || !Number.isFinite(h) || d.guestPaid.trim() === "") return null;
-  return Math.round((g - h) * 100) / 100;
+  const v = Number(d.vendorPaid.replace(/[$,\s]/g, "") || 0);
+  if (!Number.isFinite(g) || !Number.isFinite(v) || d.guestPaid.trim() === "") return null;
+  const margin = Math.round((g - v) * 100) / 100;
+  const houseShare = Math.round((margin / 2) * 100) / 100;
+  const gabrielShare = Math.round((margin - houseShare) * 100) / 100;
+  return { houseShare, gabrielShare };
 }
 
 function ExtraForm({
@@ -70,7 +80,7 @@ function ExtraForm({
   busy: boolean;
   submitLabel: string;
 }) {
-  const commission = previewCommission(draft);
+  const split = previewSplit(draft);
   const field =
     "rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm";
 
@@ -138,23 +148,32 @@ function ExtraForm({
           />
         </label>
         <label className="text-xs text-black/50 dark:text-white/50">
-          To the house
+          Paid to vendor
           <input
             className={`${field} ml-1 w-24`}
             inputMode="decimal"
             placeholder="0.00"
-            value={draft.housePaid}
-            onChange={(e) => setDraft({ ...draft, housePaid: e.target.value })}
+            value={draft.vendorPaid}
+            onChange={(e) => setDraft({ ...draft, vendorPaid: e.target.value })}
           />
         </label>
         <span className="text-xs text-black/50 dark:text-white/50">
-          Gabriel&apos;s commission{" "}
+          House{" "}
           <span
             className={`font-semibold ${
-              commission !== null && commission < 0 ? "text-red-600 dark:text-red-400" : ""
+              split !== null && split.houseShare < 0 ? "text-red-600 dark:text-red-400" : ""
             }`}
           >
-            {commission === null ? "—" : money(commission)}
+            {split === null ? "—" : money(split.houseShare)}
+          </span>
+          {" · "}
+          Gabriel{" "}
+          <span
+            className={`font-semibold ${
+              split !== null && split.gabrielShare < 0 ? "text-red-600 dark:text-red-400" : ""
+            }`}
+          >
+            {split === null ? "—" : money(split.gabrielShare)}
           </span>
         </span>
       </div>
@@ -209,10 +228,10 @@ export function StayExtras({
   const totals = extras.reduce(
     (acc, e) => ({
       guestPaid: acc.guestPaid + e.guestPaid,
-      housePaid: acc.housePaid + e.housePaid,
-      commission: acc.commission + e.commission,
+      houseShare: acc.houseShare + e.houseShare,
+      gabrielShare: acc.gabrielShare + e.gabrielShare,
     }),
-    { guestPaid: 0, housePaid: 0, commission: 0 }
+    { guestPaid: 0, houseShare: 0, gabrielShare: 0 }
   );
 
   async function send(method: "POST" | "PATCH" | "DELETE", body?: unknown, id?: string) {
@@ -301,30 +320,37 @@ export function StayExtras({
                   </span>
                 )}
                 <span className="text-xs">
-                  Guest {money(e.guestPaid)} · House {money(e.housePaid)} ·{" "}
-                  <span className="font-semibold">Gabriel {money(e.commission)}</span>
+                  Guest {money(e.guestPaid)} · House{" "}
+                  <span className="font-semibold">{money(e.houseShare)}</span> · Gabriel{" "}
+                  <span className="font-semibold">{money(e.gabrielShare)}</span>
                 </span>
                 {e.notes && <span className="text-xs text-black/50 dark:text-white/50">{e.notes}</span>}
-                <span className="ml-auto flex gap-2">
-                  <button
-                    type="button"
-                    className="text-xs underline"
-                    onClick={() => {
-                      setEditingId(e.id);
-                      setEditDraft(toDraft(e));
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="text-xs underline text-red-600 dark:text-red-400"
-                    disabled={busy}
-                    onClick={() => void send("DELETE", undefined, e.id)}
-                  >
-                    Delete
-                  </button>
-                </span>
+                {/* Locked once the owner has approved/declined it (see the
+                    Commissions tab) or it's been settled — Edit/Delete
+                    disappear rather than erroring on click. Server-side
+                    enforcement is the real gate; this just avoids a dead
+                    button. */}
+                {e.settledAt ? (
+                  <span className="ml-auto text-xs text-emerald-600 dark:text-emerald-400">✓ Settled</span>
+                ) : e.declined ? (
+                  <span className="ml-auto text-xs text-black/40 dark:text-white/40">Declined</span>
+                ) : e.approved ? (
+                  <span className="ml-auto text-xs text-blue-600 dark:text-blue-400">🔒 Approved</span>
+                ) : (
+                  <span className="ml-auto flex items-center gap-2">
+                    <span className="text-xs text-amber-600 dark:text-amber-400">Awaiting approval</span>
+                    <button
+                      type="button"
+                      className="text-xs underline"
+                      onClick={() => {
+                        setEditingId(e.id);
+                        setEditDraft(toDraft(e));
+                      }}
+                    >
+                      Edit
+                    </button>
+                  </span>
+                )}
               </li>
             )
           )}
@@ -353,12 +379,12 @@ export function StayExtras({
             <span className="font-semibold">{money(totals.guestPaid)}</span>
           </span>
           <span>
-            <span className="text-black/50 dark:text-white/50">Total paid to the house</span>{" "}
-            <span className="font-semibold">{money(totals.housePaid)}</span>
+            <span className="text-black/50 dark:text-white/50">Total to the house</span>{" "}
+            <span className="font-semibold">{money(totals.houseShare)}</span>
           </span>
           <span>
             <span className="text-black/50 dark:text-white/50">Total Gabriel commission</span>{" "}
-            <span className="font-semibold">{money(totals.commission)}</span>
+            <span className="font-semibold">{money(totals.gabrielShare)}</span>
           </span>
         </div>
       )}
