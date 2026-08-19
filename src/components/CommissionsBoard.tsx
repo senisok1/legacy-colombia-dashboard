@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "@/components/LanguageProvider";
+import { useCurrency } from "@/components/CurrencyProvider";
 import { EXTRA_KINDS } from "@/lib/bookingExtrasShared";
 
 // Commissions tab (2026-08-19, Seni's ask) — a shared ledger for Seni and
@@ -159,6 +160,7 @@ function previewSplit(d: ExtraDraft): { houseShare: number; gabrielShare: number
 
 export function CommissionsBoard() {
   const t = useT();
+  const { format } = useCurrency();
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -306,11 +308,11 @@ export function CommissionsBoard() {
       <div className="flex flex-wrap gap-3">
         <div className="flex-1 min-w-[14rem] rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
           <div className="text-xs text-blue-700 dark:text-blue-400">{t("comm.owedToGabriel")}</div>
-          <div className="text-2xl font-semibold">{usd(data.payableTotalUsd)}</div>
+          <div className="text-2xl font-semibold">{format(data.payableTotalUsd, "USD")}</div>
         </div>
         <div className="flex-1 min-w-[14rem] rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
           <div className="text-xs text-amber-700 dark:text-amber-400">{t("comm.awaitingApproval")}</div>
-          <div className="text-2xl font-semibold">{usd(data.pendingTotalUsd)}</div>
+          <div className="text-2xl font-semibold">{format(data.pendingTotalUsd, "USD")}</div>
         </div>
       </div>
 
@@ -468,7 +470,7 @@ export function CommissionsBoard() {
                 </span>
                 <span>{lineTitle(l, t)}</span>
                 <span className="ml-auto tabular-nums text-xs text-black/50 dark:text-white/50">
-                  {t("comm.house")} {usd(l.houseAmount)} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {usd(l.gabrielAmount)}</strong>
+                  {t("comm.house")} {format(l.houseAmount, "USD")} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {format(l.gabrielAmount, "USD")}</strong>
                 </span>
                 {data.viewerIsOwner && (
                   <span className="flex flex-wrap gap-1.5">
@@ -541,7 +543,7 @@ export function CommissionsBoard() {
                 </span>
                 <span>{lineTitle(l, t)}</span>
                 <span className="ml-auto tabular-nums text-xs">
-                  {t("comm.house")} {usd(l.houseAmount)} · <strong>{t("comm.gabriel")} {usd(l.gabrielAmount)}</strong>
+                  {t("comm.house")} {format(l.houseAmount, "USD")} · <strong>{t("comm.gabriel")} {format(l.gabrielAmount, "USD")}</strong>
                 </span>
                 <span className="text-xs text-blue-600 dark:text-blue-400">🔒</span>
                 {data.viewerIsOwner && (
@@ -581,7 +583,7 @@ export function CommissionsBoard() {
             {data.settlements.map((s) => (
               <li key={s.id} className="rounded-lg bg-black/[0.03] dark:bg-white/[0.06] px-3 py-2">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                  <span className="font-semibold">{usd(s.totalUsd)} → {cop(s.totalCop)}</span>
+                  <span className="font-semibold">{format(s.totalUsd, "USD")} → {cop(s.totalCop)}</span>
                   <span className="text-xs text-black/50 dark:text-white/50">
                     {t("comm.settledBy")} {s.settledByName || "—"} · {when(s.settledAt)}
                   </span>

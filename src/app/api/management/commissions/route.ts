@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBookings } from "@/lib/ownerrez";
+import { getBookings, getGuests } from "@/lib/ownerrez";
+import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
@@ -17,7 +18,7 @@ import {
   type SettlementLineRef,
 } from "@/lib/commissionSettlements";
 import { getUsdToRate } from "@/lib/exchangeRate";
-import type { Booking } from "@/lib/types";
+import type { Booking, Guest } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -85,13 +86,19 @@ type DirectLine = {
   declinedReason: string | null;
 };
 
-function toExtraLine(e: BookingExtra, bookingsById: Map<number, Booking>): ExtraLine {
+function toExtraLine(e: BookingExtra, bookingsById: Map<number, Booking>, guestsById: Map<number, Guest>): ExtraLine {
   const b = bookingsById.get(e.bookingId);
+  // resolveGuestName joins against /v2/guests via guestId — OwnerRez's
+  // /v2/bookings response very often leaves booking.guestName itself blank
+  // (see lib/guestName.ts), which is why this tab was showing the generic
+  // "Guest" fallback even for bookings with a perfectly good name on file
+  // (2026-08-19 fix, Seni's ask).
+  const guestName = b ? resolveGuestName(b, guestsById) : null;
   return {
     type: "extra",
     id: e.id,
     bookingId: e.bookingId,
-    guestName: b?.guestName ?? null,
+    guestName,
     serviceDate: e.serviceDate,
     kind: e.kind,
     customLabel: e.customLabel,
@@ -110,7 +117,11 @@ function toExtraLine(e: BookingExtra, bookingsById: Map<number, Booking>): Extra
   };
 }
 
-function toDirectLine(d: DirectBookingCommission, bookingsById: Map<number, Booking>): DirectLine | null {
+function toDirectLine(
+  d: DirectBookingCommission,
+  bookingsById: Map<number, Booking>,
+  guestsById: Map<number, Guest>
+): DirectLine | null {
   const b = bookingsById.get(d.bookingId);
   const split = computeSplit(d, b);
   if (!split || !b) return null;
@@ -118,7 +129,7 @@ function toDirectLine(d: DirectBookingCommission, bookingsById: Map<number, Book
     type: "direct_booking",
     id: d.id,
     bookingId: d.bookingId,
-    guestName: b.guestName ?? null,
+    guestName: resolveGuestName(b, guestsById),
     arrival: b.arrival || null,
     departure: b.departure || null,
     totalAmount: split.totalAmount,
@@ -154,8 +165,12 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const bookings = await getBookings(session.organizationId, groupId);
+    const [bookings, guests] = await Promise.all([
+      getBookings(session.organizationId, groupId),
+      getGuests(session.organizationId, groupId).catch(() => []),
+    ]);
     const bookingsById = new Map(bookings.map((b) => [b.id, b]));
+    const guestsById = buildGuestsById(guests);
 
     await syncDirectBookingCommissions({ organizationId: session.organizationId, bookings }).catch((err) =>
       console.error("[commissions] syncDirectBookingCommissions failed:", err)
@@ -165,8 +180,10 @@ export async function GET(req: NextRequest) {
     const extrasFlat = [...extrasByBooking.values()].flat().filter((e) => !e.settledAt);
     const directFlat = (await listDirectBookingCommissions(session.organizationId)).filter((d) => !d.settledAt);
 
-    const extraLines = extrasFlat.map((e) => toExtraLine(e, bookingsById));
-    const directLines = directFlat.map((d) => toDirectLine(d, bookingsById)).filter((l): l is DirectLine => l !== null);
+    const extraLines = extrasFlat.map((e) => toExtraLine(e, bookingsById, guestsById));
+    const directLines = directFlat
+      .map((d) => toDirectLine(d, bookingsById, guestsById))
+      .filter((l): l is DirectLine => l !== null);
 
     const payable = [...extraLines, ...directLines].filter((l) => l.approved && !l.declined);
     const pending = [...extraLines, ...directLines].filter((l) => !l.approved && !l.declined);
@@ -191,7 +208,7 @@ export async function GET(req: NextRequest) {
       .slice(0, 300)
       .map((b) => ({
         bookingId: b.id,
-        guestName: b.guestName || "Guest",
+        guestName: resolveGuestName(b, guestsById),
         arrival: b.arrival || null,
         departure: b.departure || null,
       }));
