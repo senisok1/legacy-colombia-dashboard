@@ -72,6 +72,24 @@ const TEMPLATES = [
       },
     ],
   },
+  // Balance-due alert to Geo (2026-08-19 — see lib/balanceDueAlerts.ts).
+  // Param order MUST match lib/whatsapp.ts's sendBalanceDueTemplate exactly:
+  // {{1}} guest, {{2}} property, {{3}} arrival date, {{4}} days out,
+  // {{5}} amount still due.
+  {
+    name: config.whatsappBalanceDueTemplate,
+    category: "UTILITY",
+    language: "en_US",
+    components: [
+      {
+        type: "BODY",
+        text: "💰 *Balance Due*\n\n{{1}} at {{2}}\nArrival: {{3}} ({{4}} away)\nStill owed: {{5}}\n\nCheck OwnerRez to collect before the stay.",
+        example: {
+          body_text: [["Maria Gomez", "Legacy Colombia", "Oct 18, 2026", "60 days", "$1,250.00"]],
+        },
+      },
+    ],
+  },
 ] as const;
 
 export async function GET(req: NextRequest) {

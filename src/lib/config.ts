@@ -148,6 +148,19 @@ export const config = {
   // lib/teamRequestNotify.ts.
   whatsappTeamTaskRequestTemplate: (process.env.WHATSAPP_TEAM_TASK_REQUEST_TEMPLATE || "team_task_request").trim(),
 
+  // Balance-due alerts (2026-08-19, Seni's ask: "create whatsapp alerts to
+  // be sent to Geo for all properties when there is an amount / balance
+  // still due 60 days prior to stay and 30 days prior to stay"). Recipient
+  // is resolved by email at send time (getUserByEmail → whatsapp_phone), so
+  // updating Geo's number in Settings → Team automatically retargets the
+  // alerts — no env change needed. The email itself is env-overridable in
+  // case this responsibility ever moves to someone else. Template requires
+  // Meta approval like every other business-initiated send here (Geo won't
+  // reliably have an open 24h session); falls back to free text until then —
+  // see lib/balanceDueAlerts.ts.
+  balanceDueAlertEmail: (process.env.BALANCE_DUE_ALERT_EMAIL || "gdpellettieri@gmail.com").trim(),
+  whatsappBalanceDueTemplate: (process.env.WHATSAPP_BALANCE_DUE_TEMPLATE || "balance_due_alert").trim(),
+
   // --- WhatsApp — public chat widget answer fallback ---
   // Used only when a website visitor who asked an escalated question has
   // left the site (see lib/chatEscalations.ts) and left a phone number.

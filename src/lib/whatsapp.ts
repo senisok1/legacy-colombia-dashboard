@@ -84,6 +84,12 @@ function isTeamTaskRequestConfigured(creds: WhatsAppCredentials): boolean {
   return Boolean(creds.accessToken && creds.phoneNumberId && config.whatsappTeamTaskRequestTemplate);
 }
 
+function isBalanceDueConfigured(creds: WhatsAppCredentials): boolean {
+  // No recipientNumber requirement — the recipient (Geo) is passed in per
+  // call, same as team task requests and vendor notifies.
+  return Boolean(creds.accessToken && creds.phoneNumberId && config.whatsappBalanceDueTemplate);
+}
+
 function isNewInquiryConfigured(creds: WhatsAppCredentials): boolean {
   return Boolean(creds.accessToken && creds.phoneNumberId && creds.recipientNumber && config.whatsappNewInquiryTemplate);
 }
@@ -509,6 +515,59 @@ export async function sendTeamTaskRequestTemplate(
               { type: "text", text: templateParam(params.title.slice(0, 100)) },
               { type: "text", text: templateParam(params.neededBy.slice(0, 60)) },
               { type: "text", text: templateParam(params.description.slice(0, 350)) },
+            ],
+          },
+        ],
+      },
+    },
+    creds
+  );
+}
+
+/**
+ * Notifies Geo (or whoever BALANCE_DUE_ALERT_EMAIL resolves to) that a stay
+ * arriving in ~60 or ~30 days still has an unpaid balance (2026-08-19,
+ * Seni's ask — see lib/balanceDueAlerts.ts for the milestone/dedupe logic).
+ * Recipient varies per call like sendTeamTaskRequestTemplate above. Params
+ * fill {{1}}..{{5}} in order: guest name, property name, arrival date,
+ * days until arrival, balance still due. Throws WhatsAppError if not
+ * configured/approved yet — callers should catch and fall back to
+ * sendWhatsAppTextTo (deliverable only if the recipient's 24h session
+ * window happens to be open), same convention as every template here.
+ */
+export async function sendBalanceDueTemplate(
+  params: {
+    to: string;
+    guestName: string;
+    propertyName: string;
+    arrival: string;
+    daysOut: string;
+    amountDue: string;
+  },
+  organizationId?: string
+): Promise<string> {
+  const creds = await resolveWhatsAppCredentials(organizationId);
+  if (!isBalanceDueConfigured(creds)) {
+    throw new WhatsAppError("Balance-due template isn't configured/approved yet.");
+  }
+
+  return postTemplateWithLanguageFallback(
+    {
+      messaging_product: "whatsapp",
+      to: params.to,
+      type: "template",
+      template: {
+        name: config.whatsappBalanceDueTemplate,
+        language: { code: config.whatsappTemplateLanguage },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: templateParam(params.guestName.slice(0, 60) || "Guest") },
+              { type: "text", text: templateParam(params.propertyName.slice(0, 60)) },
+              { type: "text", text: templateParam(params.arrival.slice(0, 40)) },
+              { type: "text", text: templateParam(params.daysOut.slice(0, 20)) },
+              { type: "text", text: templateParam(params.amountDue.slice(0, 30)) },
             ],
           },
         ],
