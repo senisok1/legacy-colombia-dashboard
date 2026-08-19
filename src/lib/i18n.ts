@@ -450,6 +450,13 @@ const STRINGS: Dict = {
     Portuguese: "Somente o proprietário — corrigir uma entrada aprovada antes de liquidá-la",
   },
   "comm.commissionPctLabel": { English: "Commission %", Spanish: "% de comisión", Portuguese: "% de comissão" },
+  "comm.unlock": { English: "Unlock", Spanish: "Desbloquear", Portuguese: "Desbloquear" },
+  "comm.unlockHelp": {
+    English: "Owner only — undoes the settlement so this line can be corrected, then re-settled",
+    Spanish: "Solo el propietario — deshace la liquidación para poder corregir esta línea y volver a liquidarla",
+    Portuguese: "Somente o proprietário — desfaz a liquidação para corrigir esta linha e liquidá-la novamente",
+  },
+  "comm.unlocking": { English: "Unlocking…", Spanish: "Desbloqueando…", Portuguese: "Desbloqueando…" },
   "comm.settleTitle": { English: "Settle Gabriel's payout", Spanish: "Liquidar el pago de Gabriel", Portuguese: "Liquidar o pagamento de Gabriel" },
   "comm.settleHelp": {
     English: "Marks every approved, unpaid line above as paid. Record this once you've actually handed over the cash.",

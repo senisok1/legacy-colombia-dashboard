@@ -4,12 +4,19 @@ import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
-import { listBookingExtras, setExtraApproval, EXTRAS_PROPERTY_GROUP_ID, type BookingExtra } from "@/lib/bookingExtras";
+import {
+  listBookingExtras,
+  setExtraApproval,
+  unsettleBookingExtra,
+  EXTRAS_PROPERTY_GROUP_ID,
+  type BookingExtra,
+} from "@/lib/bookingExtras";
 import {
   syncDirectBookingCommissions,
   listDirectBookingCommissions,
   setDirectBookingApproval,
   setDirectBookingPct,
+  unsettleDirectBooking,
   computeSplit,
   type DirectBookingCommission,
 } from "@/lib/directBookingCommissions";
@@ -67,6 +74,8 @@ type ExtraLine = {
   approvedAt: string | null;
   declined: boolean;
   declinedReason: string | null;
+  settledAt: string | null;
+  settlementId: string | null;
 };
 
 type DirectLine = {
@@ -85,6 +94,8 @@ type DirectLine = {
   approvedAt: string | null;
   declined: boolean;
   declinedReason: string | null;
+  settledAt: string | null;
+  settlementId: string | null;
 };
 
 function toExtraLine(e: BookingExtra, bookingsById: Map<number, Booking>, guestsById: Map<number, Guest>): ExtraLine {
@@ -115,6 +126,8 @@ function toExtraLine(e: BookingExtra, bookingsById: Map<number, Booking>, guests
     approvedAt: e.approvedAt,
     declined: e.declined,
     declinedReason: e.declinedReason,
+    settledAt: e.settledAt,
+    settlementId: e.settlementId,
   };
 }
 
@@ -142,6 +155,8 @@ function toDirectLine(
     approvedAt: d.approvedAt,
     declined: d.declined,
     declinedReason: d.declinedReason,
+    settledAt: d.settledAt,
+    settlementId: d.settlementId,
   };
 }
 
@@ -157,6 +172,7 @@ export async function GET(req: NextRequest) {
       viewerEmail: session.email,
       extras: [],
       directBookings: [],
+      settledLines: [],
       settlements: [],
       pendingTotalUsd: 0,
       payableTotalUsd: 0,
@@ -178,13 +194,23 @@ export async function GET(req: NextRequest) {
     );
 
     const extrasByBooking = await listBookingExtras(session.organizationId);
-    const extrasFlat = [...extrasByBooking.values()].flat().filter((e) => !e.settledAt);
-    const directFlat = (await listDirectBookingCommissions(session.organizationId)).filter((d) => !d.settledAt);
+    const extrasAllFlat = [...extrasByBooking.values()].flat();
+    const directAllFlat = await listDirectBookingCommissions(session.organizationId);
 
-    const extraLines = extrasFlat.map((e) => toExtraLine(e, bookingsById, guestsById));
-    const directLines = directFlat
+    const extraLinesAll = extrasAllFlat.map((e) => toExtraLine(e, bookingsById, guestsById));
+    const directLinesAll = directAllFlat
       .map((d) => toDirectLine(d, bookingsById, guestsById))
       .filter((l): l is DirectLine => l !== null);
+
+    // Active board (pending/approved/declined) only ever shows unsettled
+    // lines — settled ones move to the history section below instead, where
+    // the owner can Unlock one to fix a mistake (2026-08-19, Seni's ask).
+    const extraLines = extraLinesAll.filter((l) => !l.settledAt);
+    const directLines = directLinesAll.filter((l) => !l.settledAt);
+    const settledLines: (ExtraLine | DirectLine)[] = [
+      ...extraLinesAll.filter((l) => l.settledAt),
+      ...directLinesAll.filter((l) => l.settledAt),
+    ];
 
     const payable = [...extraLines, ...directLines].filter((l) => l.approved && !l.declined);
     const pending = [...extraLines, ...directLines].filter((l) => !l.approved && !l.declined);
@@ -220,6 +246,7 @@ export async function GET(req: NextRequest) {
       viewerEmail: session.email,
       extras: extraLines,
       directBookings: directLines,
+      settledLines,
       settlements,
       pendingTotalUsd,
       payableTotalUsd,
@@ -251,10 +278,33 @@ export async function PUT(req: NextRequest) {
         declined?: boolean;
         declinedReason?: string;
         commissionPct?: unknown;
+        unsettle?: boolean;
       }
     | null;
   if (!body?.id || (body.type !== "extra" && body.type !== "direct_booking")) {
     return NextResponse.json({ error: "type and id are required." }, { status: 400 });
+  }
+
+  // Owner-only Unlock (2026-08-19, Seni's ask: "allow the admin / owner
+  // user to unlock and edit"). Un-settles the row — clears settled_at/
+  // settlement_id so it falls back into the unsettled/approved pool, where
+  // the existing owner-edit path (below/PATCH extras, commissionPct here)
+  // already covers editing it. The settlement record it came out of keeps
+  // its original total forever (see unsettleBookingExtra's comment) — a
+  // correction moves the line forward, it never rewrites history.
+  if (body.unsettle === true) {
+    try {
+      const updated =
+        body.type === "extra"
+          ? await unsettleBookingExtra(session.organizationId, body.id)
+          : await unsettleDirectBooking(session.organizationId, body.id);
+      if (!updated) {
+        return NextResponse.json({ error: "No such commission, or it isn't currently settled." }, { status: 404 });
+      }
+      return NextResponse.json({ ok: true });
+    } catch (err) {
+      return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
+    }
   }
 
   // Owner-only Edit mode (2026-08-19, Seni's ask: an Edit control next to

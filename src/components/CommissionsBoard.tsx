@@ -37,6 +37,8 @@ type ExtraLine = {
   approvedAt: string | null;
   declined: boolean;
   declinedReason: string | null;
+  settledAt: string | null;
+  settlementId: string | null;
 };
 
 type DirectLine = {
@@ -55,6 +57,8 @@ type DirectLine = {
   approvedAt: string | null;
   declined: boolean;
   declinedReason: string | null;
+  settledAt: string | null;
+  settlementId: string | null;
 };
 
 type Line = ExtraLine | DirectLine;
@@ -81,6 +85,7 @@ type BoardData = {
   viewerEmail: string;
   extras: ExtraLine[];
   directBookings: DirectLine[];
+  settledLines: Line[];
   settlements: Settlement[];
   pendingTotalUsd: number;
   payableTotalUsd: number;
@@ -232,6 +237,25 @@ export function CommissionsBoard() {
         delete next[l.id];
         return next;
       });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("comm.couldntSave"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function unlock(l: Line) {
+    if (!window.confirm(t("comm.unlockHelp"))) return;
+    setBusyId(l.id);
+    try {
+      const res = await fetch("/api/management/commissions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: l.type, id: l.id, unsettle: true }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
@@ -658,22 +682,47 @@ export function CommissionsBoard() {
           <p className="text-sm text-black/50 dark:text-white/50">{t("comm.noSettlements")}</p>
         ) : (
           <ul className="space-y-1 text-sm">
-            {data.settlements.map((s) => (
-              <li key={s.id} className="rounded-lg bg-black/[0.03] dark:bg-white/[0.06] px-3 py-2">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                  <span className="font-semibold">{format(s.totalUsd, "USD")} → {cop(s.totalCop)}</span>
-                  <span className="text-xs text-black/50 dark:text-white/50">
-                    {t("comm.settledBy")} {s.settledByName || "—"} · {when(s.settledAt)}
-                  </span>
-                </div>
-                <div className="text-xs text-black/40 dark:text-white/40">
-                  {t("comm.effectiveRate")}: {s.effectiveRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} (
-                  {t("comm.liveRate")} {s.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} + {s.fxBufferPct}%
-                  {t("comm.buffer").toLowerCase()})
-                  {s.note ? ` — ${s.note}` : ""}
-                </div>
-              </li>
-            ))}
+            {data.settlements.map((s) => {
+              const lines = data.settledLines.filter((l) => l.settlementId === s.id);
+              return (
+                <li key={s.id} className="rounded-lg bg-black/[0.03] dark:bg-white/[0.06] px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                    <span className="font-semibold">{format(s.totalUsd, "USD")} → {cop(s.totalCop)}</span>
+                    <span className="text-xs text-black/50 dark:text-white/50">
+                      {t("comm.settledBy")} {s.settledByName || "—"} · {when(s.settledAt)}
+                    </span>
+                  </div>
+                  <div className="text-xs text-black/40 dark:text-white/40">
+                    {t("comm.effectiveRate")}: {s.effectiveRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} (
+                    {t("comm.liveRate")} {s.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} + {s.fxBufferPct}%
+                    {t("comm.buffer").toLowerCase()})
+                    {s.note ? ` — ${s.note}` : ""}
+                  </div>
+                  {lines.length > 0 && (
+                    <ul className="mt-1.5 space-y-1 border-t border-black/10 dark:border-white/10 pt-1.5">
+                      {lines.map((l) => (
+                        <li key={l.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                          <span className="text-black/60 dark:text-white/60">{lineTitle(l, t)}</span>
+                          <span className="tabular-nums text-black/50 dark:text-white/50">
+                            {t("comm.gabriel")} {format(l.gabrielAmount, "USD")}
+                          </span>
+                          {data.viewerIsOwner && (
+                            <button
+                              onClick={() => void unlock(l)}
+                              disabled={busyId === l.id}
+                              title={t("comm.unlockHelp")}
+                              className="rounded-md border border-amber-500/40 px-2 py-0.5 text-amber-600 dark:text-amber-400 disabled:opacity-40"
+                            >
+                              {busyId === l.id ? t("comm.unlocking") : t("comm.unlock")}
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

@@ -218,6 +218,25 @@ export async function updateBookingExtra(input: {
   return rows[0] ? toExtra(rows[0]) : null;
 }
 
+/** Owner-only "unlock" of a settled extra (2026-08-19, Seni's ask). Clears
+ * settled_at/settlement_id so the row falls back into the unsettled/approved
+ * pool and becomes editable there through the normal owner-edit path —
+ * requires re-settling afterward. The ORIGINAL settlement record this row
+ * was part of is never touched (see commissionSettlements.ts): its recorded
+ * total stays a true permanent snapshot of what was actually paid, even
+ * after one of its lines gets unlocked and corrected. Only settled rows
+ * match the WHERE clause — unlocking something that isn't settled is a
+ * no-op 404, not silently ignored. */
+export async function unsettleBookingExtra(organizationId: string, id: string): Promise<BookingExtra | null> {
+  const row = await queryOne<ExtraRow>(
+    `update booking_extras set settled_at = null, settlement_id = null
+      where organization_id = $1 and id = $2 and settled_at is not null
+      returning ${COLUMNS}`,
+    [organizationId, id]
+  );
+  return row ? toExtra(row) : null;
+}
+
 export async function deleteBookingExtra(organizationId: string, id: string): Promise<void> {
   await query(`delete from booking_extras where organization_id = $1 and id = $2`, [organizationId, id]);
 }

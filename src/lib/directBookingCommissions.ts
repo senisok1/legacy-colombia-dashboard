@@ -140,6 +140,22 @@ export async function setDirectBookingApproval(input: {
   return row ? fromRow(row) : null;
 }
 
+/** Owner-only "unlock" of a settled direct-booking commission (2026-08-19,
+ * Seni's ask). Same shape as bookingExtras.ts's unsettleBookingExtra — see
+ * that comment for the full reasoning. Clears settled_at/settlement_id so
+ * the row returns to the unsettled/approved pool (editable there via
+ * setDirectBookingPct) and must be re-settled afterward; the settlement
+ * record it came out of keeps its original recorded total forever. */
+export async function unsettleDirectBooking(organizationId: string, id: string): Promise<DirectBookingCommission | null> {
+  const row = await queryOne<Row>(
+    `update direct_booking_commissions set settled_at = null, settlement_id = null
+      where organization_id = $1 and id = $2 and settled_at is not null
+      returning ${COLUMNS}`,
+    [organizationId, id]
+  );
+  return row ? fromRow(row) : null;
+}
+
 /** Owner-only edit of the commission % (2026-08-19, the Commissions tab's
  * Edit mode). Route-level CEO check is the authorization gate; this is the
  * org-scoped, settlement-locked write — a settled row is part of a permanent
