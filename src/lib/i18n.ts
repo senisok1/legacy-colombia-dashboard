@@ -457,6 +457,21 @@ const STRINGS: Dict = {
     Portuguese: "Somente o proprietário — desfaz a liquidação para corrigir esta linha e liquidá-la novamente",
   },
   "comm.unlocking": { English: "Unlocking…", Spanish: "Desbloqueando…", Portuguese: "Desbloqueando…" },
+  "comm.unapproveHelp": {
+    English: "Owner only — sends this line back to Pending review so it can be edited, then re-approved",
+    Spanish: "Solo el propietario — devuelve esta línea a Pendiente de revisión para editarla y volver a aprobarla",
+    Portuguese: "Somente o proprietário — devolve esta linha para Pendente de revisão para editá-la e aprová-la novamente",
+  },
+  "comm.owedToHouse": {
+    English: "Gabriel owes the house",
+    Spanish: "Gabriel le debe a la casa",
+    Portuguese: "Gabriel deve à casa",
+  },
+  "comm.owedToHouseHint": {
+    English: "House share of approved, unsettled lines — the cash to collect from Gabriel",
+    Spanish: "Parte de la casa de líneas aprobadas sin liquidar — el efectivo a cobrar a Gabriel",
+    Portuguese: "Parte da casa das linhas aprovadas não liquidadas — o dinheiro a receber de Gabriel",
+  },
   "comm.settleTitle": { English: "Settle Gabriel's payout", Spanish: "Liquidar el pago de Gabriel", Portuguese: "Liquidar o pagamento de Gabriel" },
   "comm.settleHelp": {
     English: "Marks every approved, unpaid line above as paid. Record this once you've actually handed over the cash.",

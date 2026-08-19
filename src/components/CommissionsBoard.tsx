@@ -348,10 +348,19 @@ export function CommissionsBoard() {
   const approved = allLines.filter((l) => l.approved && !l.declined);
   const declined = allLines.filter((l) => l.declined);
 
+  // House share of the payable (approved, unsettled) lines — what Gabriel
+  // owes the house in cash, since he's the one who collects from the guest
+  // (2026-08-19, Seni's ask: "we need to know how much Gabriel owes the
+  // house so that I can count the COP and settle it out"). Derived from the
+  // same lines as payableTotalUsd, never stored.
+  const payableHouseUsd = Math.round(approved.reduce((s, l) => s + l.houseAmount, 0) * 100) / 100;
+
   const settleAmountUsd = settleTarget === "all" ? data.payableTotalUsd : settleTarget ? settleTarget.gabrielAmount : 0;
+  const settleHouseUsd = settleTarget === "all" ? payableHouseUsd : settleTarget ? settleTarget.houseAmount : 0;
   const bufferNum = Number(bufferPct) || 0;
   const previewEffectiveRate = data.previewRate ? data.previewRate.usdToTarget * (1 + bufferNum / 100) : null;
   const previewTotalCop = previewEffectiveRate ? settleAmountUsd * previewEffectiveRate : null;
+  const previewHouseCop = previewEffectiveRate ? settleHouseUsd * previewEffectiveRate : null;
 
   const split = previewSplit(extraDraft);
 
@@ -365,6 +374,11 @@ export function CommissionsBoard() {
         <div className="flex-1 min-w-[14rem] rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
           <div className="text-xs text-blue-700 dark:text-blue-400">{t("comm.owedToGabriel")}</div>
           <div className="text-2xl font-semibold">{format(data.payableTotalUsd, "USD")}</div>
+        </div>
+        <div className="flex-1 min-w-[14rem] rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+          <div className="text-xs text-emerald-700 dark:text-emerald-400">{t("comm.owedToHouse")}</div>
+          <div className="text-2xl font-semibold">{format(payableHouseUsd, "USD")}</div>
+          <div className="mt-0.5 text-[11px] text-black/40 dark:text-white/40">{t("comm.owedToHouseHint")}</div>
         </div>
         <div className="flex-1 min-w-[14rem] rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
           <div className="text-xs text-amber-700 dark:text-amber-400">{t("comm.awaitingApproval")}</div>
@@ -657,6 +671,16 @@ export function CommissionsBoard() {
                     </button>
                   </span>
                 )}
+                {data.viewerIsOwner && editMode && (
+                  <button
+                    onClick={() => void decide(l, false, false)}
+                    disabled={busyId === l.id}
+                    title={t("comm.unapproveHelp")}
+                    className="rounded-md border border-amber-500/40 px-2 py-1 text-xs text-amber-600 dark:text-amber-400 disabled:opacity-40"
+                  >
+                    {busyId === l.id ? t("comm.unlocking") : t("comm.unlock")}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -775,6 +799,16 @@ export function CommissionsBoard() {
               <div className="flex justify-between border-t border-black/10 dark:border-white/10 pt-1 font-semibold">
                 <span>{t("comm.totalCop")}</span>
                 <span className="tabular-nums">{previewTotalCop !== null ? cop(previewTotalCop) : "—"}</span>
+              </div>
+              {/* The cash direction Seni actually counts on-site: Gabriel
+                  collected from the guest, so the house's share is what he
+                  hands over (2026-08-19, Seni's ask). Same effective rate as
+                  Gabriel's line — one rate for the whole handoff. */}
+              <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                <span>{t("comm.owedToHouse")}</span>
+                <span className="tabular-nums font-semibold">
+                  {usd(settleHouseUsd)}{previewHouseCop !== null ? ` ≈ ${cop(previewHouseCop)}` : ""}
+                </span>
               </div>
             </div>
 
