@@ -450,6 +450,29 @@ export function CommissionsBoard() {
     return r === null ? null : l.houseAmount * r;
   };
 
+  // Headline cards ("Owed to Gabriel", "Gabriel owes the house", "Awaiting
+  // approval") need to reflect a guest-payout override too (2026-08-19,
+  // Seni: "after I edit total guest payout... the numbers need to be revised
+  // as well"). format()'s USD→COP conversion uses ONE blended live rate for
+  // the whole app, which can't know about a per-booking override or locked
+  // rate — so in COP view these totals are summed directly via
+  // gabrielCopFor/houseCopFor (the same override/locked-rate-aware math each
+  // line already renders), not derived by converting a single USD total. USD
+  // view is untouched — the override corrects the COP total Gabriel
+  // collected, not the OwnerRez USD booking amount.
+  const payableGabrielCop = approved.reduce((s, l) => {
+    const c = gabrielCopFor(l);
+    return c === null ? s : s + c;
+  }, 0);
+  const payableHouseCop = approved.reduce((s, l) => {
+    const c = houseCopFor(l);
+    return c === null ? s : s + c;
+  }, 0);
+  const pendingGabrielCop = pending.reduce((s, l) => {
+    const c = gabrielCopFor(l);
+    return c === null ? s : s + c;
+  }, 0);
+
   const settleAmountUsd = settleTarget === "all" ? data.payableTotalUsd : settleTarget ? settleTarget.gabrielAmount : 0;
   const settleHouseUsd = settleTarget === "all" ? payableHouseUsd : settleTarget ? settleTarget.houseAmount : 0;
   const bufferNum = Number(bufferPct) || 0;
@@ -501,16 +524,22 @@ export function CommissionsBoard() {
       <div className="flex flex-wrap gap-3">
         <div className="flex-1 min-w-[14rem] rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
           <div className="text-xs text-blue-700 dark:text-blue-400">{t("comm.owedToGabriel")}</div>
-          <div className="text-2xl font-semibold">{format(data.payableTotalUsd, "USD")}</div>
+          <div className="text-2xl font-semibold">
+            {displayCurrency === "COP" ? cop(payableGabrielCop) : format(data.payableTotalUsd, "USD")}
+          </div>
         </div>
         <div className="flex-1 min-w-[14rem] rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
           <div className="text-xs text-emerald-700 dark:text-emerald-400">{t("comm.owedToHouse")}</div>
-          <div className="text-2xl font-semibold">{format(payableHouseUsd, "USD")}</div>
+          <div className="text-2xl font-semibold">
+            {displayCurrency === "COP" ? cop(payableHouseCop) : format(payableHouseUsd, "USD")}
+          </div>
           <div className="mt-0.5 text-[11px] text-black/40 dark:text-white/40">{t("comm.owedToHouseHint")}</div>
         </div>
         <div className="flex-1 min-w-[14rem] rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
           <div className="text-xs text-amber-700 dark:text-amber-400">{t("comm.awaitingApproval")}</div>
-          <div className="text-2xl font-semibold">{format(data.pendingTotalUsd, "USD")}</div>
+          <div className="text-2xl font-semibold">
+            {displayCurrency === "COP" ? cop(pendingGabrielCop) : format(data.pendingTotalUsd, "USD")}
+          </div>
         </div>
       </div>
 
