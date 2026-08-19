@@ -467,6 +467,11 @@ const STRINGS: Dict = {
     Spanish: "Gabriel le debe a la casa",
     Portuguese: "Gabriel deve à casa",
   },
+  "comm.lockedRate": {
+    English: "Locked rate (booking day)",
+    Spanish: "Tasa bloqueada (día de la reserva)",
+    Portuguese: "Taxa travada (dia da reserva)",
+  },
   "comm.owedToHouseHint": {
     English: "House share of approved, unsettled lines — the cash to collect from Gabriel",
     Spanish: "Parte de la casa de líneas aprobadas sin liquidar — el efectivo a cobrar a Gabriel",

@@ -87,6 +87,10 @@ type DirectLine = {
   departure: string | null;
   totalAmount: number;
   commissionPct: number;
+  /** USD→COP rate locked on detection day (see lib/directBookingCommissions
+   * — 2026-08-19, Seni's ask). Null only while a pre-migration row awaits
+   * its one-time backfill. */
+  fxRate: number | null;
   houseAmount: number;
   gabrielAmount: number;
   approved: boolean;
@@ -148,6 +152,7 @@ function toDirectLine(
     departure: b.departure || null,
     totalAmount: split.totalAmount,
     commissionPct: d.commissionPct,
+    fxRate: d.fxRate,
     houseAmount: split.houseAmount,
     gabrielAmount: split.gabrielAmount,
     approved: d.approved,
@@ -461,16 +466,33 @@ export async function POST(req: NextRequest) {
     }
 
     const fx = await getUsdToRate("COP");
-    const effectiveRate = Math.round(fx.usdToTarget * (1 + fxBufferPct / 100) * 10000) / 10000;
-    const totalCop = Math.round(totalUsd * effectiveRate);
+    // Per-line rates (2026-08-19, Seni's ask): a Gabriel direct booking uses
+    // the USD→COP rate LOCKED on the day it was detected, never the live
+    // rate — extras (no locked rate concept) still convert at today's live
+    // rate. The buffer applies uniformly on top. effective_rate stored below
+    // is therefore the BLENDED rate (totalCop / totalUsd), which is exactly
+    // what "rate actually used for this payout" should mean now.
+    const rateFor = (locked: number | null | undefined) => locked ?? fx.usdToTarget;
+    const copBeforeBuffer =
+      payableExtras.reduce((s, e) => s + e.gabrielShare * fx.usdToTarget, 0) +
+      payableDirectWithSplit.reduce((s, x) => s + x.split.gabrielAmount * rateFor(x.commission.fxRate), 0);
+    const totalCop = Math.round(copBeforeBuffer * (1 + fxBufferPct / 100));
+    const effectiveRate = totalUsd > 0 ? Math.round((totalCop / totalUsd) * 10000) / 10000 : 0;
 
     const lineItemRefs: SettlementLineRef[] = [
-      ...payableExtras.map((e) => ({ type: "extra" as const, id: e.id, bookingId: e.bookingId, amountUsd: e.gabrielShare })),
+      ...payableExtras.map((e) => ({
+        type: "extra" as const,
+        id: e.id,
+        bookingId: e.bookingId,
+        amountUsd: e.gabrielShare,
+        fxRate: fx.usdToTarget,
+      })),
       ...payableDirectWithSplit.map((x) => ({
         type: "direct_booking" as const,
         id: x.commission.id,
         bookingId: x.commission.bookingId,
         amountUsd: x.split.gabrielAmount,
+        fxRate: rateFor(x.commission.fxRate),
       })),
     ];
 

@@ -50,6 +50,9 @@ type DirectLine = {
   departure: string | null;
   totalAmount: number;
   commissionPct: number;
+  /** USD→COP rate locked on the day this booking was detected — this
+   * line's COP math never floats with the market (2026-08-19, Seni). */
+  fxRate: number | null;
   houseAmount: number;
   gabrielAmount: number;
   approved: boolean;
@@ -165,7 +168,7 @@ function previewSplit(d: ExtraDraft): { houseShare: number; gabrielShare: number
 
 export function CommissionsBoard() {
   const t = useT();
-  const { format } = useCurrency();
+  const { format, displayCurrency } = useCurrency();
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -355,12 +358,47 @@ export function CommissionsBoard() {
   // same lines as payableTotalUsd, never stored.
   const payableHouseUsd = Math.round(approved.reduce((s, l) => s + l.houseAmount, 0) * 100) / 100;
 
+  // Per-line COP display/preview (2026-08-19, Seni's ask): a direct booking
+  // converts at its LOCKED detection-day rate; extras at today's live rate.
+  // Mirrors the server's settlement math exactly (see route.ts POST).
+  const liveRate = data.previewRate?.usdToTarget ?? null;
+  const lineRate = (l: Line): number | null => (l.type === "direct_booking" ? (l.fxRate ?? liveRate) : liveRate);
+  /** One line's amount, respecting the USD/COP toggle AND per-line locked rates. */
+  const money = (l: Line, amount: number): string => {
+    const r = lineRate(l);
+    if (displayCurrency === "COP" && r !== null) return cop(amount * r);
+    return format(amount, "USD");
+  };
+
   const settleAmountUsd = settleTarget === "all" ? data.payableTotalUsd : settleTarget ? settleTarget.gabrielAmount : 0;
   const settleHouseUsd = settleTarget === "all" ? payableHouseUsd : settleTarget ? settleTarget.houseAmount : 0;
   const bufferNum = Number(bufferPct) || 0;
-  const previewEffectiveRate = data.previewRate ? data.previewRate.usdToTarget * (1 + bufferNum / 100) : null;
-  const previewTotalCop = previewEffectiveRate ? settleAmountUsd * previewEffectiveRate : null;
-  const previewHouseCop = previewEffectiveRate ? settleHouseUsd * previewEffectiveRate : null;
+  // Pre-buffer COP using each line's own rate (locked for direct bookings).
+  const settleCopBase =
+    settleTarget === "all"
+      ? approved.reduce((s, l) => {
+          const r = lineRate(l);
+          return r === null ? s : s + l.gabrielAmount * r;
+        }, 0)
+      : settleTarget && lineRate(settleTarget) !== null
+        ? settleTarget.gabrielAmount * (lineRate(settleTarget) as number)
+        : null;
+  const settleHouseCopBase =
+    settleTarget === "all"
+      ? approved.reduce((s, l) => {
+          const r = lineRate(l);
+          return r === null ? s : s + l.houseAmount * r;
+        }, 0)
+      : settleTarget && lineRate(settleTarget) !== null
+        ? settleTarget.houseAmount * (lineRate(settleTarget) as number)
+        : null;
+  const previewTotalCop = settleCopBase !== null && typeof settleCopBase === "number" ? settleCopBase * (1 + bufferNum / 100) : null;
+  const previewHouseCop = settleHouseCopBase !== null && typeof settleHouseCopBase === "number" ? settleHouseCopBase * (1 + bufferNum / 100) : null;
+  const previewEffectiveRate =
+    previewTotalCop !== null && settleAmountUsd > 0 ? previewTotalCop / settleAmountUsd : null;
+  // Single locked direct-booking line → the modal shows ITS locked rate.
+  const settleLockedRate =
+    settleTarget && settleTarget !== "all" && settleTarget.type === "direct_booking" ? settleTarget.fxRate : null;
 
   const split = previewSplit(extraDraft);
 
@@ -539,9 +577,35 @@ export function CommissionsBoard() {
                   {l.type === "extra" ? t("comm.extraType") : t("comm.directBooking")}
                 </span>
                 <span>{lineTitle(l, t)}</span>
+                {l.type === "direct_booking" && l.fxRate !== null && (
+                  <span className="text-[10px] text-black/40 dark:text-white/40" title={t("comm.lockedRate")}>
+                    🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
+                  </span>
+                )}
                 <span className="ml-auto tabular-nums text-xs text-black/50 dark:text-white/50">
-                  {t("comm.house")} {format(l.houseAmount, "USD")} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {format(l.gabrielAmount, "USD")}</strong>
+                  {t("comm.house")} {money(l, l.houseAmount)} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {money(l, l.gabrielAmount)}</strong>
                 </span>
+                {data.viewerIsOwner && editMode && l.type === "direct_booking" && (
+                  <span className="flex items-center gap-1 text-xs">
+                    <label className="text-black/50 dark:text-white/50">{t("comm.commissionPctLabel")}</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      max="100"
+                      value={pctDrafts[l.id] ?? String(l.commissionPct)}
+                      onChange={(e) => setPctDrafts((d) => ({ ...d, [l.id]: e.target.value }))}
+                      className="w-16 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-0.5 text-right"
+                    />
+                    <button
+                      onClick={() => void savePct(l)}
+                      disabled={busyId === l.id || pctDrafts[l.id] === undefined || pctDrafts[l.id] === String(l.commissionPct)}
+                      className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 disabled:opacity-40"
+                    >
+                      {busyId === l.id ? t("common.saving") : t("common.save")}
+                    </button>
+                  </span>
+                )}
                 {data.viewerIsOwner && (
                   <span className="flex flex-wrap gap-1.5">
                     <button
@@ -590,7 +654,7 @@ export function CommissionsBoard() {
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">{t("comm.approvedLocked")}</h2>
-          {data.viewerIsOwner && approved.length > 0 && (
+          {data.viewerIsOwner && (approved.length > 0 || pending.length > 0) && (
             <span className="flex gap-2">
               <button
                 onClick={() => setEditMode((v) => !v)}
@@ -603,12 +667,14 @@ export function CommissionsBoard() {
               >
                 {editMode ? t("comm.doneEditing") : t("common.edit")}
               </button>
-              <button
-                onClick={() => setSettleTarget("all")}
-                className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
-              >
-                {t("comm.settlePayout")}
-              </button>
+              {approved.length > 0 && (
+                <button
+                  onClick={() => setSettleTarget("all")}
+                  className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
+                >
+                  {t("comm.settlePayout")}
+                </button>
+              )}
             </span>
           )}
         </div>
@@ -625,8 +691,13 @@ export function CommissionsBoard() {
                   {l.type === "extra" ? t("comm.extraType") : t("comm.directBooking")}
                 </span>
                 <span>{lineTitle(l, t)}</span>
+                {l.type === "direct_booking" && l.fxRate !== null && (
+                  <span className="text-[10px] text-black/40 dark:text-white/40" title={t("comm.lockedRate")}>
+                    🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
+                  </span>
+                )}
                 <span className="ml-auto tabular-nums text-xs">
-                  {t("comm.house")} {format(l.houseAmount, "USD")} · <strong>{t("comm.gabriel")} {format(l.gabrielAmount, "USD")}</strong>
+                  {t("comm.house")} {money(l, l.houseAmount)} · <strong>{t("comm.gabriel")} {money(l, l.gabrielAmount)}</strong>
                 </span>
                 <span className="text-xs text-blue-600 dark:text-blue-400">🔒</span>
                 {data.viewerIsOwner && (
@@ -728,7 +799,7 @@ export function CommissionsBoard() {
                         <li key={l.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
                           <span className="text-black/60 dark:text-white/60">{lineTitle(l, t)}</span>
                           <span className="tabular-nums text-black/50 dark:text-white/50">
-                            {t("comm.gabriel")} {format(l.gabrielAmount, "USD")}
+                            {t("comm.gabriel")} {money(l, l.gabrielAmount)}
                           </span>
                           {data.viewerIsOwner && (
                             <button
@@ -773,9 +844,15 @@ export function CommissionsBoard() {
                 <span className="font-medium tabular-nums">{usd(settleAmountUsd)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-black/50 dark:text-white/50">{t("comm.liveRate")}</span>
+                <span className="text-black/50 dark:text-white/50">
+                  {settleLockedRate !== null ? `🔒 ${t("comm.lockedRate")}` : t("comm.liveRate")}
+                </span>
                 <span className="tabular-nums">
-                  {data.previewRate ? `1 USD ≈ ${data.previewRate.usdToTarget.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP` : "—"}
+                  {settleLockedRate !== null
+                    ? `1 USD = ${settleLockedRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP`
+                    : data.previewRate
+                      ? `1 USD ≈ ${data.previewRate.usdToTarget.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP`
+                      : "—"}
                 </span>
               </div>
               <label className="flex items-center justify-between gap-2">

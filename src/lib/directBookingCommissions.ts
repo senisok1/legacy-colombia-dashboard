@@ -1,4 +1,5 @@
 import { query, queryOne } from "./db";
+import { getUsdToRate } from "./exchangeRate";
 import type { Booking } from "./types";
 
 // Gabriel's 10% direct-booking commission (2026-08-19, Seni's ask). Gabriel
@@ -28,6 +29,12 @@ export type DirectBookingCommission = {
   id: string;
   bookingId: number;
   commissionPct: number;
+  /** USD→COP rate LOCKED on the day this booking was first detected
+   * (2026-08-19, Seni's ask) — display and settlement for this line use
+   * this, never the live rate. Null only for pre-migration rows awaiting
+   * their one-time backfill on next sync. */
+  fxRate: number | null;
+  fxLockedAt: string | null;
   approved: boolean;
   approvedByName: string | null;
   approvedAt: string | null;
@@ -42,6 +49,8 @@ type Row = {
   id: string;
   booking_id: string;
   commission_pct: string;
+  fx_rate: string | null;
+  fx_locked_at: string | Date | null;
   approved: boolean;
   approved_by_name: string | null;
   approved_at: string | Date | null;
@@ -52,7 +61,7 @@ type Row = {
   created_at: string | Date;
 };
 
-const COLUMNS = `id, booking_id, commission_pct, approved, approved_by_name, approved_at,
+const COLUMNS = `id, booking_id, commission_pct, fx_rate, fx_locked_at, approved, approved_by_name, approved_at,
   declined, declined_reason, settled_at, settlement_id, created_at`;
 
 function iso(v: string | Date | null): string | null {
@@ -64,6 +73,8 @@ function fromRow(r: Row): DirectBookingCommission {
     id: r.id,
     bookingId: Number(r.booking_id),
     commissionPct: Number(r.commission_pct),
+    fxRate: r.fx_rate === null ? null : Number(r.fx_rate),
+    fxLockedAt: iso(r.fx_locked_at),
     approved: r.approved,
     approvedByName: r.approved_by_name,
     approvedAt: iso(r.approved_at),
@@ -88,12 +99,36 @@ export async function syncDirectBookingCommissions(input: {
     .filter((b) => !b.isBlock && b.status !== "Cancelled" && isGabrielDirectBooking(b.source))
     .map((b) => b.id);
   if (candidateIds.length === 0) return;
+
+  // FX LOCK (2026-08-19, Seni's ask): capture the USD→COP rate ONCE, at the
+  // moment the booking is first detected, and never touch it again — this
+  // row's COP figures must not drift with the market between detection and
+  // the day Seni actually counts cash. A rate-fetch failure degrades to
+  // inserting with NULL (backfilled by the next successful sync below)
+  // rather than blocking detection entirely.
+  const rate = await getUsdToRate("COP")
+    .then((r) => r.usdToTarget)
+    .catch(() => null);
+
   await query(
-    `insert into direct_booking_commissions (organization_id, booking_id)
-     select $1, unnest($2::bigint[])
+    `insert into direct_booking_commissions (organization_id, booking_id, fx_rate, fx_locked_at)
+     select $1, unnest($2::bigint[]), $3, case when $3::numeric is null then null else now() end
      on conflict (organization_id, booking_id) do nothing`,
-    [input.organizationId, candidateIds]
+    [input.organizationId, candidateIds, rate]
   );
+
+  // One-time backfill for rows created before the fx_rate column existed
+  // (or whose insert-time rate fetch failed): lock them at today's rate —
+  // the true detection-day rate is unrecoverable, and a rate locked late is
+  // still better than one that keeps floating forever.
+  if (rate !== null) {
+    await query(
+      `update direct_booking_commissions
+          set fx_rate = $2, fx_locked_at = now()
+        where organization_id = $1 and fx_rate is null`,
+      [input.organizationId, rate]
+    );
+  }
 }
 
 /** Every tracked direct-booking commission for the org, most recent first. */

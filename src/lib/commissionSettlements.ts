@@ -16,6 +16,10 @@ export type SettlementLineRef = {
   id: string;
   bookingId: number;
   amountUsd: number;
+  /** The USD→COP rate this line converted at (2026-08-19): a direct
+   * booking's day-of-detection locked rate, or the live rate for extras.
+   * Optional — refs recorded before this field simply don't have it. */
+  fxRate?: number;
 };
 
 export type CommissionSettlement = {
