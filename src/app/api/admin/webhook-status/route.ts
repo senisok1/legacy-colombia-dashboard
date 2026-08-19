@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { config } from "@/lib/config";
+import { getBookings, getGuests } from "@/lib/ownerrez";
+import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
+import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
 
 // ADMIN_SECRET-gated diagnostic: asks OwnerRez's own API which webhook
 // subscriptions exist for this OAuth connection (GET /v2/webhooksubscriptions
@@ -62,6 +65,54 @@ export async function GET(req: NextRequest) {
       created[type] = { status: res.status, body: await res.json().catch(() => null) };
     }
     return NextResponse.json({ ok: true, deleted, created });
+  }
+
+  // ?find_guest=<name substring> — scans every property GROUP's bookings
+  // (2026-08-19, "I don't see the new booking from Shlomo Nehama") for a
+  // guest whose resolved name contains the given substring, case-insensitive.
+  // Reuses the SAME getBookings()/resolveGuestName() every tab already calls
+  // — so a match here is proof the booking really is reachable through the
+  // normal data path, and which property group it lives under. OwnerRez has
+  // no bookings-level name search (and /v2/guests?q= doesn't search by name
+  // either — see memory), so this is the only way to answer "where is this
+  // guest's booking" without paging through the OwnerRez UI by hand.
+  const findGuest = req.nextUrl.searchParams.get("find_guest");
+  if (findGuest) {
+    const needle = findGuest.toLowerCase();
+    const results: Record<string, unknown>[] = [];
+    const errors: Record<string, string> = {};
+    for (const group of PROPERTY_GROUPS) {
+      try {
+        const [bookings, guests] = await Promise.all([
+          getBookings(undefined, group.id),
+          getGuests(undefined, group.id).catch(() => []),
+        ]);
+        const guestsById = buildGuestsById(guests);
+        for (const b of bookings) {
+          const name = resolveGuestName(b, guestsById) || b.guestName || "";
+          if (name.toLowerCase().includes(needle)) {
+            results.push({
+              propertyGroup: group.id,
+              propertyGroupLabel: group.label,
+              bookingId: b.id,
+              propertyName: b.propertyName,
+              guestName: name,
+              status: b.status,
+              isBlock: b.isBlock,
+              arrival: b.arrival,
+              departure: b.departure,
+              source: b.source,
+              totalAmount: b.totalAmount,
+              createdAt: b.createdAt,
+              updatedAt: b.updatedAt,
+            });
+          }
+        }
+      } catch (err) {
+        errors[group.id] = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return NextResponse.json({ ok: true, needle, matches: results, errors });
   }
 
   // ?message_id=X — fetch the raw OwnerRez message entity, since the
