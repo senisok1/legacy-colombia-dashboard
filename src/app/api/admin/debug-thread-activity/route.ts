@@ -33,6 +33,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "DATABASE_URL isn't set on this deployment." }, { status: 400 });
   }
 
+  // Escalation-queue dump (2026-08-19, same Edgar hunt): an inbound WhatsApp
+  // from a number with an ALREADY-pending escalation deliberately doesn't
+  // re-ping Seni or log activity (see webhook's handlePublicWhatsAppInquiry
+  // early-return) — so a stuck pending row silently swallows every follow-up
+  // from that person. This lists recent escalations to spot exactly that.
+  if (req.nextUrl.searchParams.get("escalations") === "1") {
+    const rows = await query<Record<string, unknown>>(
+      `select id, source, status, visitor_name, visitor_phone, left(question, 160) as question,
+              created_at, answered_at
+       from chat_escalations
+       order by created_at desc
+       limit 25`
+    );
+    return NextResponse.json({ ok: true, escalations: rows });
+  }
+
   if (q && !threadId) {
     const rows = await query<Record<string, unknown>>(
       `select l.occurred_at, o.slug as org_slug, a.key as agent_key, l.task, l.trigger,
