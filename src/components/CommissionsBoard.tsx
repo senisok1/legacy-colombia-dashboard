@@ -171,6 +171,12 @@ export function CommissionsBoard() {
   const [showExtraForm, setShowExtraForm] = useState(false);
   const [extraDraft, setExtraDraft] = useState<ExtraDraft>(EMPTY_EXTRA_DRAFT);
   const [savingExtra, setSavingExtra] = useState(false);
+  // Owner-only Edit mode for the approved list (2026-08-19, Seni's ask: an
+  // Edit control next to "Settle payout"). Purely a UI reveal — the real
+  // gates are server-side (updateBookingExtra's owner-may-edit-unsettled
+  // WHERE clause, and PUT's CEO check for commissionPct).
+  const [editMode, setEditMode] = useState(false);
+  const [pctDrafts, setPctDrafts] = useState<Record<string, string>>({});
   const hasDataRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -200,6 +206,32 @@ export function CommissionsBoard() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("comm.couldntSave"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function savePct(l: DirectLine) {
+    const raw = pctDrafts[l.id];
+    const pct = Number(raw);
+    if (!Number.isFinite(pct)) return;
+    setBusyId(l.id);
+    try {
+      const res = await fetch("/api/management/commissions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: l.type, id: l.id, commissionPct: pct }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setPctDrafts((d) => {
+        const next = { ...d };
+        delete next[l.id];
+        return next;
+      });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
@@ -521,12 +553,25 @@ export function CommissionsBoard() {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold">{t("comm.approvedLocked")}</h2>
           {data.viewerIsOwner && approved.length > 0 && (
-            <button
-              onClick={() => setSettleTarget("all")}
-              className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
-            >
-              {t("comm.settlePayout")}
-            </button>
+            <span className="flex gap-2">
+              <button
+                onClick={() => setEditMode((v) => !v)}
+                title={t("comm.editApprovedHelp")}
+                className={`rounded-md border px-3 py-1.5 text-sm ${
+                  editMode
+                    ? "border-[var(--accent)] bg-[var(--accent)]/10"
+                    : "border-black/15 dark:border-white/15"
+                }`}
+              >
+                {editMode ? t("comm.doneEditing") : t("common.edit")}
+              </button>
+              <button
+                onClick={() => setSettleTarget("all")}
+                className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white"
+              >
+                {t("comm.settlePayout")}
+              </button>
+            </span>
           )}
         </div>
         {approved.length === 0 ? (
@@ -554,6 +599,39 @@ export function CommissionsBoard() {
                   >
                     {t("comm.markSettled")}
                   </button>
+                )}
+                {data.viewerIsOwner && editMode && l.type === "extra" && (
+                  <button
+                    onClick={() => {
+                      setExtraDraft(draftFromLine(l));
+                      setShowExtraForm(true);
+                      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                    className="text-xs underline"
+                  >
+                    {t("common.edit")}
+                  </button>
+                )}
+                {data.viewerIsOwner && editMode && l.type === "direct_booking" && (
+                  <span className="flex items-center gap-1 text-xs">
+                    <label className="text-black/50 dark:text-white/50">{t("comm.commissionPctLabel")}</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      max="100"
+                      value={pctDrafts[l.id] ?? String(l.commissionPct)}
+                      onChange={(e) => setPctDrafts((d) => ({ ...d, [l.id]: e.target.value }))}
+                      className="w-16 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-0.5 text-right"
+                    />
+                    <button
+                      onClick={() => void savePct(l)}
+                      disabled={busyId === l.id || pctDrafts[l.id] === undefined || pctDrafts[l.id] === String(l.commissionPct)}
+                      className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 disabled:opacity-40"
+                    >
+                      {busyId === l.id ? t("common.saving") : t("common.save")}
+                    </button>
+                  </span>
                 )}
               </li>
             ))}

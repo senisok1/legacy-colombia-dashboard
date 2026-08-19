@@ -443,6 +443,13 @@ const STRINGS: Dict = {
   "comm.noPending": { English: "Nothing awaiting approval.", Spanish: "Nada en espera de aprobación.", Portuguese: "Nada aguardando aprovação." },
   "comm.noApproved": { English: "Nothing approved and unpaid right now.", Spanish: "Nada aprobado y sin pagar por ahora.", Portuguese: "Nada aprovado e não pago no momento." },
   "comm.settlePayout": { English: "Settle payout", Spanish: "Liquidar pago", Portuguese: "Liquidar pagamento" },
+  "comm.doneEditing": { English: "Done", Spanish: "Listo", Portuguese: "Concluído" },
+  "comm.editApprovedHelp": {
+    English: "Owner only — fix an approved entry before it's settled",
+    Spanish: "Solo el propietario — corregir una entrada aprobada antes de liquidarla",
+    Portuguese: "Somente o proprietário — corrigir uma entrada aprovada antes de liquidá-la",
+  },
+  "comm.commissionPctLabel": { English: "Commission %", Spanish: "% de comisión", Portuguese: "% de comissão" },
   "comm.settleTitle": { English: "Settle Gabriel's payout", Spanish: "Liquidar el pago de Gabriel", Portuguese: "Liquidar o pagamento de Gabriel" },
   "comm.settleHelp": {
     English: "Marks every approved, unpaid line above as paid. Record this once you've actually handed over the cash.",

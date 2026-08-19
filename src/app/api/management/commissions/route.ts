@@ -9,6 +9,7 @@ import {
   syncDirectBookingCommissions,
   listDirectBookingCommissions,
   setDirectBookingApproval,
+  setDirectBookingPct,
   computeSplit,
   type DirectBookingCommission,
 } from "@/lib/directBookingCommissions";
@@ -243,10 +244,46 @@ export async function PUT(req: NextRequest) {
   }
 
   const body = (await req.json().catch(() => null)) as
-    | { type?: "extra" | "direct_booking"; id?: string; approved?: boolean; declined?: boolean; declinedReason?: string }
+    | {
+        type?: "extra" | "direct_booking";
+        id?: string;
+        approved?: boolean;
+        declined?: boolean;
+        declinedReason?: string;
+        commissionPct?: unknown;
+      }
     | null;
   if (!body?.id || (body.type !== "extra" && body.type !== "direct_booking")) {
     return NextResponse.json({ error: "type and id are required." }, { status: 400 });
+  }
+
+  // Owner-only Edit mode (2026-08-19, Seni's ask: an Edit control next to
+  // "Settle payout"): a commissionPct in the body means "change this direct
+  // booking's %" rather than an approve/decline decision. Clamped 0–100 —
+  // the split is derived live from this %, so an absurd typo would directly
+  // misstate real money. Settled rows stay immutable (WHERE clause in
+  // setDirectBookingPct, not just this route).
+  if (body.commissionPct !== undefined) {
+    if (body.type !== "direct_booking") {
+      return NextResponse.json({ error: "commissionPct only applies to direct bookings." }, { status: 400 });
+    }
+    const pctRaw = Number(body.commissionPct);
+    if (!Number.isFinite(pctRaw)) {
+      return NextResponse.json({ error: "commissionPct must be a number." }, { status: 400 });
+    }
+    const commissionPct = Math.min(Math.max(Math.round(pctRaw * 100) / 100, 0), 100);
+    try {
+      const updated = await setDirectBookingPct({ organizationId: session.organizationId, id: body.id, commissionPct });
+      if (!updated) {
+        return NextResponse.json(
+          { error: "No such commission, or it's already been settled and can't be changed." },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({ ok: true });
+    } catch (err) {
+      return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
+    }
   }
 
   try {

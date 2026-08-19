@@ -140,6 +140,24 @@ export async function setDirectBookingApproval(input: {
   return row ? fromRow(row) : null;
 }
 
+/** Owner-only edit of the commission % (2026-08-19, the Commissions tab's
+ * Edit mode). Route-level CEO check is the authorization gate; this is the
+ * org-scoped, settlement-locked write — a settled row is part of a permanent
+ * payout snapshot and stays immutable. Pct is clamped at the route. */
+export async function setDirectBookingPct(input: {
+  organizationId: string;
+  id: string;
+  commissionPct: number;
+}): Promise<DirectBookingCommission | null> {
+  const row = await queryOne<Row>(
+    `update direct_booking_commissions set commission_pct = $3
+     where id = $2 and organization_id = $1 and settled_at is null
+     returning ${COLUMNS}`,
+    [input.organizationId, input.id, input.commissionPct]
+  );
+  return row ? fromRow(row) : null;
+}
+
 /** The 90/10 split for one commission row, computed live from the
  * booking's CURRENT totalAmount — never stored, see file header. Returns
  * null if the booking itself can no longer be found (e.g. very old/purged

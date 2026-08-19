@@ -186,18 +186,21 @@ export async function updateBookingExtra(input: {
   requesterIsOwner: boolean;
 }): Promise<BookingExtra | null> {
   // organization_id in the WHERE clause, not just the id: a uuid from one
-  // org must never be editable from another's session. approved = false and
-  // settled_at is null: once the owner has signed off (or it's been paid
-  // out), it's locked — this is the actual protection, not just a hidden
-  // button. created_by = $9 or $10: a non-owner may only edit their own
-  // entry, so one team member can't rewrite another's commission numbers.
+  // org must never be editable from another's session. Lock rules (loosened
+  // 2026-08-19, Seni's ask for an owner-only Edit on the Commissions tab's
+  // approved list): a NON-owner may only edit their OWN entry and only while
+  // it's still unapproved; the OWNER may edit any entry right up until it's
+  // settled — he's the approver, so "approved" isn't a lock against him,
+  // but a settled row is part of a permanent payout snapshot and stays
+  // immutable for everyone. This WHERE clause is the actual protection, not
+  // just a hidden button.
   const rows = await query<ExtraRow>(
     `update booking_extras
         set kind = $3, custom_label = $4, service_date = $5,
             guest_paid = $6, vendor_paid = $7, notes = $8,
             updated_by = $9, updated_at = now()
-      where organization_id = $1 and id = $2 and approved = false and settled_at is null
-        and (created_by = $9 or $10)
+      where organization_id = $1 and id = $2 and settled_at is null
+        and ($10 or (approved = false and created_by = $9))
       returning ${COLUMNS}`,
     [
       input.organizationId,
