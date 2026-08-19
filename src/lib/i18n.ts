@@ -497,7 +497,7 @@ const STRINGS: Dict = {
     Portuguese: "Somente o proprietário pode aprovar ou liquidar isso — você está visualizando.",
   },
   "comm.loading": { English: "Loading commissions…", Spanish: "Cargando comisiones…", Portuguese: "Carregando comissões…" },
-  "comm.logExtra": { English: "Log an extra", Spanish: "Registrar un extra", Portuguese: "Registrar um extra" },
+  "comm.logExtra": { English: "Log an extra service", Spanish: "Registrar un servicio extra", Portuguese: "Registrar um serviço extra" },
   "comm.editExtraLine": { English: "Edit extra", Spanish: "Editar extra", Portuguese: "Editar extra" },
   "comm.selectStay": { English: "Which stay?", Spanish: "¿Qué estadía?", Portuguese: "Qual estadia?" },
   "comm.chooseStay": { English: "Choose a stay…", Spanish: "Elige una estadía…", Portuguese: "Escolha uma estadia…" },
