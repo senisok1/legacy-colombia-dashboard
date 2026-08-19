@@ -35,6 +35,14 @@ export type DirectBookingCommission = {
    * their one-time backfill on next sync. */
   fxRate: number | null;
   fxLockedAt: string | null;
+  /** Owner-only manual override of the TOTAL guest payout in COP for this
+   * booking (2026-08-19, Seni's ask: "input and revise the total guest
+   * payout... in case the conversion is a little off"). Null means "use the
+   * derived figure" (booking.totalAmount × fxRate). When set, this number —
+   * not the derived one — is what gets split 90/10 for display and
+   * settlement, since Gabriel physically collects COP cash and the actual
+   * total he collected can differ slightly from a straight FX conversion. */
+  guestPayoutCopOverride: number | null;
   approved: boolean;
   approvedByName: string | null;
   approvedAt: string | null;
@@ -51,6 +59,7 @@ type Row = {
   commission_pct: string;
   fx_rate: string | null;
   fx_locked_at: string | Date | null;
+  guest_payout_cop_override: string | null;
   approved: boolean;
   approved_by_name: string | null;
   approved_at: string | Date | null;
@@ -61,8 +70,8 @@ type Row = {
   created_at: string | Date;
 };
 
-const COLUMNS = `id, booking_id, commission_pct, fx_rate, fx_locked_at, approved, approved_by_name, approved_at,
-  declined, declined_reason, settled_at, settlement_id, created_at`;
+const COLUMNS = `id, booking_id, commission_pct, fx_rate, fx_locked_at, guest_payout_cop_override, approved,
+  approved_by_name, approved_at, declined, declined_reason, settled_at, settlement_id, created_at`;
 
 function iso(v: string | Date | null): string | null {
   return v === null ? null : new Date(v).toISOString();
@@ -75,6 +84,7 @@ function fromRow(r: Row): DirectBookingCommission {
     commissionPct: Number(r.commission_pct),
     fxRate: r.fx_rate === null ? null : Number(r.fx_rate),
     fxLockedAt: iso(r.fx_locked_at),
+    guestPayoutCopOverride: r.guest_payout_cop_override === null ? null : Number(r.guest_payout_cop_override),
     approved: r.approved,
     approvedByName: r.approved_by_name,
     approvedAt: iso(r.approved_at),
@@ -207,6 +217,39 @@ export async function setDirectBookingPct(input: {
     [input.organizationId, input.id, input.commissionPct]
   );
   return row ? fromRow(row) : null;
+}
+
+/** Owner-only edit of the guest-payout COP override (2026-08-19, Seni's
+ * ask: "input and revise the total guest payout... in case the conversion is
+ * a little off"). null clears the override, reverting to the derived
+ * booking.totalAmount × locked fxRate figure. Settlement-locked, same as
+ * setDirectBookingPct — a settled row is a permanent snapshot. */
+export async function setGuestPayoutOverride(input: {
+  organizationId: string;
+  id: string;
+  guestPayoutCopOverride: number | null;
+}): Promise<DirectBookingCommission | null> {
+  const row = await queryOne<Row>(
+    `update direct_booking_commissions set guest_payout_cop_override = $3
+     where id = $2 and organization_id = $1 and settled_at is null
+     returning ${COLUMNS}`,
+    [input.organizationId, input.id, input.guestPayoutCopOverride]
+  );
+  return row ? fromRow(row) : null;
+}
+
+/** The house/Gabriel COP split when a guest-payout override is set — the
+ * override IS the total guest payout in COP, split by commissionPct.
+ * Returns null when there's no override (caller should fall back to
+ * computeSplit's USD amounts × the locked/live rate instead). */
+export function copSplitOverride(
+  commission: DirectBookingCommission
+): { totalCop: number; houseCop: number; gabrielCop: number } | null {
+  if (commission.guestPayoutCopOverride === null) return null;
+  const totalCop = Math.round(commission.guestPayoutCopOverride);
+  const gabrielCop = Math.round((totalCop * commission.commissionPct) / 100);
+  const houseCop = totalCop - gabrielCop;
+  return { totalCop, houseCop, gabrielCop };
 }
 
 /** The 90/10 split for one commission row, computed live from the

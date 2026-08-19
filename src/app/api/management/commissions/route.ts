@@ -16,8 +16,10 @@ import {
   listDirectBookingCommissions,
   setDirectBookingApproval,
   setDirectBookingPct,
+  setGuestPayoutOverride,
   unsettleDirectBooking,
   computeSplit,
+  copSplitOverride,
   type DirectBookingCommission,
 } from "@/lib/directBookingCommissions";
 import {
@@ -91,6 +93,10 @@ type DirectLine = {
    * — 2026-08-19, Seni's ask). Null only while a pre-migration row awaits
    * its one-time backfill. */
   fxRate: number | null;
+  /** Owner-only manual override of the total guest payout in COP
+   * (2026-08-19, Seni's ask) — null means "use the derived totalAmount ×
+   * fxRate figure". */
+  guestPayoutCopOverride: number | null;
   houseAmount: number;
   gabrielAmount: number;
   approved: boolean;
@@ -153,6 +159,7 @@ function toDirectLine(
     totalAmount: split.totalAmount,
     commissionPct: d.commissionPct,
     fxRate: d.fxRate,
+    guestPayoutCopOverride: d.guestPayoutCopOverride,
     houseAmount: split.houseAmount,
     gabrielAmount: split.gabrielAmount,
     approved: d.approved,
@@ -297,6 +304,7 @@ export async function PUT(req: NextRequest) {
         declined?: boolean;
         declinedReason?: string;
         commissionPct?: unknown;
+        guestPayoutCopOverride?: unknown;
         unsettle?: boolean;
       }
     | null;
@@ -343,6 +351,43 @@ export async function PUT(req: NextRequest) {
     const commissionPct = Math.min(Math.max(Math.round(pctRaw * 100) / 100, 0), 100);
     try {
       const updated = await setDirectBookingPct({ organizationId: session.organizationId, id: body.id, commissionPct });
+      if (!updated) {
+        return NextResponse.json(
+          { error: "No such commission, or it's already been settled and can't be changed." },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({ ok: true });
+    } catch (err) {
+      return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
+    }
+  }
+
+  // Owner-only guest-payout COP override (2026-08-19, Seni's ask: "input and
+  // revise the total guest payout... in case the conversion is a little
+  // off"). guestPayoutCopOverride === null explicitly clears the override
+  // (reverts to the derived figure) — undefined just means "not this kind of
+  // request", which is why the check is `!== undefined`, not truthiness.
+  if (body.guestPayoutCopOverride !== undefined) {
+    if (body.type !== "direct_booking") {
+      return NextResponse.json({ error: "guestPayoutCopOverride only applies to direct bookings." }, { status: 400 });
+    }
+    let guestPayoutCopOverride: number | null;
+    if (body.guestPayoutCopOverride === null) {
+      guestPayoutCopOverride = null;
+    } else {
+      const raw = Number(body.guestPayoutCopOverride);
+      if (!Number.isFinite(raw) || raw < 0) {
+        return NextResponse.json({ error: "guestPayoutCopOverride must be a non-negative number." }, { status: 400 });
+      }
+      guestPayoutCopOverride = Math.round(raw * 100) / 100;
+    }
+    try {
+      const updated = await setGuestPayoutOverride({
+        organizationId: session.organizationId,
+        id: body.id,
+        guestPayoutCopOverride,
+      });
       if (!updated) {
         return NextResponse.json(
           { error: "No such commission, or it's already been settled and can't be changed." },
@@ -473,9 +518,17 @@ export async function POST(req: NextRequest) {
     // is therefore the BLENDED rate (totalCop / totalUsd), which is exactly
     // what "rate actually used for this payout" should mean now.
     const rateFor = (locked: number | null | undefined) => locked ?? fx.usdToTarget;
+    // A guest-payout override (2026-08-19, Seni's ask) replaces the
+    // rate-derived COP figure for that one line entirely — it IS the real
+    // total Gabriel collected, corrected by hand — so it takes precedence
+    // over locked/live-rate math wherever it's set.
+    const copFor = (x: { commission: DirectBookingCommission; split: { gabrielAmount: number } }) => {
+      const override = copSplitOverride(x.commission);
+      return override ? override.gabrielCop : x.split.gabrielAmount * rateFor(x.commission.fxRate);
+    };
     const copBeforeBuffer =
       payableExtras.reduce((s, e) => s + e.gabrielShare * fx.usdToTarget, 0) +
-      payableDirectWithSplit.reduce((s, x) => s + x.split.gabrielAmount * rateFor(x.commission.fxRate), 0);
+      payableDirectWithSplit.reduce((s, x) => s + copFor(x), 0);
     const totalCop = Math.round(copBeforeBuffer * (1 + fxBufferPct / 100));
     const effectiveRate = totalUsd > 0 ? Math.round((totalCop / totalUsd) * 10000) / 10000 : 0;
 
@@ -492,7 +545,12 @@ export async function POST(req: NextRequest) {
         id: x.commission.id,
         bookingId: x.commission.bookingId,
         amountUsd: x.split.gabrielAmount,
-        fxRate: rateFor(x.commission.fxRate),
+        // If overridden, the "rate" is implied backward from the manually
+        // corrected COP total rather than the locked/live rate — still a
+        // useful number to have on the permanent record, just derived
+        // differently than usual.
+        fxRate:
+          x.split.gabrielAmount > 0 ? copFor(x) / x.split.gabrielAmount : rateFor(x.commission.fxRate),
       })),
     ];
 

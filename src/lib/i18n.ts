@@ -477,6 +477,21 @@ const STRINGS: Dict = {
     Spanish: "Parte de la casa de líneas aprobadas sin liquidar — el efectivo a cobrar a Gabriel",
     Portuguese: "Parte da casa das linhas aprovadas não liquidadas — o dinheiro a receber de Gabriel",
   },
+  "comm.guestPayoutCopLabel": {
+    English: "Guest payout (COP)",
+    Spanish: "Pago total del huésped (COP)",
+    Portuguese: "Pagamento total do hóspede (COP)",
+  },
+  "comm.guestPayoutCopHelp": {
+    English: "Owner only — override the calculated total if the real conversion Gabriel used was a little off",
+    Spanish: "Solo el propietario — anula el total calculado si la conversión real que usó Gabriel estuvo un poco desviada",
+    Portuguese: "Somente o proprietário — substitui o total calculado se a conversão real usada por Gabriel estava um pouco diferente",
+  },
+  "comm.guestPayoutOverridden": {
+    English: "Manually adjusted total",
+    Spanish: "Total ajustado manualmente",
+    Portuguese: "Total ajustado manualmente",
+  },
   "comm.settleTitle": { English: "Settle Gabriel's payout", Spanish: "Liquidar el pago de Gabriel", Portuguese: "Liquidar o pagamento de Gabriel" },
   "comm.settleHelp": {
     English: "Marks every approved, unpaid line above as paid. Record this once you've actually handed over the cash.",

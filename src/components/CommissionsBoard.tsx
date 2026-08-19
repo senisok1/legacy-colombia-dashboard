@@ -53,6 +53,10 @@ type DirectLine = {
   /** USD→COP rate locked on the day this booking was detected — this
    * line's COP math never floats with the market (2026-08-19, Seni). */
   fxRate: number | null;
+  /** Owner-only manual override of the total guest payout in COP
+   * (2026-08-19, Seni's ask: "in case the conversion is a little off") —
+   * null means "use the derived totalAmount × fxRate figure". */
+  guestPayoutCopOverride: number | null;
   houseAmount: number;
   gabrielAmount: number;
   approved: boolean;
@@ -106,6 +110,17 @@ function usd(n: number): string {
 
 function cop(n: number): string {
   return `${Math.round(n).toLocaleString("en-US")} COP`;
+}
+
+/** Mirrors lib/directBookingCommissions.ts's copSplitOverride — kept local
+ * since that file also imports the DB client and isn't safe to pull into a
+ * client component. Same math, same rounding. */
+function copSplitOverride(l: DirectLine): { totalCop: number; houseCop: number; gabrielCop: number } | null {
+  if (l.guestPayoutCopOverride === null) return null;
+  const totalCop = Math.round(l.guestPayoutCopOverride);
+  const gabrielCop = Math.round((totalCop * l.commissionPct) / 100);
+  const houseCop = totalCop - gabrielCop;
+  return { totalCop, houseCop, gabrielCop };
 }
 
 function when(iso: string | null): string {
@@ -185,6 +200,11 @@ export function CommissionsBoard() {
   // WHERE clause, and PUT's CEO check for commissionPct).
   const [editMode, setEditMode] = useState(false);
   const [pctDrafts, setPctDrafts] = useState<Record<string, string>>({});
+  // Guest-payout COP override drafts (2026-08-19, Seni's ask: "input and
+  // revise the total guest payout... in case the conversion is a little
+  // off"). Same shape/pattern as pctDrafts — empty string in the draft means
+  // "clear the override", sent to the API as null.
+  const [payoutDrafts, setPayoutDrafts] = useState<Record<string, string>>({});
   const hasDataRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -236,6 +256,40 @@ export function CommissionsBoard() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setPctDrafts((d) => {
+        const next = { ...d };
+        delete next[l.id];
+        return next;
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("comm.couldntSave"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function savePayoutOverride(l: DirectLine) {
+    const raw = payoutDrafts[l.id];
+    if (raw === undefined) return;
+    const trimmed = raw.trim();
+    let guestPayoutCopOverride: number | null;
+    if (trimmed === "") {
+      guestPayoutCopOverride = null;
+    } else {
+      const n = Number(trimmed.replace(/[,\s]/g, ""));
+      if (!Number.isFinite(n) || n < 0) return;
+      guestPayoutCopOverride = n;
+    }
+    setBusyId(l.id);
+    try {
+      const res = await fetch("/api/management/commissions", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: l.type, id: l.id, guestPayoutCopOverride }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setPayoutDrafts((d) => {
         const next = { ...d };
         delete next[l.id];
         return next;
@@ -363,42 +417,78 @@ export function CommissionsBoard() {
   // Mirrors the server's settlement math exactly (see route.ts POST).
   const liveRate = data.previewRate?.usdToTarget ?? null;
   const lineRate = (l: Line): number | null => (l.type === "direct_booking" ? (l.fxRate ?? liveRate) : liveRate);
-  /** One line's amount, respecting the USD/COP toggle AND per-line locked rates. */
-  const money = (l: Line, amount: number): string => {
+  /** One line's amount, respecting the USD/COP toggle AND per-line locked
+   * rates. `kind` lets a direct-booking line with a guest-payout override
+   * (2026-08-19, Seni's ask) show the manually corrected COP split instead
+   * of the rate-derived one — the override always wins over rate math. */
+  const money = (l: Line, amount: number, kind?: "house" | "gabriel"): string => {
+    if (l.type === "direct_booking" && kind && displayCurrency === "COP") {
+      const ov = copSplitOverride(l);
+      if (ov) return cop(kind === "house" ? ov.houseCop : ov.gabrielCop);
+    }
     const r = lineRate(l);
     if (displayCurrency === "COP" && r !== null) return cop(amount * r);
     return format(amount, "USD");
+  };
+  /** Same override-first precedence as money(), but always in COP — used by
+   * the settle-modal math below, which is COP regardless of the header
+   * toggle. */
+  const gabrielCopFor = (l: Line): number | null => {
+    if (l.type === "direct_booking") {
+      const ov = copSplitOverride(l);
+      if (ov) return ov.gabrielCop;
+    }
+    const r = lineRate(l);
+    return r === null ? null : l.gabrielAmount * r;
+  };
+  const houseCopFor = (l: Line): number | null => {
+    if (l.type === "direct_booking") {
+      const ov = copSplitOverride(l);
+      if (ov) return ov.houseCop;
+    }
+    const r = lineRate(l);
+    return r === null ? null : l.houseAmount * r;
   };
 
   const settleAmountUsd = settleTarget === "all" ? data.payableTotalUsd : settleTarget ? settleTarget.gabrielAmount : 0;
   const settleHouseUsd = settleTarget === "all" ? payableHouseUsd : settleTarget ? settleTarget.houseAmount : 0;
   const bufferNum = Number(bufferPct) || 0;
-  // Pre-buffer COP using each line's own rate (locked for direct bookings).
+  // Pre-buffer COP using each line's own rate (locked for direct bookings) —
+  // or its guest-payout override when one is set (2026-08-19, Seni's ask),
+  // via gabrielCopFor/houseCopFor above.
   const settleCopBase =
     settleTarget === "all"
       ? approved.reduce((s, l) => {
-          const r = lineRate(l);
-          return r === null ? s : s + l.gabrielAmount * r;
+          const c = gabrielCopFor(l);
+          return c === null ? s : s + c;
         }, 0)
-      : settleTarget && lineRate(settleTarget) !== null
-        ? settleTarget.gabrielAmount * (lineRate(settleTarget) as number)
+      : settleTarget
+        ? gabrielCopFor(settleTarget)
         : null;
   const settleHouseCopBase =
     settleTarget === "all"
       ? approved.reduce((s, l) => {
-          const r = lineRate(l);
-          return r === null ? s : s + l.houseAmount * r;
+          const c = houseCopFor(l);
+          return c === null ? s : s + c;
         }, 0)
-      : settleTarget && lineRate(settleTarget) !== null
-        ? settleTarget.houseAmount * (lineRate(settleTarget) as number)
+      : settleTarget
+        ? houseCopFor(settleTarget)
         : null;
   const previewTotalCop = settleCopBase !== null && typeof settleCopBase === "number" ? settleCopBase * (1 + bufferNum / 100) : null;
   const previewHouseCop = settleHouseCopBase !== null && typeof settleHouseCopBase === "number" ? settleHouseCopBase * (1 + bufferNum / 100) : null;
   const previewEffectiveRate =
     previewTotalCop !== null && settleAmountUsd > 0 ? previewTotalCop / settleAmountUsd : null;
-  // Single locked direct-booking line → the modal shows ITS locked rate.
+  // Single locked direct-booking line → the modal shows ITS locked rate,
+  // unless a guest-payout override is set, in which case there's no "rate"
+  // to show — the override IS the manually corrected total.
+  const settleOverride =
+    settleTarget && settleTarget !== "all" && settleTarget.type === "direct_booking"
+      ? copSplitOverride(settleTarget)
+      : null;
   const settleLockedRate =
-    settleTarget && settleTarget !== "all" && settleTarget.type === "direct_booking" ? settleTarget.fxRate : null;
+    settleTarget && settleTarget !== "all" && settleTarget.type === "direct_booking" && !settleOverride
+      ? settleTarget.fxRate
+      : null;
 
   const split = previewSplit(extraDraft);
 
@@ -582,8 +672,13 @@ export function CommissionsBoard() {
                     🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
                   </span>
                 )}
+                {l.type === "direct_booking" && l.guestPayoutCopOverride !== null && (
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400" title={t("comm.guestPayoutOverridden")}>
+                    ✏️ {cop(l.guestPayoutCopOverride)}
+                  </span>
+                )}
                 <span className="ml-auto tabular-nums text-xs text-black/50 dark:text-white/50">
-                  {t("comm.house")} {money(l, l.houseAmount)} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {money(l, l.gabrielAmount)}</strong>
+                  {t("comm.house")} {money(l, l.houseAmount, "house")} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {money(l, l.gabrielAmount, "gabriel")}</strong>
                 </span>
                 {data.viewerIsOwner && editMode && l.type === "direct_booking" && (
                   <span className="flex items-center gap-1 text-xs">
@@ -600,6 +695,34 @@ export function CommissionsBoard() {
                     <button
                       onClick={() => void savePct(l)}
                       disabled={busyId === l.id || pctDrafts[l.id] === undefined || pctDrafts[l.id] === String(l.commissionPct)}
+                      className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 disabled:opacity-40"
+                    >
+                      {busyId === l.id ? t("common.saving") : t("common.save")}
+                    </button>
+                  </span>
+                )}
+                {data.viewerIsOwner && editMode && l.type === "direct_booking" && (
+                  <span className="flex items-center gap-1 text-xs">
+                    <label className="text-black/50 dark:text-white/50" title={t("comm.guestPayoutCopHelp")}>
+                      {t("comm.guestPayoutCopLabel")}
+                    </label>
+                    <input
+                      type="number"
+                      step="1000"
+                      min="0"
+                      inputMode="decimal"
+                      placeholder={lineRate(l) !== null ? String(Math.round(l.totalAmount * (lineRate(l) as number))) : "—"}
+                      value={payoutDrafts[l.id] ?? (l.guestPayoutCopOverride !== null ? String(l.guestPayoutCopOverride) : "")}
+                      onChange={(e) => setPayoutDrafts((d) => ({ ...d, [l.id]: e.target.value }))}
+                      className="w-28 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-0.5 text-right"
+                    />
+                    <button
+                      onClick={() => void savePayoutOverride(l)}
+                      disabled={
+                        busyId === l.id ||
+                        payoutDrafts[l.id] === undefined ||
+                        payoutDrafts[l.id] === (l.guestPayoutCopOverride !== null ? String(l.guestPayoutCopOverride) : "")
+                      }
                       className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 disabled:opacity-40"
                     >
                       {busyId === l.id ? t("common.saving") : t("common.save")}
@@ -696,8 +819,13 @@ export function CommissionsBoard() {
                     🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
                   </span>
                 )}
+                {l.type === "direct_booking" && l.guestPayoutCopOverride !== null && (
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400" title={t("comm.guestPayoutOverridden")}>
+                    ✏️ {cop(l.guestPayoutCopOverride)}
+                  </span>
+                )}
                 <span className="ml-auto tabular-nums text-xs">
-                  {t("comm.house")} {money(l, l.houseAmount)} · <strong>{t("comm.gabriel")} {money(l, l.gabrielAmount)}</strong>
+                  {t("comm.house")} {money(l, l.houseAmount, "house")} · <strong>{t("comm.gabriel")} {money(l, l.gabrielAmount, "gabriel")}</strong>
                 </span>
                 <span className="text-xs text-blue-600 dark:text-blue-400">🔒</span>
                 {data.viewerIsOwner && (
@@ -736,6 +864,34 @@ export function CommissionsBoard() {
                     <button
                       onClick={() => void savePct(l)}
                       disabled={busyId === l.id || pctDrafts[l.id] === undefined || pctDrafts[l.id] === String(l.commissionPct)}
+                      className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 disabled:opacity-40"
+                    >
+                      {busyId === l.id ? t("common.saving") : t("common.save")}
+                    </button>
+                  </span>
+                )}
+                {data.viewerIsOwner && editMode && l.type === "direct_booking" && (
+                  <span className="flex items-center gap-1 text-xs">
+                    <label className="text-black/50 dark:text-white/50" title={t("comm.guestPayoutCopHelp")}>
+                      {t("comm.guestPayoutCopLabel")}
+                    </label>
+                    <input
+                      type="number"
+                      step="1000"
+                      min="0"
+                      inputMode="decimal"
+                      placeholder={lineRate(l) !== null ? String(Math.round(l.totalAmount * (lineRate(l) as number))) : "—"}
+                      value={payoutDrafts[l.id] ?? (l.guestPayoutCopOverride !== null ? String(l.guestPayoutCopOverride) : "")}
+                      onChange={(e) => setPayoutDrafts((d) => ({ ...d, [l.id]: e.target.value }))}
+                      className="w-28 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-0.5 text-right"
+                    />
+                    <button
+                      onClick={() => void savePayoutOverride(l)}
+                      disabled={
+                        busyId === l.id ||
+                        payoutDrafts[l.id] === undefined ||
+                        payoutDrafts[l.id] === (l.guestPayoutCopOverride !== null ? String(l.guestPayoutCopOverride) : "")
+                      }
                       className="rounded-md border border-black/15 dark:border-white/15 px-2 py-0.5 disabled:opacity-40"
                     >
                       {busyId === l.id ? t("common.saving") : t("common.save")}
@@ -799,7 +955,7 @@ export function CommissionsBoard() {
                         <li key={l.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
                           <span className="text-black/60 dark:text-white/60">{lineTitle(l, t)}</span>
                           <span className="tabular-nums text-black/50 dark:text-white/50">
-                            {t("comm.gabriel")} {money(l, l.gabrielAmount)}
+                            {t("comm.gabriel")} {money(l, l.gabrielAmount, "gabriel")}
                           </span>
                           {data.viewerIsOwner && (
                             <button
@@ -845,14 +1001,20 @@ export function CommissionsBoard() {
               </div>
               <div className="flex justify-between">
                 <span className="text-black/50 dark:text-white/50">
-                  {settleLockedRate !== null ? `🔒 ${t("comm.lockedRate")}` : t("comm.liveRate")}
+                  {settleOverride
+                    ? `✏️ ${t("comm.guestPayoutOverridden")}`
+                    : settleLockedRate !== null
+                      ? `🔒 ${t("comm.lockedRate")}`
+                      : t("comm.liveRate")}
                 </span>
                 <span className="tabular-nums">
-                  {settleLockedRate !== null
-                    ? `1 USD = ${settleLockedRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP`
-                    : data.previewRate
-                      ? `1 USD ≈ ${data.previewRate.usdToTarget.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP`
-                      : "—"}
+                  {settleOverride
+                    ? cop(settleOverride.totalCop)
+                    : settleLockedRate !== null
+                      ? `1 USD = ${settleLockedRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP`
+                      : data.previewRate
+                        ? `1 USD ≈ ${data.previewRate.usdToTarget.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP`
+                        : "—"}
                 </span>
               </div>
               <label className="flex items-center justify-between gap-2">
