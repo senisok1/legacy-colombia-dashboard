@@ -8,7 +8,7 @@ import {
 import { config } from "@/lib/config";
 import { draftGuestReply, type DraftedReply } from "@/lib/aiReply";
 import { detectLanguageAndTranslateToEnglish, translateText } from "@/lib/translate";
-import { wasCrmSentReply, alreadyNotifiedAdminReply } from "@/lib/adminReplyMarkers";
+import { wasCrmSentReply, alreadyNotifiedAdminReply, clearAdminReplyNotified } from "@/lib/adminReplyMarkers";
 import { getGlobalHostStyleExamples } from "@/lib/inbox";
 import { createPendingDraft, getPendingDraftByThreadId, linkWhatsAppMessageId } from "@/lib/pendingDrafts";
 import { logAiActivity } from "@/lib/aiActivity";
@@ -193,17 +193,47 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
         adminReplyEnglish = det.english.trim();
         translatedNote = ` [translated from ${det.language}]`;
       }
+      // Delivery honesty (2026-08-19, "Edgar's reply never reached Seni"):
+      // this used to swallow the free-text fallback's error entirely — and
+      // since alreadyNotifiedAdminReply marks BEFORE the send, a reply whose
+      // template throw + 131047 free-text failure both died here was then
+      // skipped by the cron forever. Now a total failure un-marks the dedupe
+      // key so the cron's next 1-minute pass retries it, and every outcome
+      // lands in the activity log instead of vanishing.
+      let fyiSent = false;
+      let fyiError: string | undefined;
       try {
         await sendAdminReplyNotificationTemplate({
           guestName,
           guestMessage: "(see OwnerRez thread)",
           adminReply: adminReplyEnglish.slice(0, 350),
         });
-      } catch {
-        await sendWhatsAppText(
-          `✅ An admin replied to ${guestName} via OwnerRez (thread #${threadId})${translatedNote}:\n\n"${adminReplyEnglish.slice(0, 300)}"`
-        ).catch(() => {});
+        fyiSent = true;
+      } catch (tmplErr) {
+        fyiError = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
+        try {
+          await sendWhatsAppText(
+            `✅ An admin replied to ${guestName} via OwnerRez (thread #${threadId})${translatedNote}:\n\n"${adminReplyEnglish.slice(0, 300)}"`
+          );
+          fyiSent = true;
+        } catch (textErr) {
+          fyiError = textErr instanceof Error ? textErr.message : String(textErr);
+        }
       }
+      if (!fyiSent) {
+        await clearAdminReplyNotified(body).catch(() => {});
+      }
+      await logAiActivity({
+        agentKey: "guest_experience",
+        agentDisplayName: "AI Guest Experience Manager",
+        task: "Notify admin reply (webhook)",
+        trigger: `Admin replied directly in OwnerRez on thread ${threadId} (${guestName})`,
+        actionTaken: fyiSent
+          ? "Sent FYI WhatsApp to Seni with English reading of the admin's reply"
+          : "FAILED to deliver the FYI WhatsApp — un-marked for the cron to retry within a minute",
+        result: fyiSent ? "notified" : "failed",
+        error: fyiSent ? undefined : fyiError,
+      }).catch(() => {});
       return;
     }
 

@@ -6,7 +6,7 @@ import { resolveGuestName, resolveGuestPhone, buildGuestsById } from "@/lib/gues
 import { draftGuestReply } from "@/lib/aiReply";
 import { translateText, detectLanguageAndTranslateToEnglish } from "@/lib/translate";
 import { sendWhatsAppText, sendGuestReplyApprovalTemplate, sendAdminReplyNotificationTemplate } from "@/lib/whatsapp";
-import { wasCrmSentReply, alreadyNotifiedAdminReply } from "@/lib/adminReplyMarkers";
+import { wasCrmSentReply, alreadyNotifiedAdminReply, clearAdminReplyNotified } from "@/lib/adminReplyMarkers";
 import {
   createPendingDraft,
   getLastSeenMessageId,
@@ -529,6 +529,15 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
             } catch (textErr) {
               adminFyiError = textErr instanceof Error ? textErr.message : String(textErr);
             }
+          }
+
+          // Retry instead of losing it (2026-08-19, "Edgar's reply never
+          // reached Seni"): alreadyNotifiedAdminReply marks BEFORE the send,
+          // so a total delivery failure must un-mark or this reply is
+          // skipped forever. Bounded by ADMIN_REPLY_MAX_AGE_MS above — a
+          // reply that keeps failing stops being retried after 6h.
+          if (!adminFyiSent) {
+            await clearAdminReplyNotified(hostBody, orgId).catch(() => {});
           }
 
           await logAiActivity(

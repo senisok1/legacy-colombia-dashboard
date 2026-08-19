@@ -1,4 +1,4 @@
-import { redisGet, redisSet } from "./redis";
+import { redisGet, redisSet, redisDel } from "./redis";
 import { getDefaultOrganizationId } from "./organizations";
 
 // Admin-reply visibility (2026-08-18, Seni's ask: "I need to be able to see
@@ -56,8 +56,13 @@ export async function wasCrmSentReply(body: string, organizationId?: string): Pr
 
 /** Set-and-check: returns true if this admin reply was already notified
  * (by either the webhook or the cron); otherwise marks it and returns false.
- * Marks BEFORE the send on purpose — an informational ping that fails is
- * dropped rather than retried, so it can never turn into a repeat-page loop. */
+ * Marks BEFORE the send on purpose so the webhook fast-path and the
+ * 1-minute cron can't double-page Seni for the same reply — but a sender
+ * whose EVERY delivery rung fails must then call clearAdminReplyNotified()
+ * below, or the reply is silently lost forever (found 2026-08-19: Edgar
+ * replied to a guest in OwnerRez, the webhook's template send threw, its
+ * free-text fallback died on 131047 with the error swallowed, and this
+ * marker — already set — made the cron skip it every minute after). */
 export async function alreadyNotifiedAdminReply(body: string, organizationId?: string): Promise<boolean> {
   if (!body.trim()) return false;
   const orgId = organizationId ?? (await getDefaultOrganizationId());
@@ -66,4 +71,15 @@ export async function alreadyNotifiedAdminReply(body: string, organizationId?: s
   if (seen) return true;
   await redisSet(key, "1", { exSeconds: ADMIN_NOTIFIED_TTL_SECONDS }).catch(() => {});
   return false;
+}
+
+/** Un-marks a reply whose notification FAILED on every rung, so the next
+ * cron pass retries it instead of treating it as delivered. Retry stays
+ * bounded: the cron only ever looks at host messages from the last 6 hours
+ * (ADMIN_REPLY_MAX_AGE_MS in check-messages), and nothing repeats once a
+ * send actually lands — so this can produce a late FYI, never a page loop. */
+export async function clearAdminReplyNotified(body: string, organizationId?: string): Promise<void> {
+  if (!body.trim()) return;
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  await redisDel(`admin-reply:${orgId}:notified:${contentKeyFragment(body)}`).catch(() => {});
 }
