@@ -248,13 +248,22 @@ export function NavBar({
   propertyGroupId?: string;
   propertyGroups?: NavPropertyGroup[];
 }) {
-  const visibleEntries =
+  // Commissions is Legacy Colombia only (2026-08-19, Seni's ask: "hide the
+  // commissions tab for now for all other properties") — the API already
+  // returns enabled:false for other property groups, this just stops the
+  // tab from appearing at all on them. Nav-level hiding only; the real
+  // scoping stays server-side in api/management/commissions.
+  const roleEntries =
     role === "READ_ONLY"
       ? navEntries
           .filter((e) => !TEAM_HIDDEN_LABELS.has(e.label))
           // Settings collapses from a dropdown to a single link for the team.
           .map((e): NavEntry => (e.label === "Settings" ? { type: "link", href: "/settings", label: "Settings" } : e))
       : navEntries;
+  const visibleEntries =
+    (propertyGroupId ?? "legacy-colombia") === "legacy-colombia"
+      ? roleEntries
+      : roleEntries.filter((e) => e.label !== "Commissions");
   const pathname = usePathname();
   const router = useRouter();
   const t = useT();
