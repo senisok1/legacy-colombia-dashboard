@@ -551,14 +551,37 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
     // unlike the old plain-text-only send below (which also had no real
     // "subject" heading at all). Falls back to the old free text if the
     // template isn't configured/approved yet, so this never regresses.
+    //
+    // Fail-loud (2026-08-19): every outcome lands in the activity log — the
+    // first REAL inquiry event ever to reach this handler arrives after the
+    // 2026-08-19 resubscribe, so its success or failure must be visible in
+    // the Activity tab, not buried in unretrievable runtime logs.
+    let sent = false;
+    let sendError: string | undefined;
     try {
       await sendNewInquiryTemplate({ guestName, question });
-    } catch {
-      await sendWhatsAppText(
-        `❓ *New Inquiry*\n\nFrom: ${guestName}\n\n"${question.slice(0, 400)}"\n\nCheck OwnerRez to respond.`
-      ).catch(() => {});
+      sent = true;
+    } catch (tmplErr) {
+      sendError = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
+      try {
+        await sendWhatsAppText(
+          `❓ *New Inquiry*\n\nFrom: ${guestName}\n\n"${question.slice(0, 400)}"\n\nCheck OwnerRez to respond.`
+        );
+        sent = true;
+      } catch (textErr) {
+        sendError = textErr instanceof Error ? textErr.message : String(textErr);
+      }
     }
-    console.log(`[webhookHandlers] Inquiry notification sent for ${guestName}`);
+    console.log(`[webhookHandlers] Inquiry notification ${sent ? "sent" : "FAILED"} for ${guestName}`);
+    await logAiActivity({
+      agentKey: "guest_experience",
+      agentDisplayName: "AI Guest Experience Manager",
+      task: "Notify new inquiry",
+      trigger: `New inquiry from ${guestName}: "${question.slice(0, 200)}"`,
+      actionTaken: sent ? "Sent new-inquiry WhatsApp to Seni" : "FAILED to deliver the new-inquiry WhatsApp",
+      result: sent ? "notified" : "failed",
+      error: sent ? undefined : sendError,
+    }).catch(() => {});
   } catch (error) {
     console.error("[webhookHandlers] Error processing inquiry event:", error);
   }
