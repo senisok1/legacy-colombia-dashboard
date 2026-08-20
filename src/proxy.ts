@@ -239,6 +239,34 @@ export async function proxy(req: NextRequest) {
       return NextResponse.redirect(new URL("/billing", req.url));
     }
 
+    // CONSTRUCTION role gate (2026-08-20, Seni's ask: a login for the
+    // construction team that "will only have access to the construction
+    // management tab" — nothing else, not even Dashboard or their own
+    // Settings page. Allowlist rather than the READ_ONLY block's denylist
+    // below, since the allowed surface here is a single tab: anything not
+    // explicitly listed is refused. Pages bounce to /construction; APIs get
+    // 403. Checked BEFORE the READ_ONLY block since a session is exactly one
+    // role — this return short-circuits so the (much wider) READ_ONLY
+    // allowlist further down never runs for a CONSTRUCTION session.
+    if (session!.role === "CONSTRUCTION") {
+      const allowed =
+        pathname === "/construction" ||
+        pathname.startsWith("/construction/") ||
+        pathname === "/api/construction" ||
+        pathname.startsWith("/api/construction/") ||
+        pathname === "/api/logout";
+      if (!allowed) {
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json(
+            { error: "This login only has access to Construction Management." },
+            { status: 403 }
+          );
+        }
+        return NextResponse.redirect(new URL("/construction", req.url));
+      }
+      return NextResponse.next();
+    }
+
     // READ_ONLY role gate (2026-08-16, Seni's ask: a team login for
     // cleaners/property managers that "can view all tabs only but without
     // the ability to reply to guests or modify anything"). Enforced HERE,

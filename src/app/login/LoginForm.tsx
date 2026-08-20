@@ -22,7 +22,11 @@ export function LoginForm() {
     });
     setLoading(false);
     if (res.ok) {
-      router.push(params.get("next") || "/dashboard");
+      // A CONSTRUCTION login can't reach /dashboard at all (see proxy.ts) —
+      // send it straight to its one tab instead of landing-then-bouncing.
+      const body = (await res.json().catch(() => null)) as { role?: string } | null;
+      const fallback = body?.role === "CONSTRUCTION" ? "/construction" : "/dashboard";
+      router.push(params.get("next") || fallback);
       router.refresh();
     } else {
       const body = (await res.json().catch(() => null)) as { error?: string } | null;

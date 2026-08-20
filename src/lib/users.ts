@@ -18,7 +18,10 @@ export type Role =
   | "BOOKKEEPER"
   | "VENDOR"
   | "AI_AGENT"
-  | "READ_ONLY";
+  | "READ_ONLY"
+  // Construction Management tab (2026-08-20) — a login restricted to ONLY
+  // that one tab, nothing else. See src/proxy.ts's gate and NavBar.tsx.
+  | "CONSTRUCTION";
 
 export type AppUser = {
   id: string;

@@ -43,6 +43,14 @@ const navEntries: NavEntry[] = [
   // Commissions (2026-08-19) — shared by Seni and Gabriel: extras commission
   // + direct-booking referrals, owner approves/settles, Gabriel views.
   { type: "link", href: "/commissions", label: "Commissions" },
+  // Construction Management (2026-08-20, Seni's ask) — an open-items
+  // checklist + activity log, hidden on every property but Legacy Colombia
+  // for now (see visibleEntries' propertyGroupId filter below, same
+  // mechanism as Commissions), and admin/owner-only in the nav (see
+  // TEAM_HIDDEN_LABELS below) — a regular READ_ONLY team login never sees
+  // it. A dedicated CONSTRUCTION-role login sees ONLY this tab (see
+  // roleEntries below); src/proxy.ts hard-blocks it from everything else.
+  { type: "link", href: "/construction", label: "Construction Management" },
   { type: "group", label: "Messaging", tabs: MESSAGING_GROUP_TABS },
   { type: "group", label: "Marketing", tabs: MARKETING_GROUP_TABS },
   { type: "group", label: "Reports", tabs: REPORTS_GROUP_TABS },
@@ -146,7 +154,7 @@ function Badge({ count, active }: { count: number; active: boolean }) {
 // Settings link (no Settings dropdown — no Add a Team Member, no Billing).
 // Everything else is hidden here AND blocked in src/proxy.ts, so typing the
 // URL doesn't get around it.
-const TEAM_HIDDEN_LABELS = new Set(["Messaging", "Marketing", "Reports", "Bill Pay"]);
+const TEAM_HIDDEN_LABELS = new Set(["Messaging", "Marketing", "Reports", "Bill Pay", "Construction Management"]);
 
 // Maps each nav entry's internal (English) label to its i18n key — the
 // `label` field itself stays a fixed English string used for the
@@ -159,6 +167,7 @@ const NAV_LABEL_KEYS: Record<string, string> = {
   "Team Expense Request": "nav.expenses",
   "Team Activity Log": "nav.activityLog",
   Commissions: "nav.commissions",
+  "Construction Management": "nav.construction",
   Settings: "nav.settings",
 };
 
@@ -254,17 +263,28 @@ export function NavBar({
   // returns enabled:false for other property groups, this just stops the
   // tab from appearing at all on them. Nav-level hiding only; the real
   // scoping stays server-side in api/management/commissions.
+  // CONSTRUCTION logins (2026-08-20) see EXACTLY one nav entry — no
+  // Dashboard, no Settings, nothing else. This is a UI-layer mirror of the
+  // hard proxy.ts block; that block is the real enforcement (typing a URL
+  // still bounces), this just keeps the nav from advertising tabs the login
+  // can't open anyway.
   const roleEntries =
-    role === "READ_ONLY"
-      ? navEntries
-          .filter((e) => !TEAM_HIDDEN_LABELS.has(e.label))
-          // Settings collapses from a dropdown to a single link for the team.
-          .map((e): NavEntry => (e.label === "Settings" ? { type: "link", href: "/settings", label: "Settings" } : e))
-      : navEntries;
+    role === "CONSTRUCTION"
+      ? navEntries.filter((e) => e.label === "Construction Management")
+      : role === "READ_ONLY"
+        ? navEntries
+            .filter((e) => !TEAM_HIDDEN_LABELS.has(e.label))
+            // Settings collapses from a dropdown to a single link for the team.
+            .map((e): NavEntry => (e.label === "Settings" ? { type: "link", href: "/settings", label: "Settings" } : e))
+        : navEntries;
+  // Legacy Colombia only, for now (2026-08-19 for Commissions, 2026-08-20
+  // for Construction Management — same mechanism, same "not enabled on the
+  // other four properties yet" reasoning).
+  const PROPERTY_SCOPED_LABELS = new Set(["Commissions", "Construction Management"]);
   const visibleEntries =
     (propertyGroupId ?? "legacy-colombia") === "legacy-colombia"
       ? roleEntries
-      : roleEntries.filter((e) => e.label !== "Commissions");
+      : roleEntries.filter((e) => !PROPERTY_SCOPED_LABELS.has(e.label));
   const pathname = usePathname();
   const router = useRouter();
   const t = useT();

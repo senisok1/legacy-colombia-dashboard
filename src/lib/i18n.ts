@@ -41,6 +41,7 @@ const STRINGS: Dict = {
   "nav.expenses": { English: "Team Expense Request", Spanish: "Solicitud de Gastos", Portuguese: "Solicitação de Despesas" },
   "nav.activityLog": { English: "Team Activity Log", Spanish: "Registro de Actividad", Portuguese: "Registro de Atividades" },
   "nav.commissions": { English: "Commissions", Spanish: "Comisiones", Portuguese: "Comissões" },
+  "nav.construction": { English: "Construction Management", Spanish: "Gestión de Construcción", Portuguese: "Gestão de Construção" },
   "nav.settings": { English: "Settings", Spanish: "Configuración", Portuguese: "Configurações" },
   "nav.logout": { English: "Log out", Spanish: "Cerrar sesión", Portuguese: "Sair" },
   "nav.switching": { English: "Switching…", Spanish: "Cambiando…", Portuguese: "Trocando…" },
@@ -327,6 +328,37 @@ const STRINGS: Dict = {
   "log.nothingLogged": { English: "Nothing logged yet.", Spanish: "Aún no hay nada registrado.", Portuguese: "Ainda não há nada registrado." },
   "log.deleteConfirm": { English: "Delete this log entry?", Spanish: "¿Eliminar esta entrada del registro?", Portuguese: "Excluir este registro?" },
   "log.failedDelete": { English: "Failed to delete.", Spanish: "No se pudo eliminar.", Portuguese: "Falha ao excluir." },
+
+  // ---------- Construction Management ----------
+  "construction.title": { English: "Construction Management", Spanish: "Gestión de Construcción", Portuguese: "Gestão de Construção" },
+  "construction.subtitle": {
+    English: "Open items for the property — add what needs doing, check it off once it's done. Every change is logged below.",
+    Spanish: "Pendientes de la propiedad — agrega lo que falta por hacer y márcalo cuando esté listo. Cada cambio queda registrado abajo.",
+    Portuguese: "Pendências da propriedade — adicione o que precisa ser feito e marque quando estiver pronto. Cada mudança fica registrada abaixo.",
+  },
+  "construction.placeholder": {
+    English: "Add an item (e.g. Replace broken tile, 2nd floor bathroom)",
+    Spanish: "Agrega un ítem (ej. Cambiar baldosa rota, baño segundo piso)",
+    Portuguese: "Adicione um item (ex. Trocar azulejo quebrado, banheiro 2º andar)",
+  },
+  "construction.notesPlaceholder": {
+    English: "Notes (optional)",
+    Spanish: "Notas (opcional)",
+    Portuguese: "Observações (opcional)",
+  },
+  "construction.add": { English: "Add", Spanish: "Agregar", Portuguese: "Adicionar" },
+  "construction.openItems": { English: "Open", Spanish: "Pendientes", Portuguese: "Pendentes" },
+  "construction.completedItems": { English: "Completed", Spanish: "Completados", Portuguese: "Concluídos" },
+  "construction.nothingOpen": { English: "Nothing open — add an item above.", Spanish: "No hay pendientes — agrega un ítem arriba.", Portuguese: "Nada pendente — adicione um item acima." },
+  "construction.nothingCompleted": { English: "Nothing completed yet.", Spanish: "Aún no hay nada completado.", Portuguese: "Ainda nada concluído." },
+  "construction.loading": { English: "Loading…", Spanish: "Cargando…", Portuguese: "Carregando…" },
+  "construction.activityLog": { English: "Activity log", Spanish: "Registro de actividad", Portuguese: "Registro de atividade" },
+  "construction.nothingLogged": { English: "Nothing logged yet.", Spanish: "Aún no hay nada registrado.", Portuguese: "Ainda não há nada registrado." },
+  "construction.deleteConfirm": { English: "Delete this item? This can't be undone.", Spanish: "¿Eliminar este ítem? No se puede deshacer.", Portuguese: "Excluir este item? Não pode ser desfeito." },
+  "construction.actionCreated": { English: "added", Spanish: "agregó", Portuguese: "adicionou" },
+  "construction.actionCompleted": { English: "completed", Spanish: "completó", Portuguese: "concluiu" },
+  "construction.actionReopened": { English: "reopened", Spanish: "reabrió", Portuguese: "reabriu" },
+  "construction.actionDeleted": { English: "deleted", Spanish: "eliminó", Portuguese: "excluiu" },
 
   // ---------- Team Requests ----------
   "req.heading": { English: "Requests needing accept or deny", Spanish: "Solicitudes por aceptar o rechazar", Portuguese: "Solicitações a aceitar ou recusar" },

@@ -29,6 +29,10 @@ export type WelcomeEmailInput = {
   language?: string;
   /** true when this login can see/do everything (CEO role). */
   isAdmin: boolean;
+  /** true for a CONSTRUCTION login (2026-08-20) — sees ONLY the Construction
+   * Management tab, nothing else. Mutually exclusive with isAdmin; checked
+   * second so isAdmin still wins if both were ever true by mistake. */
+  isConstruction?: boolean;
   /** Property names this login may see; empty = all properties. */
   properties: string[];
   loginUrl: string;
@@ -61,6 +65,15 @@ type Copy = {
   helpTitle: string;
   helpBody: string;
   footer: string;
+  /** Construction Management login (2026-08-20) — sees exactly one tab, so
+   * it gets its own tiny intro/tabs/notes/help rather than reusing the
+   * property-management team copy above, which references tabs (Team
+   * Management, Team Expense Request…) this login can never open. */
+  constructionIntro: string;
+  constructionTabs: { name: string; what: string; how: string }[];
+  constructionNotesTitle: string;
+  constructionNotesRules: string[];
+  constructionHelpBody: string;
 };
 
 const COPY: Record<string, Copy> = {
@@ -175,6 +188,24 @@ const COPY: Record<string, Copy> = {
     helpBody:
       "You can view everything, but you cannot message guests or change bookings — only the owner can. If something needs a reply to a guest, add a note and tell the owner.",
     footer: "Legacy Estate Rentals",
+    constructionIntro:
+      "Your login for the Legacy Estate Rentals dashboard is ready. It gives you access to one tab: Construction Management — a shared checklist of open items for the property.",
+    constructionTabs: [
+      {
+        name: "Construction Management",
+        what: "An open-items checklist for the property. Anyone on the construction team can add an item and check it off once it's done.",
+        how: "Type what needs doing and press Add. When it's finished, tick the checkbox next to it — your name and the time are saved automatically in the activity log below the list, so everyone can see who did what.",
+      },
+    ],
+    constructionNotesTitle: "How to use it",
+    constructionNotesRules: [
+      "Add an item for anything that needs to happen — a repair, a delivery, an inspection, materials needed.",
+      "Be specific. \"Replace broken tile, 2nd floor bathroom\" is better than \"fix tile\".",
+      "Check an item off once it's actually done — don't check it off in advance.",
+      "The activity log at the bottom shows every item added and completed, with who and when.",
+    ],
+    constructionHelpBody:
+      "This login only has access to Construction Management — nothing else on the dashboard is visible to you.",
   },
 
   Spanish: {
@@ -288,6 +319,24 @@ const COPY: Record<string, Copy> = {
     helpBody:
       "Puedes ver todo, pero no puedes escribirle a los huéspedes ni cambiar reservas: eso solo lo hace el dueño. Si algo necesita respuesta al huésped, escribe una nota y avísale al dueño.",
     footer: "Legacy Estate Rentals",
+    constructionIntro:
+      "Tu acceso al panel de Legacy Estate Rentals ya está listo. Solo te da acceso a una pestaña: Construction Management — una lista compartida de pendientes de la propiedad.",
+    constructionTabs: [
+      {
+        name: "Construction Management",
+        what: "Una lista de pendientes de la propiedad. Cualquiera del equipo de construcción puede agregar un ítem y marcarlo como hecho.",
+        how: "Escribe qué falta por hacer y presiona Add. Cuando esté terminado, marca la casilla junto al ítem — tu nombre y la hora quedan guardados automáticamente en el registro de actividad debajo de la lista, para que todos vean quién hizo qué.",
+      },
+    ],
+    constructionNotesTitle: "Cómo usarla",
+    constructionNotesRules: [
+      "Agrega un ítem por cada cosa pendiente: una reparación, una entrega, una inspección, materiales necesarios.",
+      "Sé específico. \"Cambiar baldosa rota, baño segundo piso\" es mejor que \"arreglar baldosa\".",
+      "Marca un ítem como hecho solo cuando ya esté terminado, no antes.",
+      "El registro de actividad al final muestra cada ítem agregado y completado, con quién y cuándo.",
+    ],
+    constructionHelpBody:
+      "Este acceso solo tiene la pestaña Construction Management — nada más del panel es visible para ti.",
   },
 
   Portuguese: {
@@ -401,6 +450,24 @@ const COPY: Record<string, Copy> = {
     helpBody:
       "Você pode ver tudo, mas não pode enviar mensagens aos hóspedes nem alterar reservas — só o proprietário pode. Se algo precisar de resposta ao hóspede, escreva uma anotação e avise o proprietário.",
     footer: "Legacy Estate Rentals",
+    constructionIntro:
+      "Seu acesso ao painel da Legacy Estate Rentals está pronto. Ele dá acesso a apenas uma aba: Construction Management — uma lista compartilhada de pendências da propriedade.",
+    constructionTabs: [
+      {
+        name: "Construction Management",
+        what: "Uma lista de pendências da propriedade. Qualquer pessoa da equipe de construção pode adicionar um item e marcá-lo como concluído.",
+        how: "Escreva o que precisa ser feito e clique em Add. Quando terminar, marque a caixinha ao lado do item — seu nome e o horário são salvos automaticamente no registro de atividade abaixo da lista, para que todos vejam quem fez o quê.",
+      },
+    ],
+    constructionNotesTitle: "Como usar",
+    constructionNotesRules: [
+      "Adicione um item para tudo que precisa ser feito: um reparo, uma entrega, uma inspeção, materiais necessários.",
+      "Seja específico. \"Trocar azulejo quebrado, banheiro do 2º andar\" é melhor que \"consertar azulejo\".",
+      "Marque um item como concluído só quando ele realmente estiver pronto.",
+      "O registro de atividade no final mostra cada item adicionado e concluído, com quem e quando.",
+    ],
+    constructionHelpBody:
+      "Este acesso só tem a aba Construction Management — nada mais do painel é visível para você.",
   },
 };
 
@@ -421,10 +488,15 @@ export function buildWelcomeEmail(input: WelcomeEmailInput): {
   const name = input.name?.trim() || input.email.split("@")[0];
   const properties = input.properties.length > 0 ? input.properties.join(", ") : c.allProperties;
 
-  const tabs = input.isAdmin ? c.adminTabs : c.tabs;
-  const intro = input.isAdmin ? c.adminIntro : c.intro;
-  const notesTitle = input.isAdmin ? c.adminNotesTitle : c.notesTitle;
-  const notesRules = input.isAdmin ? c.adminNotesRules : c.notesRules;
+  const tabs = input.isAdmin ? c.adminTabs : input.isConstruction ? c.constructionTabs : c.tabs;
+  const intro = input.isAdmin ? c.adminIntro : input.isConstruction ? c.constructionIntro : c.intro;
+  const notesTitle = input.isAdmin ? c.adminNotesTitle : input.isConstruction ? c.constructionNotesTitle : c.notesTitle;
+  const notesRules = input.isAdmin ? c.adminNotesRules : input.isConstruction ? c.constructionNotesRules : c.notesRules;
+  const helpBody = input.isConstruction ? c.constructionHelpBody : c.helpBody;
+  // Admin logins skip the "one thing to remember" callout entirely (see the
+  // isAdmin ternary further down) since it doesn't apply to them; a
+  // construction login gets its own version of that callout via helpBody
+  // above.
 
   const subject = input.isAdmin
     ? c.subject.replace("login", "owner login")
@@ -496,7 +568,7 @@ export function buildWelcomeEmail(input: WelcomeEmailInput): {
           ? ""
           : `<div style="border:1px solid #e7e5e4;border-radius:10px;padding:14px 16px;background:#fafaf9;">
               <div style="font-size:15px;font-weight:600;margin-bottom:4px;">${esc(c.helpTitle)}</div>
-              <div style="font-size:14px;color:#44403c;">${esc(c.helpBody)}</div>
+              <div style="font-size:14px;color:#44403c;">${esc(helpBody)}</div>
             </div>`
       }
 
@@ -522,7 +594,7 @@ export function buildWelcomeEmail(input: WelcomeEmailInput): {
     "",
     `${notesTitle}:`,
     ...notesRules.map((r) => `  - ${r}`),
-    ...(input.isAdmin ? [] : ["", `${c.helpTitle}: ${c.helpBody}`]),
+    ...(input.isAdmin ? [] : ["", `${c.helpTitle}: ${helpBody}`]),
     "",
     c.footer,
   ].join("\n");

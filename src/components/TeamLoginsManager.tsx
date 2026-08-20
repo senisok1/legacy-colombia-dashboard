@@ -236,7 +236,8 @@ export function TeamLoginsManager() {
         <p className="text-xs text-black/50 dark:text-white/50">
           <strong>Admin</strong> logins can do everything. <strong>Team member</strong> logins can view every
           tab but only add notes and activities on the Management tab — they can&apos;t message guests or
-          change anything. Submitting an existing email resets that person&apos;s password.
+          change anything. <strong>Construction team</strong> logins see ONLY the Construction Management tab
+          — nothing else, not even Dashboard. Submitting an existing email resets that person&apos;s password.
         </p>
       </div>
 
@@ -256,7 +257,7 @@ export function TeamLoginsManager() {
                     : "bg-black/10 dark:bg-white/10 text-black/60 dark:text-white/60"
                 }`}
               >
-                {u.role === "CEO" ? "Admin" : "Team member"}
+                {u.role === "CEO" ? "Admin" : u.role === "CONSTRUCTION" ? "Construction team" : "Team member"}
               </span>
               {u.language && u.language !== "English" && (
                 <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs text-black/60 dark:text-white/60">
@@ -343,6 +344,7 @@ export function TeamLoginsManager() {
                     >
                       <option value="READ_ONLY">Team member (view only)</option>
                       <option value="CEO">Admin (full access)</option>
+                      <option value="CONSTRUCTION">Construction team (Construction Management tab only)</option>
                     </select>
                   </label>
                   <PropertiesPicker value={editProperties} onChange={setEditProperties} />
@@ -422,6 +424,7 @@ export function TeamLoginsManager() {
           >
             <option value="READ_ONLY">Team member (view only)</option>
             <option value="CEO">Admin (full access)</option>
+            <option value="CONSTRUCTION">Construction team (Construction Management tab only)</option>
           </select>
         </label>
         <PropertiesPicker value={formProperties} onChange={setFormProperties} />

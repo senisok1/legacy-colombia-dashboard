@@ -69,7 +69,11 @@ export async function POST(req: NextRequest) {
     epoch: user.sessionEpoch,
   });
   await touchLastLogin(user.id).catch(() => {}); // best-effort, never blocks login
-  const res = NextResponse.json({ ok: true });
+  // Role in the response (2026-08-20) so the client can send a CONSTRUCTION
+  // login straight to /construction instead of /dashboard — that role can't
+  // reach /dashboard at all (see proxy.ts's gate), so landing there first
+  // would just bounce.
+  const res = NextResponse.json({ ok: true, role: user.role });
   res.cookies.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     secure: true,

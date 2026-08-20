@@ -94,6 +94,7 @@ async function sendWelcome(
       password,
       language: user.language,
       isAdmin: user.role === "CEO",
+      isConstruction: user.role === "CONSTRUCTION",
       properties:
         user.propertyAccess.length > 0 ? allowedPropertyGroups(user.propertyAccess).map((g) => g.label) : [],
       loginUrl: `${origin}/login`,
@@ -142,7 +143,8 @@ export async function POST(req: NextRequest) {
   if (whatsappPhone && !looksLikePhone(whatsappPhone)) {
     return NextResponse.json({ error: "That doesn't look like a valid phone number." }, { status: 400 });
   }
-  const role = body.role === "CEO" ? ("CEO" as const) : ("READ_ONLY" as const);
+  const role =
+    body.role === "CEO" ? ("CEO" as const) : body.role === "CONSTRUCTION" ? ("CONSTRUCTION" as const) : ("READ_ONLY" as const);
   // Team-member language (2026-08-16): they read the Management tab and
   // write notes in this language; notes are auto-translated to English for
   // admins (see api/management/activities).
@@ -273,7 +275,14 @@ export async function PUT(req: NextRequest) {
 
   const ALLOWED = ["English", "Spanish", "Portuguese"];
   const language = body.language && ALLOWED.includes(body.language) ? body.language : undefined;
-  const role = body.role === "CEO" ? ("CEO" as const) : body.role === "READ_ONLY" ? ("READ_ONLY" as const) : undefined;
+  const role =
+    body.role === "CEO"
+      ? ("CEO" as const)
+      : body.role === "READ_ONLY"
+        ? ("READ_ONLY" as const)
+        : body.role === "CONSTRUCTION"
+          ? ("CONSTRUCTION" as const)
+          : undefined;
   const propertyAccess = sanitizePropertyAccess(body.propertyAccess);
 
   try {
