@@ -252,11 +252,24 @@ function parseImportText(raw: string): { rows: ImportRow[] } | { error: string }
         continue;
       }
 
-      if (totalCop !== null || budgetedUsd !== null) {
+      if (totalCop !== null && totalCop !== 0) {
         // A standalone fee/tax line with real money and no chapter code or
         // line items of its own — file it under its own category instead
         // of discarding it or misfiling it into whatever chapter happened
         // to be last.
+        //
+        // Bug fixed 2026-08-20 (round 2 — Seni: "I don't see total COP or
+        // budgeted USD again!"): the first version of this check also
+        // matched on budgetedUsd !== null, which swept up two unrelated
+        // rows ("Supply and installation of a sauna", "Household
+        // appliances") that have no unit/qty/price/total of their own but
+        // do carry a literal formula "$0" in the Budgeted (USD) cell —
+        // confirmed live via /api/construction-budget?fresh=1, which showed
+        // both misfiled into "Fees & Taxes" with totalCop: null,
+        // budgetedUsd: 0, positioned near chapter 20 by first-appearance
+        // order — which is exactly why Seni didn't see them near the real
+        // Honorary Fees/Tax rows at the bottom. Requiring a genuine nonzero
+        // totalCop (present only on the real fee/tax rows) excludes them.
         rows.push({
           code: null,
           category: "Fees & Taxes",
