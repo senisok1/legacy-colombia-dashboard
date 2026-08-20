@@ -587,11 +587,33 @@ const GUEST_FETCH_BATCH_SIZE = 20;
 
 async function fetchGuestsByIds(ids: number[], organizationId?: string): Promise<Guest[]> {
   const guests: Guest[] = [];
+  const failedIds: number[] = [];
   for (let i = 0; i < ids.length; i += GUEST_FETCH_BATCH_SIZE) {
     const batch = ids.slice(i, i + GUEST_FETCH_BATCH_SIZE);
     const results = await Promise.all(batch.map((id) => getGuestById(id, organizationId)));
-    for (const g of results) if (g) guests.push(g);
+    results.forEach((g, idx) => {
+      if (g) guests.push(g);
+      else failedIds.push(batch[idx]);
+    });
   }
+
+  // RETRY ADDED 2026-08-20 (Seni: "some of the names in the inbox tab are
+  // showing 'guest' when it should show the actual guest name"). Before this,
+  // a handful of individual getGuestById calls failing (transient 429/
+  // timeout — see the BUG FOUND 2026-08-10 note on fetchGuests below) were
+  // silently dropped with no retry at all. That stays well under
+  // GUESTS_DEGRADED_THRESHOLD's 50% trip-wire, so the mass-failure fallback-
+  // snapshot rescue never kicked in for a handful of stragglers — those few
+  // guests just vanished from guestsById for the whole 60s cache window,
+  // which is exactly what resolveGuestName's "Guest" fallback is for. One
+  // short-delay retry rides out the transient failure, same pattern already
+  // used for thread messages in lib/inbox.ts's batch loop.
+  if (failedIds.length > 0) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const retryResults = await Promise.all(failedIds.map((id) => getGuestById(id, organizationId)));
+    for (const g of retryResults) if (g) guests.push(g);
+  }
+
   return guests;
 }
 

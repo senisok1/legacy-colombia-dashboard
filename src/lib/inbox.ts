@@ -166,10 +166,14 @@ function threadSummariesFallbackKey(organizationId?: string, propertyGroupId?: s
 // globally unique, so there was no collision, just no way to reject an
 // out-of-group thread. The default group keeps an un-suffixed key so the
 // existing warm entries stay valid.
+// v4 (2026-08-20): same "Guest" fallback poisoning as getAllThreadSummaries'
+// v5->v6 bump above — this Redis copy is written from the same computation,
+// so it needs flushing too or the thread route would keep serving the
+// wrong-cached name for up to 30 minutes even after the fix.
 function threadSummaryLiteKey(orgId: string, threadId: number, propertyGroupId?: string): string {
   const suffix =
     propertyGroupId && propertyGroupId !== DEFAULT_PROPERTY_GROUP_ID ? `:${propertyGroupId}` : "";
-  return `thread-summary-lite-v3${suffix}:${orgId}:${threadId}`;
+  return `thread-summary-lite-v4${suffix}:${orgId}:${threadId}`;
 }
 
 const THREAD_SUMMARY_LITE_TTL_SECONDS = 1800; // matches getAllThreadSummaries' own window
@@ -475,7 +479,15 @@ async function fetchAllThreadSummaries(organizationId?: string, limit: number = 
 // communication" order for 30 minutes — see the "BUG FOUND 2026-08-10"
 // comment above for the fix (a matching fallback-snapshot guard). Bumping
 // again flushes that poisoned v4 entry immediately.
-export const getAllThreadSummaries = unstable_cache(fetchAllThreadSummaries, ["ownerrez-thread-summaries-v5"], {
+// Bumped to v6 (2026-08-20, Seni: "some of the names in the inbox tab are
+// showing 'guest' when it should show the actual guest name") — same class
+// of issue, smaller scale: a handful of individual getGuestById calls (not
+// a mass failure) failed with no retry, so those few guests' names got
+// baked into this 30-min cache as the literal fallback "Guest". The fix
+// (a retry pass in lib/ownerrez.ts's fetchGuestsByIds) stops it from
+// recurring, but doesn't un-poison an entry already computed — bumping the
+// key flushes it immediately instead of waiting up to 30 minutes.
+export const getAllThreadSummaries = unstable_cache(fetchAllThreadSummaries, ["ownerrez-thread-summaries-v6"], {
   revalidate: 1800,
 });
 
