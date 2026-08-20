@@ -1,5 +1,17 @@
 import { query, queryOne } from "./db";
 
+// Deletion (both items and activity-log entries) is restricted to Seni
+// specifically, not just any CEO login (2026-08-20, Seni's ask: "only allow
+// me, Seni Sok, to delete the activity logs") — there are other CEO/admin
+// logins on this org (Ahmed, Geo) who should keep full use of the checklist
+// but not the ability to erase history. A plain constant rather than an env
+// var or a DB flag: this is a one-person, one-tab policy, not general config.
+export const CONSTRUCTION_OWNER_EMAIL = "senisok1@gmail.com";
+
+export function isConstructionOwner(email: string | undefined | null): boolean {
+  return (email ?? "").trim().toLowerCase() === CONSTRUCTION_OWNER_EMAIL;
+}
+
 // Construction Management tab (2026-08-20, Seni's ask) — an open-items
 // checklist scoped to one property group (Legacy Colombia only for now, see
 // db/migrations/0042_construction.sql) plus a companion activity log so
@@ -12,6 +24,9 @@ export type ConstructionItem = {
   id: string;
   title: string;
   notes: string | null;
+  /** Free-text grouping, e.g. "Gym" (2026-08-20, Seni's ask). Null = shown
+   * under "Uncategorized" client-side. */
+  category: string | null;
   completed: boolean;
   completedBy: string | null;
   completedAt: string | null;
@@ -31,6 +46,7 @@ type ItemRow = {
   id: string;
   title: string;
   notes: string | null;
+  category: string | null;
   completed: boolean;
   completed_by_email: string | null;
   completed_by_name: string | null;
@@ -58,6 +74,7 @@ function itemFromRow(r: ItemRow): ConstructionItem {
     id: r.id,
     title: r.title,
     notes: r.notes,
+    category: r.category,
     completed: r.completed,
     completedBy: r.completed_by_email ? displayName(r.completed_by_email, r.completed_by_name) : null,
     completedAt: r.completed_at,
@@ -83,7 +100,7 @@ export async function listConstructionItems(
   propertyGroupId: string
 ): Promise<ConstructionItem[]> {
   const rows = await query<ItemRow>(
-    `select id, title, notes, completed, completed_by_email, completed_by_name, completed_at,
+    `select id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
             created_by_email, created_by_name, created_at
      from construction_items
      where organization_id = $1 and property_group_id = $2
@@ -139,16 +156,25 @@ export async function createConstructionItem(input: {
   propertyGroupId: string;
   title: string;
   notes: string | null;
+  category: string | null;
   authorEmail: string;
   authorName: string | null;
 }): Promise<ConstructionItem> {
   const row = await queryOne<ItemRow>(
     `insert into construction_items
-       (organization_id, property_group_id, title, notes, created_by_email, created_by_name)
-     values ($1, $2, $3, $4, $5, $6)
-     returning id, title, notes, completed, completed_by_email, completed_by_name, completed_at,
+       (organization_id, property_group_id, title, notes, category, created_by_email, created_by_name)
+     values ($1, $2, $3, $4, $5, $6, $7)
+     returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at`,
-    [input.organizationId, input.propertyGroupId, input.title, input.notes, input.authorEmail, input.authorName]
+    [
+      input.organizationId,
+      input.propertyGroupId,
+      input.title,
+      input.notes,
+      input.category,
+      input.authorEmail,
+      input.authorName,
+    ]
   );
   if (!row) throw new Error("Failed to create the item.");
   await logActivity({
@@ -181,7 +207,7 @@ export async function setConstructionItemCompleted(input: {
            completed_by_name = case when $4 then $6 else null end,
            completed_at = case when $4 then now() else null end
      where id = $1 and organization_id = $2 and property_group_id = $3
-     returning id, title, notes, completed, completed_by_email, completed_by_name, completed_at,
+     returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at`,
     [input.id, input.organizationId, input.propertyGroupId, input.completed, input.actorEmail, input.actorName]
   );
@@ -224,4 +250,22 @@ export async function deleteConstructionItem(input: {
     actorName: input.actorName,
   });
   return true;
+}
+
+/** Deletes a single activity log entry outright — no replacement record,
+ * unlike deleteConstructionItem (which logs its own deletion). Restricted
+ * to Seni specifically, not just any CEO login (2026-08-20, Seni's ask) —
+ * enforced by the caller, see api/construction/log/route.ts. */
+export async function deleteConstructionActivityLogEntry(
+  organizationId: string,
+  propertyGroupId: string,
+  id: string
+): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `delete from construction_activity_log
+     where id = $1 and organization_id = $2 and property_group_id = $3
+     returning id`,
+    [id, organizationId, propertyGroupId]
+  );
+  return Boolean(row);
 }

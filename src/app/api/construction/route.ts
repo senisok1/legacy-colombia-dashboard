@@ -5,6 +5,7 @@ import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyG
 import {
   createConstructionItem,
   deleteConstructionItem,
+  isConstructionOwner,
   listConstructionActivityLog,
   listConstructionItems,
   setConstructionItemCompleted,
@@ -36,7 +37,14 @@ export async function GET(req: NextRequest) {
       listConstructionItems(session.organizationId, groupId),
       listConstructionActivityLog(session.organizationId, groupId),
     ]);
-    return NextResponse.json({ items, log, viewerRole: session.role });
+    return NextResponse.json({
+      items,
+      log,
+      viewerRole: session.role,
+      // Drives the delete buttons in ConstructionBoard.tsx — restricted to
+      // Seni specifically, not every CEO login (2026-08-20, Seni's ask).
+      canDelete: isConstructionOwner(session.email),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/construction failed:", message);
@@ -51,12 +59,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 });
   }
 
-  const body = (await req.json().catch(() => null)) as { title?: string; notes?: string } | null;
+  const body = (await req.json().catch(() => null)) as
+    | { title?: string; notes?: string; category?: string }
+    | null;
   const title = body?.title?.trim();
   if (!title) return NextResponse.json({ error: "Give the item a title." }, { status: 400 });
   if (title.length > 300) return NextResponse.json({ error: "Keep the title under 300 characters." }, { status: 400 });
   const notes = body?.notes?.trim() || null;
   if (notes && notes.length > 2000) return NextResponse.json({ error: "Keep notes under 2000 characters." }, { status: 400 });
+  const category = body?.category?.trim() || null;
+  if (category && category.length > 100) {
+    return NextResponse.json({ error: "Keep the category under 100 characters." }, { status: 400 });
+  }
 
   try {
     const user = await getUserByEmail(session.email).catch(() => null);
@@ -66,6 +80,7 @@ export async function POST(req: NextRequest) {
       propertyGroupId: groupId,
       title,
       notes,
+      category,
       authorEmail: session.email,
       authorName: user?.name ?? null,
     });
@@ -109,14 +124,13 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// Admin/owner only — deleting a mistaken item, not something a construction
-// login needs day to day (same posture as the CEO-only delete on the Team
-// Activity Log feed).
+// Seni only (2026-08-20, Seni's ask) — NOT every CEO login. Ahmed and Geo
+// are CEO-role too but shouldn't be able to erase a checklist item.
 export async function DELETE(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (session.role !== "CEO") {
-    return NextResponse.json({ error: "Only an admin/owner can delete an item." }, { status: 403 });
+  if (!isConstructionOwner(session.email)) {
+    return NextResponse.json({ error: "Only Seni can delete an item." }, { status: 403 });
   }
 
   const body = (await req.json().catch(() => null)) as { id?: string } | null;

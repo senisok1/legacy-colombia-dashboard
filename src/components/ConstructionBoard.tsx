@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/components/LanguageProvider";
 
 // Construction Management tab (2026-08-20, Seni's ask): an open-items
@@ -8,13 +8,29 @@ import { useT } from "@/components/LanguageProvider";
 // or a CONSTRUCTION-role login, see src/proxy.ts) can add an item and check
 // it off, with a companion activity log so there's always a "who did what"
 // trail. Modeled on TeamActivityLog.tsx's fetch/render pattern (double-load
-// on mount for instant paint, CEO-only delete), but its own tables/route —
-// this isn't part of the Team Management/READ_ONLY surface at all.
+// on mount for instant paint), but its own tables/route — this isn't part
+// of the Team Management/READ_ONLY surface at all.
+//
+// Categories (2026-08-20, Seni's ask: type "Gym" as a category and list
+// items under it) are free-text, not a separate managed list — typing the
+// same category name a second time groups under the existing heading, and
+// the add-item field offers a datalist of categories already in use so a
+// typo doesn't quietly create a near-duplicate bucket.
+//
+// Deletion (2026-08-20, Seni's ask: "only allow me, Seni Sok, to delete the
+// activity logs") is gated by `canDelete` from the API response — true only
+// for Seni's own login, not every CEO/admin account (see
+// lib/construction.ts's isConstructionOwner). This covers both delete
+// affordances on this tab: removing a checklist item and removing a single
+// activity-log entry.
+
+const UNCATEGORIZED = "__uncategorized__";
 
 type Item = {
   id: string;
   title: string;
   notes: string | null;
+  category: string | null;
   completed: boolean;
   completedBy: string | null;
   completedAt: string | null;
@@ -35,16 +51,39 @@ function fmtWhen(iso: string): string {
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/** Groups items by category (insertion order of first appearance),
+ * "Uncategorized" always last regardless of when it first appears. */
+function groupByCategory(items: Item[]): { key: string; label: string; items: Item[] }[] {
+  const order: string[] = [];
+  const buckets = new Map<string, Item[]>();
+  for (const item of items) {
+    const key = item.category?.trim() || UNCATEGORIZED;
+    if (!buckets.has(key)) {
+      order.push(key);
+      buckets.set(key, []);
+    }
+    buckets.get(key)!.push(item);
+  }
+  const named = order.filter((k) => k !== UNCATEGORIZED).sort((a, b) => a.localeCompare(b));
+  const groups = named.map((key) => ({ key, label: key, items: buckets.get(key)! }));
+  if (buckets.has(UNCATEGORIZED)) {
+    groups.push({ key: UNCATEGORIZED, label: "", items: buckets.get(UNCATEGORIZED)! });
+  }
+  return groups;
+}
+
 export function ConstructionBoard() {
   const t = useT();
   const [items, setItems] = useState<Item[] | null>(null);
   const [log, setLog] = useState<LogEntry[] | null>(null);
-  const [viewerRole, setViewerRole] = useState<string | undefined>();
+  const [canDelete, setCanDelete] = useState(false);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
+  const [category, setCategory] = useState("");
   const [adding, setAdding] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removingLogId, setRemovingLogId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Same guard as TeamActivityLog: a failed background refresh must never
   // blank out a list that's already on screen.
@@ -57,7 +96,7 @@ export function ConstructionBoard() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setItems(json.items ?? []);
       setLog(json.log ?? []);
-      setViewerRole(json.viewerRole);
+      setCanDelete(Boolean(json.canDelete));
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
@@ -69,6 +108,15 @@ export function ConstructionBoard() {
     void load().then(() => load(true));
   }, [load]);
 
+  const knownCategories = useMemo(() => {
+    const set = new Set<string>();
+    for (const i of items ?? []) {
+      const c = i.category?.trim();
+      if (c) set.add(c);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
   async function addItem(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim() || adding) return;
@@ -78,12 +126,19 @@ export function ConstructionBoard() {
       const res = await fetch("/api/construction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim(), notes: notes.trim() || undefined }),
+        body: JSON.stringify({
+          title: title.trim(),
+          notes: notes.trim() || undefined,
+          category: category.trim() || undefined,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setTitle("");
       setNotes("");
+      // Category deliberately NOT cleared — adding several items to the
+      // same category (e.g. a handful of Gym repairs) in a row is the
+      // common case.
       await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add the item.");
@@ -132,11 +187,95 @@ export function ConstructionBoard() {
     }
   }
 
+  async function removeLogEntry(entry: LogEntry) {
+    if (removingLogId || !window.confirm(t("construction.deleteLogConfirm"))) return;
+    setRemovingLogId(entry.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction/log", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: entry.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete.");
+    } finally {
+      setRemovingLogId(null);
+    }
+  }
+
   const open = (items ?? []).filter((i) => !i.completed);
   const completed = (items ?? []).filter((i) => i.completed);
+  const openGroups = groupByCategory(open);
+  const completedGroups = groupByCategory(completed);
 
   function actionLabel(action: LogEntry["action"]): string {
     return t(`construction.action${action.charAt(0).toUpperCase()}${action.slice(1)}`);
+  }
+
+  function ItemRow({ item, completedRow }: { item: Item; completedRow: boolean }) {
+    return (
+      <li className="flex items-start gap-2 rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
+        <input
+          type="checkbox"
+          checked={completedRow}
+          disabled={togglingId === item.id}
+          onChange={() => void toggle(item)}
+          className="mt-0.5"
+        />
+        <div className="flex-1">
+          <div className={completedRow ? "line-through text-black/50 dark:text-white/50" : ""}>{item.title}</div>
+          {item.notes && <div className="text-xs text-black/50 dark:text-white/50">{item.notes}</div>}
+          <div className="text-xs text-black/40 dark:text-white/40">
+            {completedRow
+              ? `${item.completedBy}, ${item.completedAt ? fmtWhen(item.completedAt) : ""}`
+              : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
+          </div>
+        </div>
+        {canDelete && (
+          <button
+            onClick={() => void remove(item)}
+            disabled={removingId === item.id}
+            className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+          >
+            {removingId === item.id ? t("common.deleting") : t("common.delete")}
+          </button>
+        )}
+      </li>
+    );
+  }
+
+  function GroupedList({
+    groups,
+    completedRow,
+  }: {
+    groups: { key: string; label: string; items: Item[] }[];
+    completedRow: boolean;
+  }) {
+    return (
+      <div className="space-y-3">
+        {groups.map((g) => (
+          <div key={g.key}>
+            {g.label && (
+              <div className="mb-1 text-xs font-semibold text-black/60 dark:text-white/60">{g.label}</div>
+            )}
+            {!g.label && groups.length > 1 && (
+              <div className="mb-1 text-xs font-semibold text-black/40 dark:text-white/40">
+                {t("construction.uncategorized")}
+              </div>
+            )}
+            <ul className="space-y-1">
+              {g.items.map((i) => (
+                <ItemRow key={i.id} item={i} completedRow={completedRow} />
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -144,13 +283,25 @@ export function ConstructionBoard() {
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
         <form className="flex flex-wrap gap-2" onSubmit={addItem}>
           <input
-            className="min-w-[16rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            className="min-w-[14rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
             placeholder={t("construction.placeholder")}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
           />
           <input
-            className="min-w-[12rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            list="construction-categories"
+            className="w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            placeholder={t("construction.categoryPlaceholder")}
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          />
+          <datalist id="construction-categories">
+            {knownCategories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+          <input
+            className="min-w-[10rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
             placeholder={t("construction.notesPlaceholder")}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -177,35 +328,7 @@ export function ConstructionBoard() {
               {open.length === 0 ? (
                 <p className="text-sm text-black/50 dark:text-white/50">{t("construction.nothingOpen")}</p>
               ) : (
-                <ul className="space-y-1">
-                  {open.map((i) => (
-                    <li key={i.id} className="flex items-start gap-2 rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={false}
-                        disabled={togglingId === i.id}
-                        onChange={() => void toggle(i)}
-                        className="mt-0.5"
-                      />
-                      <div className="flex-1">
-                        <div>{i.title}</div>
-                        {i.notes && <div className="text-xs text-black/50 dark:text-white/50">{i.notes}</div>}
-                        <div className="text-xs text-black/40 dark:text-white/40">
-                          {i.createdBy}, {fmtWhen(i.createdAt)}
-                        </div>
-                      </div>
-                      {viewerRole === "CEO" && (
-                        <button
-                          onClick={() => void remove(i)}
-                          disabled={removingId === i.id}
-                          className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
-                        >
-                          {removingId === i.id ? t("common.deleting") : t("common.delete")}
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <GroupedList groups={openGroups} completedRow={false} />
               )}
             </div>
 
@@ -216,35 +339,7 @@ export function ConstructionBoard() {
               {completed.length === 0 ? (
                 <p className="text-sm text-black/50 dark:text-white/50">{t("construction.nothingCompleted")}</p>
               ) : (
-                <ul className="space-y-1">
-                  {completed.map((i) => (
-                    <li key={i.id} className="flex items-start gap-2 rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={true}
-                        disabled={togglingId === i.id}
-                        onChange={() => void toggle(i)}
-                        className="mt-0.5"
-                      />
-                      <div className="flex-1">
-                        <div className="line-through text-black/50 dark:text-white/50">{i.title}</div>
-                        {i.notes && <div className="text-xs text-black/40 dark:text-white/40">{i.notes}</div>}
-                        <div className="text-xs text-black/40 dark:text-white/40">
-                          {i.completedBy}, {i.completedAt ? fmtWhen(i.completedAt) : ""}
-                        </div>
-                      </div>
-                      {viewerRole === "CEO" && (
-                        <button
-                          onClick={() => void remove(i)}
-                          disabled={removingId === i.id}
-                          className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
-                        >
-                          {removingId === i.id ? t("common.deleting") : t("common.delete")}
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <GroupedList groups={completedGroups} completedRow={true} />
               )}
             </div>
           </>
@@ -262,9 +357,20 @@ export function ConstructionBoard() {
         ) : (
           <ul className="space-y-1">
             {log.map((entry) => (
-              <li key={entry.id} className="text-sm text-black/70 dark:text-white/70">
-                <strong>{entry.actor}</strong> {actionLabel(entry.action)} &ldquo;{entry.itemTitle}&rdquo;
-                <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
+              <li key={entry.id} className="flex items-start justify-between gap-2 text-sm text-black/70 dark:text-white/70">
+                <div>
+                  <strong>{entry.actor}</strong> {actionLabel(entry.action)} &ldquo;{entry.itemTitle}&rdquo;
+                  <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
+                </div>
+                {canDelete && (
+                  <button
+                    onClick={() => void removeLogEntry(entry)}
+                    disabled={removingLogId === entry.id}
+                    className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                  >
+                    {removingLogId === entry.id ? t("common.deleting") : t("common.delete")}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
