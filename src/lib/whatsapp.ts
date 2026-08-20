@@ -162,6 +162,49 @@ function templateParam(value: string | number | null | undefined, maxLength = 35
   return collapsed.slice(0, maxLength);
 }
 
+/**
+ * FULL-MESSAGE FOLLOW-UP (2026-08-19, Seni: "for all of my whatsapp messages
+ * coming from the Legacy Colombia property, please send the entire message.
+ * right now the longer messages are being cut off"): Meta hard-caps template
+ * body parameters (and rejects newlines in them — see templateParam above),
+ * so long guest messages/AI replies MUST be truncated in the template alert
+ * itself. This sends the complete, newline-preserving text as a free-text
+ * message immediately AFTER the template has already succeeded. Free text
+ * delivers whenever Seni's 24h session window with this number is open
+ * (his frequent YES/NO replies keep it open most of the time); when the
+ * window is shut Meta drops it — but the truncated template alert has
+ * already landed, so nothing is ever lost relative to before. Only fires
+ * when something was actually cut off or had its line breaks flattened, so
+ * short messages don't generate a redundant second ping. Never throws.
+ */
+async function sendFullTextFollowUp(
+  creds: WhatsAppCredentials,
+  parts: { label: string; text: string; limit: number }[]
+): Promise<void> {
+  const needed = parts.filter((p) => {
+    const t = (p.text ?? "").trim();
+    return t.length > 0 && (t.length > p.limit || /[\r\n]/.test(t));
+  });
+  if (needed.length === 0) return;
+  const body = `📄 Full text (the alert above was shortened):\n\n${needed
+    .map((p) => `${p.label}:\n${p.text.trim()}`)
+    .join("\n\n")}`.slice(0, 4000);
+  try {
+    await postWhatsAppMessage(
+      {
+        messaging_product: "whatsapp",
+        to: creds.recipientNumber,
+        type: "text",
+        text: { body, preview_url: false },
+      },
+      creds
+    );
+  } catch (err) {
+    // Non-fatal by design — the template alert already delivered.
+    console.warn("[whatsapp] full-text follow-up failed (non-fatal):", err instanceof Error ? err.message : err);
+  }
+}
+
 function isTemplateLanguageError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes("132001") || msg.includes("does not exist in");
@@ -296,7 +339,7 @@ export async function sendGuestReplyApprovalTemplate(
     throw new WhatsAppError("Guest-reply approval template isn't configured/approved yet.");
   }
 
-  return postTemplateWithLanguageFallback(
+  const wamid = await postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: creds.recipientNumber,
@@ -319,6 +362,11 @@ export async function sendGuestReplyApprovalTemplate(
     },
     creds
   );
+  await sendFullTextFollowUp(creds, [
+    { label: "Guest's full message", text: params.guestMessage, limit: 350 },
+    { label: "Full suggested reply", text: params.suggestedReply, limit: 350 },
+  ]);
+  return wamid;
 }
 
 /**
@@ -429,8 +477,14 @@ export async function sendAdminReplyNotificationTemplate(
   // reason) — a real template reaches Seni regardless of the session window.
   // If a real admin_reply_notification template is ever approved on the WABA,
   // the primary path below just starts working and the carrier goes unused.
-  const viaCarrier = () =>
-    sendDailySummaryTemplate(
+  const followUp = () =>
+    sendFullTextFollowUp(creds, [
+      { label: "Guest's full message", text: params.guestMessage, limit: 300 },
+      { label: "Full admin reply", text: params.adminReply, limit: 300 },
+    ]);
+
+  const viaCarrier = async () => {
+    const wamid = await sendDailySummaryTemplate(
       {
         orgLabel: config.propertyName || "Legacy Colombia",
         headline: `Admin replied to ${templateParam(params.guestName, 60) || "a guest"} in OwnerRez (FYI): "${params.adminReply}"`,
@@ -438,11 +492,14 @@ export async function sendAdminReplyNotificationTemplate(
       },
       organizationId
     );
+    await followUp();
+    return wamid;
+  };
 
   if (!isAdminReplyNotificationConfigured(creds)) return viaCarrier();
 
   try {
-    return await postTemplateWithLanguageFallback(
+    const wamid = await postTemplateWithLanguageFallback(
       {
         messaging_product: "whatsapp",
         to: creds.recipientNumber,
@@ -464,6 +521,8 @@ export async function sendAdminReplyNotificationTemplate(
       },
       creds
     );
+    await followUp();
+    return wamid;
   } catch (err) {
     console.warn(
       "[whatsapp] admin_reply_notification template send failed — using daily_summary_alert carrier:",
@@ -595,7 +654,7 @@ export async function sendNewInquiryTemplate(
     throw new WhatsAppError("New inquiry template isn't configured/approved yet.");
   }
 
-  return postTemplateWithLanguageFallback(
+  const wamid = await postTemplateWithLanguageFallback(
     {
       messaging_product: "whatsapp",
       to: creds.recipientNumber,
@@ -616,6 +675,8 @@ export async function sendNewInquiryTemplate(
     },
     creds
   );
+  await sendFullTextFollowUp(creds, [{ label: "Full message", text: params.question, limit: 400 }]);
+  return wamid;
 }
 
 /**

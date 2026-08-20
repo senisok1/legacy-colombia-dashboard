@@ -76,9 +76,9 @@ export function ThreadInbox({ messagingConfigured }: { messagingConfigured: bool
   // fetchThreads to component scope and depending on `limit` fixes both:
   // the post-open refresh call now resolves, and paging in more
   // conversations actually re-fetches.
-  async function fetchThreads() {
+  async function fetchThreads(fresh = false) {
     try {
-      const res = await fetch(`/api/messages/inbox?limit=${limit}`);
+      const res = await fetch(`/api/messages/inbox?limit=${limit}${fresh ? "&fresh=1" : ""}`);
       const data = (await res.json()) as { threads?: InboxThread[]; error?: string; hasMore?: boolean };
       if (!res.ok || !Array.isArray(data.threads)) {
         throw new Error(data.error ?? `Inbox request failed (${res.status})`);
@@ -96,15 +96,19 @@ export function ThreadInbox({ messagingConfigured }: { messagingConfigured: bool
     let cancelled = false;
 
     setLoadingThreads(true);
+    // Instant paint from the server's Redis snapshot, then a fully-live
+    // ?fresh=1 pass right behind it that replaces the list once it resolves
+    // (2026-08-19, Seni: "the inbox under messaging took 20 seconds to
+    // load") — same double-load pattern as ManagementBoard/CommissionsBoard.
     fetchThreads().then(() => {
       if (!cancelled) setLoadingThreads(false);
     });
+    fetchThreads(true).catch(() => {});
 
-    // Polling every 2 min (120s) to sync with cron refresh rate. Since route returns cached
-    // data instantly, this is just a safety polling — cron keeps data fresh anyway.
+    // Periodic live re-poll keeps the list current while the tab stays open.
     const REFRESH_INTERVAL_MS = 120_000;
     const interval = setInterval(() => {
-      fetchThreads().catch(() => {});
+      fetchThreads(true).catch(() => {});
     }, REFRESH_INTERVAL_MS);
 
     return () => {

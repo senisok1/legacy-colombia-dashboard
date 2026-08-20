@@ -24,6 +24,22 @@ export const maxDuration = 120;
 // guest message shows up here within seconds of existing in OwnerRez
 // instead of waiting out the cache window. See getAllThreadSummaries's
 // comment in lib/inbox.ts for why this exists.
+function toThreadListItem(s: ThreadSummary) {
+  return {
+    threadId: s.threadId,
+    bookingId: s.booking.id,
+    guestId: s.booking.guestId,
+    guestName: s.guestName,
+    propertyName: s.booking.propertyName,
+    arrival: s.booking.arrival,
+    departure: s.booking.departure,
+    source: s.booking.source,
+    lastMessagePreview: s.lastMessage?.body?.slice(0, 140) ?? "",
+    lastMessageAt: s.lastMessage?.sentAt,
+    awaitingReply: s.awaitingReply,
+  };
+}
+
 export async function GET(req: NextRequest) {
   if (!isMessagingConfigured()) {
     return NextResponse.json({ threads: [], messagingConfigured: false });
@@ -49,64 +65,60 @@ export async function GET(req: NextRequest) {
   // background refreshes that happened to hit a flaky upstream call. See
   // ThreadInbox.tsx's fetchThreads for the matching client-side fix.
   try {
-    // FINAL SOLUTION (2026-08-06): Return within 1 second MAX, never wait for API.
-    // If cache is cold and fetch is slow, return empty. Client will see instant UI.
-    // Cron keeps cache warm every 2 min, so subsequent loads are instant.
+    // SNAPSHOT-FIRST REWRITE (2026-08-19, Seni: "the inbox under messaging
+    // took 20 seconds to load"). The previous design raced the real
+    // computation against a 900ms timer — but on a warm-ish Data Cache the
+    // real computation could take anywhere between 1s and 20s+ (a partially
+    // cold thread-messages batch pays paced live OwnerRez calls), and
+    // because Promise.race only settles on the FIRST result, a computation
+    // that took 20s while the timer path was still awaiting the Redis GET
+    // inside its setTimeout callback... in practice the race mostly worked,
+    // but any hiccup in the timer path (slow Redis read, event-loop
+    // starvation while the paced batch loop churned) let the slow
+    // computation win the wait. Now the snapshot path IS the primary path:
+    // a non-fresh request does ONE O(1) Redis read and returns — never an
+    // OwnerRez call, never a paced scan, no timers — and schedules the real
+    // recompute via after() so the snapshot stays current. The client
+    // follows up with ?fresh=1 (restored below in ThreadInbox.tsx) to
+    // replace the instant list with a fully live one.
     //
-    // BUG FIX (2026-08-07): as originally written, the "loser" of this race
-    // (summariesPromise, when it takes >1s) was never awaited again after
-    // NextResponse.json() below returns — and a Vercel serverless function
-    // invocation can suspend/terminate its background work once the
-    // response is sent. Since NOTHING else in the codebase ever calls
-    // getAllThreadSummaries (confirmed via grep — the cron only warms the
-    // separate per-thread getCachedThreadMessages cache), losing this race
-    // meant the 30-min summaries cache could structurally never get warmed:
-    // every request raced, every race (on a cold cache) lost, and the
-    // computation that would have cached the result got cut off before
-    // finishing. That's the real reason the Messaging tab could sit on
-    // "No conversations found" / totalAvailable:0 indefinitely — not just
-    // right after a deploy, but any time this cache expired — regardless of
-    // the separate slice-before-sort bug also fixed today. `after()` (Next
-    // 15+) keeps this specific promise running to completion in the
-    // background after the response flushes, so a losing race still ends
-    // with a warm cache for the next request instead of racing and losing
-    // forever.
+    // BUG-FIX HISTORY preserved from the old race design (2026-08-07):
+    // whatever computation runs must be kept alive via after() — a Vercel
+    // invocation can suspend background work once the response is sent, and
+    // nothing else in the codebase calls getAllThreadSummaries, so without
+    // after() the summaries cache could structurally never warm.
+    if (!fresh) {
+      const snapshot = await getSnapshotThreadSummaries(session?.organizationId, groupId).catch(() => null);
+      after(
+        getAllThreadSummaries(session?.organizationId, undefined, groupId)
+          .then(() => {})
+          .catch(() => {})
+      );
+      if (snapshot && snapshot.length > 0) {
+        const summaries = snapshot.slice(0, limit);
+        return NextResponse.json({
+          threads: summaries.map(toThreadListItem),
+          messagingConfigured: true,
+          hasMore: summaries.length >= limit,
+          totalAvailable: summaries.length >= limit ? "280+" : summaries.length,
+        });
+      }
+      // No snapshot yet (first-ever load for this org+group, or Redis
+      // flushed): fall through to the real computation below — one slow
+      // load that seeds the snapshot for every load after it.
+    }
+
     const summariesPromise = fresh
       ? fetchAllThreadSummaries(session?.organizationId, limit, groupId)
       : getAllThreadSummaries(session?.organizationId, undefined, groupId);
     after(summariesPromise.then(() => {}).catch(() => {}));
-
-    // INSTANT-LOAD FIX (2026-08-16): the race used to resolve to [] on a
-    // cold cache, painting "No conversations found" until a 20-30s scan
-    // finished. Now the timeout path resolves to the last known-good Redis
-    // snapshot (started in parallel, ~tens of ms) so the first paint always
-    // has real conversations; the client's ?fresh=1 follow-up updates it.
-    const snapshotPromise = getSnapshotThreadSummaries(session?.organizationId, groupId).catch(() => null);
-    const timeoutPromise = new Promise<ThreadSummary[]>((resolve) =>
-      setTimeout(async () => resolve(((await snapshotPromise) ?? []).slice(0, limit)), 900)
-    );
-
-    let summaries = await Promise.race([summariesPromise, timeoutPromise]);
-
-    const threads = summaries.map((s) => ({
-      threadId: s.threadId,
-      bookingId: s.booking.id,
-      guestId: s.booking.guestId,
-      guestName: s.guestName,
-      propertyName: s.booking.propertyName,
-      arrival: s.booking.arrival,
-      departure: s.booking.departure,
-      source: s.booking.source,
-      lastMessagePreview: s.lastMessage?.body?.slice(0, 140) ?? "",
-      lastMessageAt: s.lastMessage?.sentAt,
-      awaitingReply: s.awaitingReply,
-    }));
+    const summaries: ThreadSummary[] = await summariesPromise;
 
     // Pagination: return info for "Load more" button
     const totalAvailable = summaries.length >= limit ? "280+" : summaries.length;
     const hasMore = summaries.length >= limit;
 
-    return NextResponse.json({ threads, messagingConfigured: true, hasMore, totalAvailable });
+    return NextResponse.json({ threads: summaries.map(toThreadListItem), messagingConfigured: true, hasMore, totalAvailable });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/messages/inbox failed:", message);
