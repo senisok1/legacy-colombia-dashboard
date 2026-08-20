@@ -85,6 +85,254 @@ function groupByCategory(items: Item[]): { key: string; label: string; items: It
   return groups;
 }
 
+// ItemRow and GroupedList are deliberately module-level components, NOT
+// nested inside ConstructionBoard (2026-08-20 fix, Seni reported "not
+// allowing me to type in notes correctly after I click edit"). A component
+// defined inside another component's body gets a brand-new function
+// identity on every parent re-render — React then treats <ItemRow .../> as
+// a completely different element type each time and unmounts/remounts the
+// whole subtree, which drops input focus after every single keystroke
+// (setEditDraft/setNoteDraft each trigger a ConstructionBoard re-render).
+// Hoisting them here keeps their identity stable across renders so typing
+// in the edit form (and the progress-notes textbox) behaves normally.
+type EditDraft = { title: string; category: string; notes: string };
+
+type ItemRowProps = {
+  item: Item;
+  completedRow: boolean;
+  t: (key: string) => string;
+  canDelete: boolean;
+  togglingId: string | null;
+  removingId: string | null;
+  savingDateId: string | null;
+  openNotesId: string | null;
+  notesByItem: Record<string, Note[]>;
+  loadingNotesId: string | null;
+  noteDraft: Record<string, string>;
+  postingNoteId: string | null;
+  editingId: string | null;
+  editDraft: EditDraft;
+  savingEditId: string | null;
+  onToggle: (item: Item) => void;
+  onRemove: (item: Item) => void;
+  onUpdateEstimatedDate: (item: Item, dateStr: string) => void;
+  onToggleNotes: (item: Item) => void;
+  onNoteDraftChange: (itemId: string, value: string) => void;
+  onPostNote: (item: Item) => void;
+  onStartEdit: (item: Item) => void;
+  onCancelEdit: () => void;
+  onEditFieldChange: (field: keyof EditDraft, value: string) => void;
+  onSaveEdit: (item: Item) => void;
+};
+
+function ItemRow({
+  item,
+  completedRow,
+  t,
+  canDelete,
+  togglingId,
+  removingId,
+  savingDateId,
+  openNotesId,
+  notesByItem,
+  loadingNotesId,
+  noteDraft,
+  postingNoteId,
+  editingId,
+  editDraft,
+  savingEditId,
+  onToggle,
+  onRemove,
+  onUpdateEstimatedDate,
+  onToggleNotes,
+  onNoteDraftChange,
+  onPostNote,
+  onStartEdit,
+  onCancelEdit,
+  onEditFieldChange,
+  onSaveEdit,
+}: ItemRowProps) {
+  const notesOpen = openNotesId === item.id;
+  const notes = notesByItem[item.id];
+  const editing = editingId === item.id;
+  return (
+    <li className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
+      <div className="flex items-start gap-2">
+        <input
+          type="checkbox"
+          checked={completedRow}
+          disabled={togglingId === item.id}
+          onChange={() => onToggle(item)}
+          className="mt-0.5"
+        />
+        <div className="flex-1">
+          <div className={completedRow ? "line-through text-black/50 dark:text-white/50" : ""}>{item.title}</div>
+          {item.notes && <div className="text-xs text-black/50 dark:text-white/50">{item.notes}</div>}
+          <div className="text-xs text-black/40 dark:text-white/40">
+            {completedRow
+              ? `${item.completedBy}, ${item.completedAt ? fmtWhen(item.completedAt) : ""}`
+              : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50">
+            <span>{t("construction.estCompletion")}</span>
+            <input
+              type="date"
+              value={item.estimatedCompletionDate ?? ""}
+              disabled={savingDateId === item.id}
+              onChange={(e) => onUpdateEstimatedDate(item, e.target.value)}
+              className="rounded border border-black/15 dark:border-white/15 bg-transparent px-1 py-0.5 text-xs disabled:opacity-40"
+            />
+          </div>
+        </div>
+        <button
+          onClick={() => onToggleNotes(item)}
+          className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
+            item.noteCount > 0
+              ? "text-[var(--accent)] hover:underline"
+              : "text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
+          }`}
+        >
+          {t("construction.notesButton")}
+          {item.noteCount > 0 ? ` (${item.noteCount})` : ""}
+        </button>
+        <button
+          onClick={() => (editing ? onCancelEdit() : onStartEdit(item))}
+          className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
+        >
+          {t("construction.editButton")}
+        </button>
+        {canDelete && (
+          <button
+            onClick={() => onRemove(item)}
+            disabled={removingId === item.id}
+            className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+          >
+            {removingId === item.id ? t("common.deleting") : t("common.delete")}
+          </button>
+        )}
+      </div>
+
+      {editing && (
+        <div className="mt-2 ml-6 space-y-1.5 border-l-2 border-black/10 dark:border-white/10 pl-3">
+          <div>
+            <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editTitleLabel")}</label>
+            <input
+              className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+              value={editDraft.title}
+              onChange={(e) => onEditFieldChange("title", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editCategoryLabel")}</label>
+            <input
+              list="construction-categories"
+              className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+              value={editDraft.category}
+              onChange={(e) => onEditFieldChange("category", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editNotesLabel")}</label>
+            <input
+              className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+              value={editDraft.notes}
+              onChange={(e) => onEditFieldChange("notes", e.target.value)}
+            />
+          </div>
+          <div className="flex gap-1.5 pt-0.5">
+            <button
+              onClick={() => onSaveEdit(item)}
+              disabled={savingEditId === item.id || !editDraft.title.trim()}
+              className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
+            >
+              {savingEditId === item.id ? t("construction.saving") : t("construction.saveEdit")}
+            </button>
+            <button
+              onClick={onCancelEdit}
+              disabled={savingEditId === item.id}
+              className="shrink-0 rounded-md px-2 py-1 text-xs text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80 disabled:opacity-40"
+            >
+              {t("construction.cancelEdit")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {notesOpen && (
+        <div className="mt-2 ml-6 space-y-2 border-l-2 border-black/10 dark:border-white/10 pl-3">
+          {loadingNotesId === item.id && !notes ? (
+            <p className="text-xs text-black/50 dark:text-white/50">{t("construction.loading")}</p>
+          ) : !notes || notes.length === 0 ? (
+            <p className="text-xs text-black/50 dark:text-white/50">{t("construction.noNotes")}</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {notes.map((n) => (
+                <li key={n.id} className="text-xs">
+                  <span className="text-black/80 dark:text-white/80">{n.body}</span>
+                  <div className="text-black/40 dark:text-white/40">
+                    {n.author}, {fmtWhen(n.createdAt)}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex gap-1.5">
+            <input
+              className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+              placeholder={t("construction.notePlaceholder")}
+              value={noteDraft[item.id] ?? ""}
+              onChange={(e) => onNoteDraftChange(item.id, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onPostNote(item);
+              }}
+            />
+            <button
+              onClick={() => onPostNote(item)}
+              disabled={postingNoteId === item.id || !(noteDraft[item.id] ?? "").trim()}
+              className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
+            >
+              {postingNoteId === item.id ? t("construction.posting") : t("construction.postNote")}
+            </button>
+          </div>
+        </div>
+      )}
+    </li>
+  );
+}
+
+type GroupedListProps = {
+  groups: { key: string; label: string; items: Item[] }[];
+  completedRow: boolean;
+  t: (key: string) => string;
+  itemRowProps: Omit<ItemRowProps, "item" | "completedRow">;
+};
+
+function GroupedList({ groups, completedRow, t, itemRowProps }: GroupedListProps) {
+  return (
+    <div className="space-y-3">
+      {groups.map((g) => (
+        <div key={g.key}>
+          {/* Category headings colored red (2026-08-20, Seni's ask: "change
+              the color of the category description... to red so that it
+              stands out more") — visually separates a category divider
+              from ordinary item text at a glance. */}
+          {g.label && <div className="mb-1 text-xs font-semibold text-red-600 dark:text-red-400">{g.label}</div>}
+          {!g.label && groups.length > 1 && (
+            <div className="mb-1 text-xs font-semibold text-black/40 dark:text-white/40">
+              {t("construction.uncategorized")}
+            </div>
+          )}
+          <ul className="space-y-1">
+            {g.items.map((i) => (
+              <ItemRow key={i.id} item={i} completedRow={completedRow} {...itemRowProps} />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ConstructionBoard() {
   const t = useT();
   const [items, setItems] = useState<Item[] | null>(null);
@@ -358,188 +606,39 @@ export function ConstructionBoard() {
     return t(`construction.action${action.charAt(0).toUpperCase()}${action.slice(1)}`);
   }
 
-  function ItemRow({ item, completedRow }: { item: Item; completedRow: boolean }) {
-    const notesOpen = openNotesId === item.id;
-    const notes = notesByItem[item.id];
-    const editing = editingId === item.id;
-    return (
-      <li className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
-        <div className="flex items-start gap-2">
-          <input
-            type="checkbox"
-            checked={completedRow}
-            disabled={togglingId === item.id}
-            onChange={() => void toggle(item)}
-            className="mt-0.5"
-          />
-          <div className="flex-1">
-            <div className={completedRow ? "line-through text-black/50 dark:text-white/50" : ""}>{item.title}</div>
-            {item.notes && <div className="text-xs text-black/50 dark:text-white/50">{item.notes}</div>}
-            <div className="text-xs text-black/40 dark:text-white/40">
-              {completedRow
-                ? `${item.completedBy}, ${item.completedAt ? fmtWhen(item.completedAt) : ""}`
-                : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
-            </div>
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50">
-              <span>{t("construction.estCompletion")}</span>
-              <input
-                type="date"
-                value={item.estimatedCompletionDate ?? ""}
-                disabled={savingDateId === item.id}
-                onChange={(e) => void updateEstimatedDate(item, e.target.value)}
-                className="rounded border border-black/15 dark:border-white/15 bg-transparent px-1 py-0.5 text-xs disabled:opacity-40"
-              />
-            </div>
-          </div>
-          <button
-            onClick={() => void toggleNotes(item)}
-            className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
-              item.noteCount > 0
-                ? "text-[var(--accent)] hover:underline"
-                : "text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
-            }`}
-          >
-            {t("construction.notesButton")}
-            {item.noteCount > 0 ? ` (${item.noteCount})` : ""}
-          </button>
-          <button
-            onClick={() => (editing ? cancelEdit() : startEdit(item))}
-            className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
-          >
-            {t("construction.editButton")}
-          </button>
-          {canDelete && (
-            <button
-              onClick={() => void remove(item)}
-              disabled={removingId === item.id}
-              className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
-            >
-              {removingId === item.id ? t("common.deleting") : t("common.delete")}
-            </button>
-          )}
-        </div>
-
-        {editing && (
-          <div className="mt-2 ml-6 space-y-1.5 border-l-2 border-black/10 dark:border-white/10 pl-3">
-            <div>
-              <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editTitleLabel")}</label>
-              <input
-                className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
-                value={editDraft.title}
-                onChange={(e) => setEditDraft((d) => ({ ...d, title: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editCategoryLabel")}</label>
-              <input
-                list="construction-categories"
-                className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
-                value={editDraft.category}
-                onChange={(e) => setEditDraft((d) => ({ ...d, category: e.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editNotesLabel")}</label>
-              <input
-                className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
-                value={editDraft.notes}
-                onChange={(e) => setEditDraft((d) => ({ ...d, notes: e.target.value }))}
-              />
-            </div>
-            <div className="flex gap-1.5 pt-0.5">
-              <button
-                onClick={() => void saveEdit(item)}
-                disabled={savingEditId === item.id || !editDraft.title.trim()}
-                className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
-              >
-                {savingEditId === item.id ? t("construction.saving") : t("construction.saveEdit")}
-              </button>
-              <button
-                onClick={cancelEdit}
-                disabled={savingEditId === item.id}
-                className="shrink-0 rounded-md px-2 py-1 text-xs text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80 disabled:opacity-40"
-              >
-                {t("construction.cancelEdit")}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {notesOpen && (
-          <div className="mt-2 ml-6 space-y-2 border-l-2 border-black/10 dark:border-white/10 pl-3">
-            {loadingNotesId === item.id && !notes ? (
-              <p className="text-xs text-black/50 dark:text-white/50">{t("construction.loading")}</p>
-            ) : !notes || notes.length === 0 ? (
-              <p className="text-xs text-black/50 dark:text-white/50">{t("construction.noNotes")}</p>
-            ) : (
-              <ul className="space-y-1.5">
-                {notes.map((n) => (
-                  <li key={n.id} className="text-xs">
-                    <span className="text-black/80 dark:text-white/80">{n.body}</span>
-                    <div className="text-black/40 dark:text-white/40">
-                      {n.author}, {fmtWhen(n.createdAt)}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="flex gap-1.5">
-              <input
-                className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
-                placeholder={t("construction.notePlaceholder")}
-                value={noteDraft[item.id] ?? ""}
-                onChange={(e) => setNoteDraft((m) => ({ ...m, [item.id]: e.target.value }))}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void postNote(item);
-                }}
-              />
-              <button
-                onClick={() => void postNote(item)}
-                disabled={postingNoteId === item.id || !(noteDraft[item.id] ?? "").trim()}
-                className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
-              >
-                {postingNoteId === item.id ? t("construction.posting") : t("construction.postNote")}
-              </button>
-            </div>
-          </div>
-        )}
-      </li>
-    );
+  function onNoteDraftChange(itemId: string, value: string) {
+    setNoteDraft((m) => ({ ...m, [itemId]: value }));
   }
 
-  function GroupedList({
-    groups,
-    completedRow,
-  }: {
-    groups: { key: string; label: string; items: Item[] }[];
-    completedRow: boolean;
-  }) {
-    return (
-      <div className="space-y-3">
-        {groups.map((g) => (
-          <div key={g.key}>
-            {/* Category headings colored red (2026-08-20, Seni's ask: "change
-                the color of the category description... to red so that it
-                stands out more") — visually separates a category divider
-                from ordinary item text at a glance. */}
-            {g.label && (
-              <div className="mb-1 text-xs font-semibold text-red-600 dark:text-red-400">{g.label}</div>
-            )}
-            {!g.label && groups.length > 1 && (
-              <div className="mb-1 text-xs font-semibold text-black/40 dark:text-white/40">
-                {t("construction.uncategorized")}
-              </div>
-            )}
-            <ul className="space-y-1">
-              {g.items.map((i) => (
-                <ItemRow key={i.id} item={i} completedRow={completedRow} />
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-    );
+  function onEditFieldChange(field: keyof EditDraft, value: string) {
+    setEditDraft((d) => ({ ...d, [field]: value }));
   }
+
+  const itemRowProps = {
+    t,
+    canDelete,
+    togglingId,
+    removingId,
+    savingDateId,
+    openNotesId,
+    notesByItem,
+    loadingNotesId,
+    noteDraft,
+    postingNoteId,
+    editingId,
+    editDraft,
+    savingEditId,
+    onToggle: (item: Item) => void toggle(item),
+    onRemove: (item: Item) => void remove(item),
+    onUpdateEstimatedDate: (item: Item, dateStr: string) => void updateEstimatedDate(item, dateStr),
+    onToggleNotes: (item: Item) => void toggleNotes(item),
+    onNoteDraftChange,
+    onPostNote: (item: Item) => void postNote(item),
+    onStartEdit: startEdit,
+    onCancelEdit: cancelEdit,
+    onEditFieldChange,
+    onSaveEdit: (item: Item) => void saveEdit(item),
+  };
 
   return (
     <div className="space-y-4">
@@ -591,7 +690,7 @@ export function ConstructionBoard() {
               {open.length === 0 ? (
                 <p className="text-sm text-black/50 dark:text-white/50">{t("construction.nothingOpen")}</p>
               ) : (
-                <GroupedList groups={openGroups} completedRow={false} />
+                <GroupedList groups={openGroups} completedRow={false} t={t} itemRowProps={itemRowProps} />
               )}
             </div>
 
@@ -602,7 +701,7 @@ export function ConstructionBoard() {
               {completed.length === 0 ? (
                 <p className="text-sm text-black/50 dark:text-white/50">{t("construction.nothingCompleted")}</p>
               ) : (
-                <GroupedList groups={completedGroups} completedRow={true} />
+                <GroupedList groups={completedGroups} completedRow={true} t={t} itemRowProps={itemRowProps} />
               )}
             </div>
           </>
