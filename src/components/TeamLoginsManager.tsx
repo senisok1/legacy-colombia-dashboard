@@ -244,8 +244,96 @@ export function TeamLoginsManager() {
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
       {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
 
+      <form onSubmit={createLogin} className="flex flex-wrap items-end gap-2">
+        <label className="text-xs text-black/60 dark:text-white/60">
+          Name
+          <input
+            className="mt-0.5 block w-36 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            placeholder="Gabriel"
+          />
+        </label>
+        <label className="text-xs text-black/60 dark:text-white/60">
+          Email
+          <input
+            type="email"
+            required
+            className="mt-0.5 block w-52 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.email}
+            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+            placeholder="pm@legacycolombia.com"
+          />
+        </label>
+        <label className="text-xs text-black/60 dark:text-white/60">
+          Password (8+ chars)
+          <input
+            type="text"
+            required
+            minLength={8}
+            className="mt-0.5 block w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.password}
+            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+          />
+        </label>
+        <label className="text-xs text-black/60 dark:text-white/60">
+          Access
+          <select
+            className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.role}
+            onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+          >
+            <option value="READ_ONLY">Team member (view only)</option>
+            <option value="CEO">Admin (full access)</option>
+            <option value="CONSTRUCTION">Construction team (Construction Management tab only)</option>
+          </select>
+        </label>
+        <PropertiesPicker value={formProperties} onChange={setFormProperties} />
+        <label className="text-xs text-black/60 dark:text-white/60">
+          Language
+          <select
+            className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.language}
+            onChange={(e) => setForm((f) => ({ ...f, language: e.target.value }))}
+          >
+            <option value="English">English</option>
+            <option value="Spanish">Spanish (Español)</option>
+            <option value="Portuguese">Portuguese (Português)</option>
+          </select>
+        </label>
+        <label className="text-xs text-black/60 dark:text-white/60">
+          WhatsApp number
+          <input
+            required
+            className="mt-0.5 block w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+            value={form.whatsappPhone}
+            onChange={(e) => setForm((f) => ({ ...f, whatsappPhone: e.target.value }))}
+            placeholder="+57 320 750 7474"
+          />
+        </label>
+        <label className="flex items-center gap-1.5 pb-1.5 text-xs text-black/60 dark:text-white/60">
+          <input
+            type="checkbox"
+            checked={sendWelcomeEmail}
+            onChange={(e) => setSendWelcomeEmail(e.target.checked)}
+          />
+          Email them their login + instructions
+        </label>
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+        >
+          {busy ? "Saving…" : "Create login"}
+        </button>
+      </form>
+
       {users && users.length > 0 && (
-        <div className="rounded-lg border border-black/10 dark:border-white/10 divide-y divide-black/5 dark:divide-white/5">
+        <div>
+          <h3 className="mb-1.5 text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
+            Current team members
+          </h3>
+          <div className="rounded-lg border border-black/10 dark:border-white/10 divide-y divide-black/5 dark:divide-white/5">
           {users.map((u) => (
             <div key={u.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
               <span className="font-medium">{u.name || u.email}</span>
@@ -380,92 +468,9 @@ export function TeamLoginsManager() {
               )}
             </div>
           ))}
+          </div>
         </div>
       )}
-
-      <form onSubmit={createLogin} className="flex flex-wrap items-end gap-2">
-        <label className="text-xs text-black/60 dark:text-white/60">
-          Name
-          <input
-            className="mt-0.5 block w-36 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            placeholder="Gabriel"
-          />
-        </label>
-        <label className="text-xs text-black/60 dark:text-white/60">
-          Email
-          <input
-            type="email"
-            required
-            className="mt-0.5 block w-52 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            value={form.email}
-            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-            placeholder="pm@legacycolombia.com"
-          />
-        </label>
-        <label className="text-xs text-black/60 dark:text-white/60">
-          Password (8+ chars)
-          <input
-            type="text"
-            required
-            minLength={8}
-            className="mt-0.5 block w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            value={form.password}
-            onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-          />
-        </label>
-        <label className="text-xs text-black/60 dark:text-white/60">
-          Access
-          <select
-            className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            value={form.role}
-            onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
-          >
-            <option value="READ_ONLY">Team member (view only)</option>
-            <option value="CEO">Admin (full access)</option>
-            <option value="CONSTRUCTION">Construction team (Construction Management tab only)</option>
-          </select>
-        </label>
-        <PropertiesPicker value={formProperties} onChange={setFormProperties} />
-        <label className="text-xs text-black/60 dark:text-white/60">
-          Language
-          <select
-            className="mt-0.5 block rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            value={form.language}
-            onChange={(e) => setForm((f) => ({ ...f, language: e.target.value }))}
-          >
-            <option value="English">English</option>
-            <option value="Spanish">Spanish (Español)</option>
-            <option value="Portuguese">Portuguese (Português)</option>
-          </select>
-        </label>
-        <label className="text-xs text-black/60 dark:text-white/60">
-          WhatsApp number
-          <input
-            required
-            className="mt-0.5 block w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            value={form.whatsappPhone}
-            onChange={(e) => setForm((f) => ({ ...f, whatsappPhone: e.target.value }))}
-            placeholder="+57 320 750 7474"
-          />
-        </label>
-        <label className="flex items-center gap-1.5 pb-1.5 text-xs text-black/60 dark:text-white/60">
-          <input
-            type="checkbox"
-            checked={sendWelcomeEmail}
-            onChange={(e) => setSendWelcomeEmail(e.target.checked)}
-          />
-          Email them their login + instructions
-        </label>
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
-        >
-          {busy ? "Saving…" : "Create login"}
-        </button>
-      </form>
     </div>
   );
 }
