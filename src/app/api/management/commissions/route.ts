@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
+import { redisGet, redisSet } from "@/lib/redis";
 import { getBookings, getGuests } from "@/lib/ownerrez";
 import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
 import { getSessionFromRequest } from "@/lib/session";
@@ -172,16 +173,131 @@ function toDirectLine(
   };
 }
 
+// INSTANT-LOAD SNAPSHOT (2026-08-19, Seni: "loading commissions on the
+// commissions tab still takes too long. I need them to be instant"): same
+// pattern as /api/management — the shared board is served from a Redis
+// snapshot in one O(1) GET, a background rebuild (after()) refreshes it, and
+// the client immediately follows up with ?fresh=1 so what's on screen is
+// current within a couple of seconds of paint. The earlier parallelization
+// fix helped a warm cache but still left every cold OwnerRez fetch
+// (getGuests fans out one request per guest) in the request path — the
+// snapshot takes it out entirely. Viewer-specific fields (viewerIsOwner,
+// viewerEmail) are stamped on the way out, never baked into the shared
+// snapshot.
+const COMMISSIONS_SNAPSHOT_TTL_SECONDS = 6 * 60 * 60;
+
+function commissionsSnapshotKey(orgId: string): string {
+  return `commissions:board:${orgId}`;
+}
+
+async function buildCommissionsBoard(orgId: string, groupId: string) {
+  // PERF (2026-08-19, Seni: "commissions tab took about 20 seconds to load
+  // initially"): everything independent runs concurrently. The dominant cost
+  // is OwnerRez itself on a cold Data Cache (getGuests alone fans out to one
+  // request per guest on a miss — see lib/ownerrez.ts's fetchGuestsByIds).
+  // The DB reads (extras/settlements) and the FX preview never depended on
+  // that fetch, so they don't wait behind it; only the direct-bookings list
+  // waits for the sync (which needs bookings first).
+  const bookingsPromise = getBookings(orgId, groupId);
+  const guestsPromise = getGuests(orgId, groupId).catch(() => [] as Guest[]);
+  const extrasPromise = listBookingExtras(orgId);
+  const settlementsPromise = listCommissionSettlements(orgId);
+  // Read-only preview for the UI before Seni actually settles — the real
+  // rate used in a settlement is fetched fresh again at settle time, never
+  // trusted from this earlier read.
+  const previewRatePromise = getUsdToRate("COP").catch(() => null);
+
+  const bookings = await bookingsPromise;
+  const bookingsById = new Map(bookings.map((b) => [b.id, b]));
+
+  await syncDirectBookingCommissions({ organizationId: orgId, bookings }).catch((err) =>
+    console.error("[commissions] syncDirectBookingCommissions failed:", err)
+  );
+
+  const [guests, extrasByBooking, directAllFlat, settlements, previewRate] = await Promise.all([
+    guestsPromise,
+    extrasPromise,
+    listDirectBookingCommissions(orgId),
+    settlementsPromise,
+    previewRatePromise,
+  ]);
+  const guestsById = buildGuestsById(guests);
+  const extrasAllFlat = [...extrasByBooking.values()].flat();
+
+  const extraLinesAll = extrasAllFlat.map((e) => toExtraLine(e, bookingsById, guestsById));
+  const directLinesAll = directAllFlat
+    .map((d) => toDirectLine(d, bookingsById, guestsById))
+    .filter((l): l is DirectLine => l !== null);
+
+  // Active board (pending/approved/declined) only ever shows unsettled
+  // lines — settled ones move to the history section below instead, where
+  // the owner can Unlock one to fix a mistake (2026-08-19, Seni's ask).
+  const extraLines = extraLinesAll.filter((l) => !l.settledAt);
+  const directLines = directLinesAll.filter((l) => !l.settledAt);
+  const settledLines: (ExtraLine | DirectLine)[] = [
+    ...extraLinesAll.filter((l) => l.settledAt),
+    ...directLinesAll.filter((l) => l.settledAt),
+  ];
+
+  const payable = [...extraLines, ...directLines].filter((l) => l.approved && !l.declined);
+  const pending = [...extraLines, ...directLines].filter((l) => !l.approved && !l.declined);
+  const payableTotalUsd = Math.round(payable.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
+  const pendingTotalUsd = Math.round(pending.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
+
+  // Stay picker for "log an extra" (2026-08-19: the Add Extra form moved
+  // here from Team Management, so it needs its own booking list instead
+  // of inheriting stay context from a card it used to be nested inside).
+  // Not date-filtered — an extra can legitimately be logged for a stay
+  // that already departed (Gabriel remembering a chef he arranged last
+  // week), same reasoning stayDates() used to allow in StayExtras.tsx.
+  const stays = bookings
+    .filter((b) => !b.isBlock && b.status !== "Cancelled")
+    .sort((a, b) => new Date(b.arrival || 0).getTime() - new Date(a.arrival || 0).getTime())
+    .slice(0, 300)
+    .map((b) => ({
+      bookingId: b.id,
+      guestName: resolveGuestName(b, guestsById),
+      arrival: b.arrival || null,
+      departure: b.departure || null,
+    }));
+
+  return {
+    enabled: true,
+    extras: extraLines,
+    directBookings: directLines,
+    settledLines,
+    settlements,
+    pendingTotalUsd,
+    payableTotalUsd,
+    previewRate,
+    stays,
+  };
+}
+
+async function buildAndStoreCommissions(orgId: string, groupId: string) {
+  const board = await buildCommissionsBoard(orgId, groupId);
+  await redisSet(commissionsSnapshotKey(orgId), JSON.stringify(board), {
+    exSeconds: COMMISSIONS_SNAPSHOT_TTL_SECONDS,
+  }).catch(() => {}); // best-effort — a Redis hiccup must never break the fresh path
+  return board;
+}
+
+/** Schedules a background snapshot rebuild — called after every mutation so
+ * the NEXT snapshot read reflects the change even before any ?fresh=1. */
+function refreshCommissionsSnapshot(orgId: string): void {
+  after(buildAndStoreCommissions(orgId, EXTRAS_PROPERTY_GROUP_ID).catch(() => {}));
+}
+
 export async function GET(req: NextRequest) {
   const { session, groupId, error } = await context(req);
   if (error) return error;
 
   const viewerIsOwner = session.role === "CEO";
+  const viewer = { viewerIsOwner, viewerEmail: session.email };
   if (groupId !== EXTRAS_PROPERTY_GROUP_ID) {
     return NextResponse.json({
       enabled: false,
-      viewerIsOwner,
-      viewerEmail: session.email,
+      ...viewer,
       extras: [],
       directBookings: [],
       settledLines: [],
@@ -193,95 +309,27 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  const fresh = req.nextUrl.searchParams.get("fresh") === "1";
   try {
-    // PERF (2026-08-19, Seni: "commissions tab took about 20 seconds to load
-    // initially"): everything independent now runs concurrently instead of
-    // one-after-another. The dominant cost is OwnerRez itself on a cold Data
-    // Cache (getGuests alone fans out to one request per guest on a miss —
-    // see lib/ownerrez.ts's fetchGuestsByIds; the every-minute check-messages
-    // cron keeps it warm, but the first hit right after a fresh deploy pays
-    // full price). The DB reads (extras/settlements) and the FX preview never
-    // depended on that fetch, so they no longer wait behind it; only the
-    // direct-bookings list waits for the sync (which needs bookings first).
-    const bookingsPromise = getBookings(session.organizationId, groupId);
-    const guestsPromise = getGuests(session.organizationId, groupId).catch(() => [] as Guest[]);
-    const extrasPromise = listBookingExtras(session.organizationId);
-    const settlementsPromise = listCommissionSettlements(session.organizationId);
-    // Read-only preview for the UI before Seni actually settles — the real
-    // rate used in a settlement is fetched fresh again at settle time, never
-    // trusted from this earlier read.
-    const previewRatePromise = getUsdToRate("COP").catch(() => null);
-
-    const bookings = await bookingsPromise;
-    const bookingsById = new Map(bookings.map((b) => [b.id, b]));
-
-    await syncDirectBookingCommissions({ organizationId: session.organizationId, bookings }).catch((err) =>
-      console.error("[commissions] syncDirectBookingCommissions failed:", err)
-    );
-
-    const [guests, extrasByBooking, directAllFlat, settlements, previewRate] = await Promise.all([
-      guestsPromise,
-      extrasPromise,
-      listDirectBookingCommissions(session.organizationId),
-      settlementsPromise,
-      previewRatePromise,
-    ]);
-    const guestsById = buildGuestsById(guests);
-    const extrasAllFlat = [...extrasByBooking.values()].flat();
-
-    const extraLinesAll = extrasAllFlat.map((e) => toExtraLine(e, bookingsById, guestsById));
-    const directLinesAll = directAllFlat
-      .map((d) => toDirectLine(d, bookingsById, guestsById))
-      .filter((l): l is DirectLine => l !== null);
-
-    // Active board (pending/approved/declined) only ever shows unsettled
-    // lines — settled ones move to the history section below instead, where
-    // the owner can Unlock one to fix a mistake (2026-08-19, Seni's ask).
-    const extraLines = extraLinesAll.filter((l) => !l.settledAt);
-    const directLines = directLinesAll.filter((l) => !l.settledAt);
-    const settledLines: (ExtraLine | DirectLine)[] = [
-      ...extraLinesAll.filter((l) => l.settledAt),
-      ...directLinesAll.filter((l) => l.settledAt),
-    ];
-
-    const payable = [...extraLines, ...directLines].filter((l) => l.approved && !l.declined);
-    const pending = [...extraLines, ...directLines].filter((l) => !l.approved && !l.declined);
-    const payableTotalUsd = Math.round(payable.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
-    const pendingTotalUsd = Math.round(pending.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
-
-    // Stay picker for "log an extra" (2026-08-19: the Add Extra form moved
-    // here from Team Management, so it needs its own booking list instead
-    // of inheriting stay context from a card it used to be nested inside).
-    // Not date-filtered — an extra can legitimately be logged for a stay
-    // that already departed (Gabriel remembering a chef he arranged last
-    // week), same reasoning stayDates() used to allow in StayExtras.tsx.
-    const stays = bookings
-      .filter((b) => !b.isBlock && b.status !== "Cancelled")
-      .sort((a, b) => new Date(b.arrival || 0).getTime() - new Date(a.arrival || 0).getTime())
-      .slice(0, 300)
-      .map((b) => ({
-        bookingId: b.id,
-        guestName: resolveGuestName(b, guestsById),
-        arrival: b.arrival || null,
-        departure: b.departure || null,
-      }));
-
-    return NextResponse.json({
-      enabled: true,
-      viewerIsOwner,
-      viewerEmail: session.email,
-      extras: extraLines,
-      directBookings: directLines,
-      settledLines,
-      settlements,
-      pendingTotalUsd,
-      payableTotalUsd,
-      previewRate,
-      stays,
-    });
+    if (!fresh) {
+      const cached = await redisGet(commissionsSnapshotKey(session.organizationId)).catch(() => null);
+      if (cached) {
+        // Serve the snapshot instantly; refresh it in the background so the
+        // client's follow-up ?fresh=1 (and the next visitor) get current data.
+        after(buildAndStoreCommissions(session.organizationId, groupId).catch(() => {}));
+        return NextResponse.json({ ...(JSON.parse(cached) as Record<string, unknown>), ...viewer });
+      }
+    }
+    return NextResponse.json({ ...(await buildAndStoreCommissions(session.organizationId, groupId)), ...viewer });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/management/commissions failed:", message);
+    // Even a failed FRESH build should serve the snapshot rather than error —
+    // stale beats a "couldn't load" banner (same as /api/management).
+    const cached = await redisGet(commissionsSnapshotKey(session.organizationId)).catch(() => null);
+    if (cached) {
+      return NextResponse.json({ ...(JSON.parse(cached) as Record<string, unknown>), ...viewer });
+    }
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -328,6 +376,7 @@ export async function PUT(req: NextRequest) {
       if (!updated) {
         return NextResponse.json({ error: "No such commission, or it isn't currently settled." }, { status: 404 });
       }
+      refreshCommissionsSnapshot(session.organizationId);
       return NextResponse.json({ ok: true });
     } catch (err) {
       return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
@@ -357,6 +406,7 @@ export async function PUT(req: NextRequest) {
           { status: 404 }
         );
       }
+      refreshCommissionsSnapshot(session.organizationId);
       return NextResponse.json({ ok: true });
     } catch (err) {
       return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
@@ -394,6 +444,7 @@ export async function PUT(req: NextRequest) {
           { status: 404 }
         );
       }
+      refreshCommissionsSnapshot(session.organizationId);
       return NextResponse.json({ ok: true });
     } catch (err) {
       return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
@@ -418,6 +469,7 @@ export async function PUT(req: NextRequest) {
         { status: 404 }
       );
     }
+    refreshCommissionsSnapshot(session.organizationId);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Unknown error." }, { status: 500 });
@@ -570,6 +622,7 @@ export async function POST(req: NextRequest) {
       lineItemRefs,
     });
 
+    refreshCommissionsSnapshot(session.organizationId);
     return NextResponse.json({ ok: true, settlement });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";

@@ -15,9 +15,14 @@ import { OccupancyCalendar } from "@/components/OccupancyCalendar";
 import { RevenueBySourceChart } from "@/components/RevenueBySourceChart";
 import { listBookingExtras, EXTRAS_PROPERTY_GROUP_ID } from "@/lib/bookingExtras";
 import { summarizeExtras, yearStartIso, EMPTY_EXTRAS_SUMMARY } from "@/lib/extrasAnalytics";
+import { ssrSnapshotFirst } from "@/lib/ssrSnapshot";
+import { AutoRefresh } from "@/components/AutoRefresh";
+import type { Booking, Guest } from "@/lib/types";
 import { t } from "@/lib/i18n";
 
 export const dynamic = "force-dynamic";
+
+const DASHBOARD_SNAPSHOT_TTL_SECONDS = 6 * 60 * 60;
 
 export default async function DashboardPage() {
   const session = await getServerSession();
@@ -25,13 +30,30 @@ export default async function DashboardPage() {
   const cookieStore = await cookies();
   const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
   const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
-  const [bookings, guests] = await Promise.all([
-    getBookings(session?.organizationId, groupId),
-    // Guest records — many channel bookings carry no name on the booking
-    // itself; resolveGuestName fills it from the guest profile (2026-08-16,
-    // Seni's ask: names were showing as "—" under Upcoming arrivals).
-    getGuests(session?.organizationId, groupId).catch(() => []),
-  ]);
+  // INSTANT LOAD (2026-08-19, Seni's "everything instant" pass): the page
+  // used to block its whole HTML response on live getBookings+getGuests —
+  // now the last known-good pair is served from a Redis snapshot instantly,
+  // rebuilt in the background, and <AutoRefresh /> below swaps the fresh
+  // copy in moments later. `raw` payloads are stripped before storing (the
+  // dashboard never reads them, and they'd multiply the snapshot's size).
+  const { data, fromSnapshot } = await ssrSnapshotFirst<{ bookings: Booking[]; guests: Guest[] }>(
+    `dashboard:data:${session?.organizationId ?? "default"}:${groupId}`,
+    DASHBOARD_SNAPSHOT_TTL_SECONDS,
+    async () => {
+      const [bookings, guests] = await Promise.all([
+        getBookings(session?.organizationId, groupId),
+        // Guest records — many channel bookings carry no name on the booking
+        // itself; resolveGuestName fills it from the guest profile (2026-08-16,
+        // Seni's ask: names were showing as "—" under Upcoming arrivals).
+        getGuests(session?.organizationId, groupId).catch(() => []),
+      ]);
+      return {
+        bookings: bookings.map((b) => ({ ...b, raw: undefined })),
+        guests: guests.map((g) => ({ ...g, raw: undefined })),
+      };
+    }
+  );
+  const { bookings, guests } = data;
   const guestsById = buildGuestsById(guests);
   // READ_ONLY team logins get an ops-focused dashboard: no revenue boxes,
   // no Total column, no MTD money stats (2026-08-16, Seni's ask). Admins
@@ -83,6 +105,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
+      <AutoRefresh enabled={fromSnapshot} />
       <div>
         <h1 className="text-xl font-semibold">{t("dash.title", lang)}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">

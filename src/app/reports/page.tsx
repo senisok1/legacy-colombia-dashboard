@@ -12,8 +12,12 @@ import { ExecutiveSummary } from "@/components/ExecutiveSummary";
 import { TrendSummary } from "@/components/TrendSummary";
 import { RevenueChart } from "@/components/charts/RevenueChart";
 import { SourceChart } from "@/components/charts/SourceChart";
+import { ssrSnapshotFirst } from "@/lib/ssrSnapshot";
+import { AutoRefresh } from "@/components/AutoRefresh";
 
 export const dynamic = "force-dynamic";
+
+const REPORTS_SNAPSHOT_TTL_SECONDS = 6 * 60 * 60;
 
 export default async function ReportsPage() {
   const session = await getServerSession();
@@ -24,17 +28,35 @@ export default async function ReportsPage() {
   const viewer = session ? await getUserByEmail(session.email).catch(() => null) : null;
   const groupId = effectivePropertyGroupId(cookieStore.get(PROPERTY_GROUP_COOKIE)?.value, viewer?.propertyAccess);
   const orgId = session?.organizationId;
-  const [bookings, report, trendReport] = await Promise.all([
-    getBookings(orgId, groupId),
-    buildExecutiveReport(orgId, groupId),
-    buildTrendReport(orgId, groupId),
-  ]);
-  const monthly = revenueByMonth(bookings, 12);
-  const bySource = revenueBySource(bookings);
-  const occ365 = occupancyRate(bookings, 365);
+  // INSTANT LOAD (2026-08-19, Seni's "everything instant" pass): same
+  // snapshot-first pattern as the Dashboard — the derived report figures are
+  // served from Redis instantly, rebuilt in the background, and AutoRefresh
+  // swaps the fresh copy in moments later. The already-derived numbers are
+  // snapshotted (not the raw bookings), so this stores kilobytes, not the
+  // whole booking list.
+  const { data, fromSnapshot } = await ssrSnapshotFirst(
+    `reports:data:${orgId ?? "default"}:${groupId}`,
+    REPORTS_SNAPSHOT_TTL_SECONDS,
+    async () => {
+      const [bookings, report, trendReport] = await Promise.all([
+        getBookings(orgId, groupId),
+        buildExecutiveReport(orgId, groupId),
+        buildTrendReport(orgId, groupId),
+      ]);
+      return {
+        report,
+        trendReport,
+        monthly: revenueByMonth(bookings, 12),
+        bySource: revenueBySource(bookings),
+        occ365: occupancyRate(bookings, 365),
+      };
+    }
+  );
+  const { report, trendReport, monthly, bySource, occ365 } = data;
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
+      <AutoRefresh enabled={fromSnapshot} />
       <div>
         <h1 className="text-xl font-semibold">Reports — {propertyGroupById(groupId).label}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">

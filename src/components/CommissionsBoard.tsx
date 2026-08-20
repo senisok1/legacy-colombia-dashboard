@@ -207,9 +207,9 @@ export function CommissionsBoard() {
   const [payoutDrafts, setPayoutDrafts] = useState<Record<string, string>>({});
   const hasDataRef = useRef(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh = false) => {
     try {
-      const res = await fetch("/api/management/commissions");
+      const res = await fetch(fresh ? "/api/management/commissions?fresh=1" : "/api/management/commissions");
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setData(json as BoardData);
@@ -221,7 +221,11 @@ export function CommissionsBoard() {
   }, [t]);
 
   useEffect(() => {
+    // Instant paint from the server's Redis snapshot, then a fresh copy
+    // right behind it (2026-08-19, Seni: "loading commissions still takes
+    // too long. I need them to be instant") — same pattern as ManagementBoard.
     void load();
+    void load(true);
   }, [load]);
 
   async function decide(l: Line, approved: boolean, declined: boolean, declinedReason?: string) {
@@ -234,7 +238,7 @@ export function CommissionsBoard() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
     } finally {
@@ -260,7 +264,7 @@ export function CommissionsBoard() {
         delete next[l.id];
         return next;
       });
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
     } finally {
@@ -294,7 +298,7 @@ export function CommissionsBoard() {
         delete next[l.id];
         return next;
       });
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
     } finally {
@@ -313,7 +317,7 @@ export function CommissionsBoard() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
     } finally {
@@ -345,7 +349,7 @@ export function CommissionsBoard() {
       setSettleTarget(null);
       setBufferPct("0");
       setNote("");
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
     } finally {
@@ -378,7 +382,7 @@ export function CommissionsBoard() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setShowExtraForm(false);
       setExtraDraft(EMPTY_EXTRA_DRAFT);
-      await load();
+      await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
     } finally {

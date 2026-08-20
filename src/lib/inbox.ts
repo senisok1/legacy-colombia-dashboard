@@ -225,8 +225,48 @@ const INBOX_PAGE_SIZE = 20;
 // thread-message result from leaking into another org's poll/enrich call.
 // Exported (not just used internally) so api/cron/check-messages/route.ts's
 // polling loop can share this exact cache — see the comment above.
+// INSTANT CONVERSATION OPEN (2026-08-19, Seni: "loading conversations on the
+// messaging / inbox tabs still take too long. I need them to be instant"):
+// a per-thread Redis snapshot of the last known-good message list, written
+// on every REAL fetch below (unstable_cache only runs the wrapped function
+// on a miss, so the write happens exactly when fresh data was paid for).
+// The thread-open route serves this in one O(1) GET and refreshes in the
+// background — safe because the frontend's enrich pass re-fetches fully
+// live right after paint and merges, so a snapshot can only ever be briefly
+// stale on screen, never permanently. 7-day TTL, same reasoning as the
+// thread-summaries snapshot above: an old conversation that paints
+// instantly and corrects itself in seconds beats a spinner.
+const THREAD_MESSAGES_SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+function threadMessagesSnapshotKey(organizationId: string | undefined, threadId: number): string {
+  return `thread-messages-snap:${organizationId ?? "default"}:${threadId}`;
+}
+
+export async function getSnapshotThreadMessages(
+  threadId: number,
+  organizationId?: string
+): Promise<ThreadMessage[] | null> {
+  if (!isRedisConfigured()) return null;
+  try {
+    const raw = await redisGet(threadMessagesSnapshotKey(organizationId, threadId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ThreadMessage[];
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch {
+    return null; // cache-layer hiccup must never break opening a conversation
+  }
+}
+
 export const getCachedThreadMessages = unstable_cache(
-  (threadId: number, organizationId?: string) => getThreadMessages(threadId, organizationId),
+  async (threadId: number, organizationId?: string) => {
+    const messages = await getThreadMessages(threadId, organizationId);
+    if (isRedisConfigured() && messages.length > 0) {
+      await redisSet(threadMessagesSnapshotKey(organizationId, threadId), JSON.stringify(messages), {
+        exSeconds: THREAD_MESSAGES_SNAPSHOT_TTL_SECONDS,
+      }).catch(() => {}); // best-effort
+    }
+    return messages;
+  },
   ["ownerrez-thread-messages-v1"],
   { revalidate: THREAD_MESSAGES_CACHE_SECONDS }
 );

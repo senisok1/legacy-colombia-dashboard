@@ -1,7 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { getBookings, getGuests } from "@/lib/ownerrez";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
-import { getCachedThreadSummaryLite, getCachedThreadMessages } from "@/lib/inbox";
+import {
+  getCachedThreadSummaryLite,
+  getCachedThreadMessages,
+  getSnapshotThreadMessages,
+  getSnapshotThreadSummaries,
+} from "@/lib/inbox";
 import { getCachedTranslations } from "@/lib/translate";
 import { resolveGuestName, buildGuestsById } from "@/lib/guestName";
 import { getPendingDraftByThreadId } from "@/lib/pendingDrafts";
@@ -66,13 +71,41 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
     return NextResponse.json({ error: "Invalid threadId." }, { status: 400 });
   }
 
-  const warm = await getCachedThreadSummaryLite(threadId, orgId, __groupId);
-
-  const [messages, pendingDraft, coldLookup] = await Promise.all([
-    getCachedThreadMessages(threadId, orgId),
+  // INSTANT OPEN (2026-08-19, Seni: "loading conversations still takes too
+  // long. I need them to be instant"): three O(1) Redis reads up front —
+  // the lite booking/guestName entry, the per-thread message snapshot, and
+  // the pending draft. When the snapshot hits, NO OwnerRez call blocks this
+  // response at all; a background refresh (after()) re-warms the 120s
+  // message cache + rewrites the snapshot, and the frontend's enrich pass
+  // does a fully-live re-fetch and merge seconds later, so staleness on
+  // screen is measured in seconds and self-heals.
+  const [warmLite, snapMessages, pendingDraft] = await Promise.all([
+    getCachedThreadSummaryLite(threadId, orgId, __groupId),
+    getSnapshotThreadMessages(threadId, orgId),
     getPendingDraftByThreadId(threadId, orgId),
-    warm ? Promise.resolve(null) : Promise.all([getBookings(orgId, __groupId), getGuests(orgId, __groupId)]),
   ]);
+
+  let messages;
+  if (snapMessages) {
+    messages = snapMessages;
+    after(getCachedThreadMessages(threadId, orgId).then(() => {}).catch(() => {}));
+  } else {
+    messages = await getCachedThreadMessages(threadId, orgId);
+  }
+
+  // Second-level warm lookup (2026-08-19): the lite cache only covers
+  // threads the inbox list computed in the last 30 min — an older thread
+  // used to fall straight through to a live getBookings+getGuests fetch
+  // (the 10-20s cold case). The 7-day thread-summaries snapshot is another
+  // single Redis GET and carries booking+guestName for every thread the
+  // inbox has ever listed, so the truly-cold OwnerRez path is now reserved
+  // for threads Redis has genuinely never seen.
+  let warm = warmLite;
+  if (!warm) {
+    const summariesSnap = await getSnapshotThreadSummaries(orgId, __groupId).catch(() => null);
+    const hit = summariesSnap?.find((s) => s.threadId === threadId);
+    if (hit) warm = { booking: hit.booking, guestName: hit.guestName };
+  }
 
   let booking: Booking | null;
   let guestName: string;
@@ -80,7 +113,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
     booking = warm.booking;
     guestName = warm.guestName;
   } else {
-    const [bookings, guests] = coldLookup!;
+    const [bookings, guests] = await Promise.all([
+      getBookings(orgId, __groupId),
+      getGuests(orgId, __groupId),
+    ]);
     booking = bookings.find((b) => b.threadIds.includes(threadId)) ?? null;
     guestName = booking ? resolveGuestName(booking, buildGuestsById(guests)) : "Guest";
   }
