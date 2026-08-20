@@ -15,6 +15,19 @@ export const MARKETING_GROUP_TABS: NavTab[] = [
   { href: "/sales-pipeline", label: "Pipeline" },
 ];
 
+// Team Management + Team Expense Request + Team Activity Log, grouped
+// 2026-08-20 (Seni's ask: "move 'team expense request' and 'team activity
+// log' tabs as drop downs under 'team management'") — all three were
+// separate top-level tabs; this collapses them into one dropdown the same
+// way Messaging/Marketing/Reports/Settings already work. Routes are
+// unchanged (/management, /team-expenses, /team-log), so nothing that
+// linked directly to any of them breaks.
+export const TEAM_MANAGEMENT_GROUP_TABS: NavTab[] = [
+  { href: "/management", label: "Team Management" },
+  { href: "/team-expenses", label: "Team Expense Request" },
+  { href: "/team-log", label: "Team Activity Log" },
+];
+
 // Bill Pay stands alone as of 2026-08-17 (Seni's ask): the Vendors entry
 // was dropped ("we don't need that anymore since we have the bill pay tab
 // working the way it does") and Maintenance became the Team Expense Request

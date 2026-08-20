@@ -8,6 +8,7 @@ import {
   MESSAGING_GROUP_TABS,
   REPORTS_GROUP_TABS,
   SETTINGS_GROUP_TABS,
+  TEAM_MANAGEMENT_GROUP_TABS,
   type NavTab,
 } from "@/lib/navGroups";
 import { useCurrency } from "@/components/CurrencyProvider";
@@ -31,16 +32,14 @@ type NavEntry = { type: "link"; href: string; label: string } | { type: "group";
 
 const navEntries: NavEntry[] = [
   { type: "link", href: "/dashboard", label: "Dashboard" },
-  // Management (2026-08-16): the on-site team's central tab — upcoming
-  // stays, paid-extras/event notes, team activity log. Also the home base
-  // for the READ_ONLY team login (see src/proxy.ts's role gate).
-  { type: "link", href: "/management", label: "Team Management" },
-  // Team Expense Request (2026-08-17) — the on-site team asks for spend, the
-  // owner approves, whoever buys it marks it completed.
-  { type: "link", href: "/team-expenses", label: "Team Expense Request" },
-  // Team Activity Log sits to the RIGHT of Team Expense Request (2026-08-17,
-  // Seni's ask) — it was briefly the other way round.
-  { type: "link", href: "/team-log", label: "Team Activity Log" },
+  // Team Management dropdown (2026-08-16, expanded 2026-08-20 per Seni's
+  // ask): the on-site team's central tab — upcoming stays, paid-extras/event
+  // notes — now grouping Team Expense Request and Team Activity Log as
+  // sub-items instead of separate top-level tabs. Also the home base for the
+  // READ_ONLY team login (see src/proxy.ts's role gate); TEAM_HIDDEN_LABELS
+  // below doesn't include "Team Management" so this group stays visible to
+  // team logins exactly as the three separate tabs did before.
+  { type: "group", label: "Team Management", tabs: TEAM_MANAGEMENT_GROUP_TABS },
   // Commissions (2026-08-19) — shared by Seni and Gabriel: extras commission
   // + direct-booking referrals, owner approves/settles, Gabriel views.
   { type: "link", href: "/commissions", label: "Commissions" },
@@ -140,11 +139,13 @@ function Badge({ count, active }: { count: number; active: boolean }) {
 // members see Dashboard, Management, Bill Pay, and Settings only. Admins
 // keep everything. Display-layer only; the real enforcement is the proxy's
 // role gate (a team member typing /messaging still can't change anything).
-// Team members (READ_ONLY) see EXACTLY these tabs (2026-08-17, Seni's spec):
-// Dashboard, Team Management, Team Expense Request, Team Activity Log, and a
-// plain Settings link (no Settings dropdown — no Add a Team Member, no
-// Billing). Everything else is hidden here AND blocked in src/proxy.ts, so
-// typing the URL doesn't get around it.
+// Team members (READ_ONLY) see EXACTLY these tabs (2026-08-17, Seni's spec;
+// Team Expense Request/Team Activity Log became sub-items of the Team
+// Management dropdown 2026-08-20): Dashboard, Team Management (with Team
+// Expense Request and Team Activity Log nested under it), and a plain
+// Settings link (no Settings dropdown — no Add a Team Member, no Billing).
+// Everything else is hidden here AND blocked in src/proxy.ts, so typing the
+// URL doesn't get around it.
 const TEAM_HIDDEN_LABELS = new Set(["Messaging", "Marketing", "Reports", "Bill Pay"]);
 
 // Maps each nav entry's internal (English) label to its i18n key — the
