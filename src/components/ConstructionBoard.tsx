@@ -46,7 +46,7 @@ type Item = {
 type LogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled" | "edited";
   detail: string | null;
   actor: string;
   at: string;
@@ -114,6 +114,16 @@ export function ConstructionBoard() {
   // Estimated completion date (2026-08-20, Seni's ask) — per-item saving
   // indicator, same pattern as togglingId/removingId above.
   const [savingDateId, setSavingDateId] = useState<string | null>(null);
+  // Edit title/category/notes (2026-08-20, Seni's ask: "an edit tab next to
+  // progress notes so that I can modify the 'add an item' description") —
+  // inline form, one open at a time, same access as the rest of the tab.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{ title: string; category: string; notes: string }>({
+    title: "",
+    category: "",
+    notes: "",
+  });
+  const [savingEditId, setSavingEditId] = useState<string | null>(null);
   // Same guard as TeamActivityLog: a failed background refresh must never
   // blank out a list that's already on screen.
   const hasDataRef = useRef(false);
@@ -303,6 +313,42 @@ export function ConstructionBoard() {
     }
   }
 
+  function startEdit(item: Item) {
+    setEditingId(item.id);
+    setEditDraft({ title: item.title, category: item.category ?? "", notes: item.notes ?? "" });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  async function saveEdit(item: Item) {
+    const title = editDraft.title.trim();
+    if (!title || savingEditId) return;
+    setSavingEditId(item.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: item.id,
+          title,
+          category: editDraft.category.trim() || null,
+          notes: editDraft.notes.trim() || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setEditingId(null);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save the edit.");
+    } finally {
+      setSavingEditId(null);
+    }
+  }
+
   const open = (items ?? []).filter((i) => !i.completed);
   const completed = (items ?? []).filter((i) => i.completed);
   const openGroups = groupByCategory(open);
@@ -315,6 +361,7 @@ export function ConstructionBoard() {
   function ItemRow({ item, completedRow }: { item: Item; completedRow: boolean }) {
     const notesOpen = openNotesId === item.id;
     const notes = notesByItem[item.id];
+    const editing = editingId === item.id;
     return (
       <li className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
         <div className="flex items-start gap-2">
@@ -355,6 +402,12 @@ export function ConstructionBoard() {
             {t("construction.notesButton")}
             {item.noteCount > 0 ? ` (${item.noteCount})` : ""}
           </button>
+          <button
+            onClick={() => (editing ? cancelEdit() : startEdit(item))}
+            className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
+          >
+            {t("construction.editButton")}
+          </button>
           {canDelete && (
             <button
               onClick={() => void remove(item)}
@@ -365,6 +418,52 @@ export function ConstructionBoard() {
             </button>
           )}
         </div>
+
+        {editing && (
+          <div className="mt-2 ml-6 space-y-1.5 border-l-2 border-black/10 dark:border-white/10 pl-3">
+            <div>
+              <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editTitleLabel")}</label>
+              <input
+                className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                value={editDraft.title}
+                onChange={(e) => setEditDraft((d) => ({ ...d, title: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editCategoryLabel")}</label>
+              <input
+                list="construction-categories"
+                className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                value={editDraft.category}
+                onChange={(e) => setEditDraft((d) => ({ ...d, category: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-black/50 dark:text-white/50">{t("construction.editNotesLabel")}</label>
+              <input
+                className="mt-0.5 w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                value={editDraft.notes}
+                onChange={(e) => setEditDraft((d) => ({ ...d, notes: e.target.value }))}
+              />
+            </div>
+            <div className="flex gap-1.5 pt-0.5">
+              <button
+                onClick={() => void saveEdit(item)}
+                disabled={savingEditId === item.id || !editDraft.title.trim()}
+                className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
+              >
+                {savingEditId === item.id ? t("construction.saving") : t("construction.saveEdit")}
+              </button>
+              <button
+                onClick={cancelEdit}
+                disabled={savingEditId === item.id}
+                className="shrink-0 rounded-md px-2 py-1 text-xs text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80 disabled:opacity-40"
+              >
+                {t("construction.cancelEdit")}
+              </button>
+            </div>
+          </div>
+        )}
 
         {notesOpen && (
           <div className="mt-2 ml-6 space-y-2 border-l-2 border-black/10 dark:border-white/10 pl-3">

@@ -45,11 +45,12 @@ export type ConstructionItem = {
 export type ConstructionLogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled" | "edited";
   /** Extra context for an action that isn't fully self-describing from
-   * action+itemTitle alone — currently only "scheduled" uses this (e.g. "Set
-   * estimated completion to Aug 25, 2026" or "Cleared estimated completion").
-   * Added 2026-08-20 alongside the estimated-completion-date feature. */
+   * action+itemTitle alone — "scheduled" (e.g. "Set estimated completion to
+   * Aug 25, 2026" or "Cleared estimated completion") and "edited" (e.g.
+   * "Title changed; Category changed") both use this. Added 2026-08-20
+   * alongside the estimated-completion-date feature. */
   detail: string | null;
   actor: string;
   at: string;
@@ -389,6 +390,91 @@ export async function setConstructionItemEstimatedCompletion(input: {
     detail: input.estimatedCompletionDate
       ? `Set estimated completion to ${formatEstimatedDate(input.estimatedCompletionDate)}`
       : "Cleared estimated completion date",
+    actorEmail: input.actorEmail,
+    actorName: input.actorName,
+  });
+  return itemFromRow(row);
+}
+
+/** Edits the title/notes/category originally entered on the "add an item"
+ * form (2026-08-20, Seni's ask: "an edit tab next to progress notes so that
+ * I can modify the 'add an item' description if I need to"). Same access as
+ * toggling completed or the estimated-completion date — anyone with tab
+ * access (CEO or the CONSTRUCTION login), NOT Seni-restricted, since Seni
+ * didn't ask for this one to be locked down the way delete/import are.
+ * Fields are optional so a caller can send only what changed; undefined
+ * means "leave as-is", while an explicit null on notes/category clears it. */
+export async function updateConstructionItem(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  id: string;
+  title?: string;
+  notes?: string | null;
+  category?: string | null;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<ConstructionItem | null> {
+  const before = await queryOne<{ title: string; notes: string | null; category: string | null }>(
+    `select title, notes, category from construction_items
+     where id = $1 and organization_id = $2 and property_group_id = $3`,
+    [input.id, input.organizationId, input.propertyGroupId]
+  );
+  if (!before) return null;
+
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  const changed: string[] = [];
+  let i = 4;
+
+  if (input.title !== undefined && input.title !== before.title) {
+    sets.push(`title = $${i++}`);
+    values.push(input.title);
+    changed.push("Title changed");
+  }
+  if (input.category !== undefined && input.category !== before.category) {
+    sets.push(`category = $${i++}`);
+    values.push(input.category);
+    changed.push("Category changed");
+  }
+  if (input.notes !== undefined && input.notes !== before.notes) {
+    sets.push(`notes = $${i++}`);
+    values.push(input.notes);
+    changed.push("Notes changed");
+  }
+
+  if (sets.length === 0) {
+    // Nothing actually changed — return the current row as-is, no log entry.
+    const row = await queryOne<ItemRow>(
+      `select ci.id, ci.title, ci.notes, ci.category, ci.completed, ci.completed_by_email, ci.completed_by_name,
+              ci.completed_at, ci.created_by_email, ci.created_by_name, ci.created_at,
+              ci.estimated_completion_date::text as estimated_completion_date,
+              (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count
+       from construction_items ci
+       where ci.id = $1 and ci.organization_id = $2 and ci.property_group_id = $3`,
+      [input.id, input.organizationId, input.propertyGroupId]
+    );
+    return row ? itemFromRow(row) : null;
+  }
+
+  const row = await queryOne<ItemRow>(
+    `update construction_items ci
+       set ${sets.join(", ")}
+     where id = $1 and organization_id = $2 and property_group_id = $3
+     returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
+               created_by_email, created_by_name, created_at,
+               estimated_completion_date::text as estimated_completion_date,
+               (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
+    [input.id, input.organizationId, input.propertyGroupId, ...values]
+  );
+  if (!row) return null;
+
+  await logActivity({
+    organizationId: input.organizationId,
+    propertyGroupId: input.propertyGroupId,
+    itemId: row.id,
+    itemTitle: row.title,
+    action: "edited",
+    detail: changed.join("; "),
     actorEmail: input.actorEmail,
     actorName: input.actorName,
   });

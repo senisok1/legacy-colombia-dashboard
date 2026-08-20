@@ -412,6 +412,23 @@ const STRINGS: Dict = {
   },
   "construction.posting": { English: "Posting…", Spanish: "Publicando…", Portuguese: "Publicando…" },
 
+  // Edit item (2026-08-20, Seni's ask: "an edit tab next to progress notes
+  // so that I can modify the 'add an item' description if I need to") —
+  // lets title/category/notes (what was typed on the add-item form) be
+  // corrected later. Same access as the rest of the tab, not Seni-only.
+  "construction.actionEdited": {
+    English: "edited",
+    Spanish: "editó",
+    Portuguese: "editou",
+  },
+  "construction.editButton": { English: "Edit", Spanish: "Editar", Portuguese: "Editar" },
+  "construction.editTitleLabel": { English: "Title", Spanish: "Título", Portuguese: "Título" },
+  "construction.editCategoryLabel": { English: "Category", Spanish: "Categoría", Portuguese: "Categoria" },
+  "construction.editNotesLabel": { English: "Notes", Spanish: "Notas", Portuguese: "Notas" },
+  "construction.saveEdit": { English: "Save", Spanish: "Guardar", Portuguese: "Salvar" },
+  "construction.saving": { English: "Saving…", Spanish: "Guardando…", Portuguese: "Salvando…" },
+  "construction.cancelEdit": { English: "Cancel", Spanish: "Cancelar", Portuguese: "Cancelar" },
+
   // ---------- Team Requests ----------
   "req.heading": { English: "Requests needing accept or deny", Spanish: "Solicitudes por aceptar o rechazar", Portuguese: "Solicitações a aceitar ou recusar" },
   "req.subtext": {

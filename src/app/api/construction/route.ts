@@ -10,6 +10,7 @@ import {
   listConstructionItems,
   setConstructionItemCompleted,
   setConstructionItemEstimatedCompletion,
+  updateConstructionItem,
 } from "@/lib/construction";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -95,12 +96,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Toggle completed/reopened, OR set/clear the estimated completion date
-// (2026-08-20, Seni's ask: "add estimated date of completion for each open
-// item for the construction team to input") — anyone with tab access (CEO
-// or CONSTRUCTION), same as toggling completed always was. A single PATCH
-// body only ever carries one or the other; `completed` takes priority if
-// somehow both are present.
+// Toggle completed/reopened, set/clear the estimated completion date, OR
+// edit title/notes/category (2026-08-20, Seni's ask: "an edit tab next to
+// progress notes so that I can modify the 'add an item' description") —
+// anyone with tab access (CEO or CONSTRUCTION), same as everything else
+// here. A single PATCH body only ever carries one kind of update; checked
+// in order (completed, then estimatedCompletionDate, then title/notes/
+// category) with `completed` taking priority if somehow more than one is
+// present.
 export async function PATCH(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
@@ -109,7 +112,14 @@ export async function PATCH(req: NextRequest) {
   }
 
   const body = (await req.json().catch(() => null)) as
-    | { id?: string; completed?: boolean; estimatedCompletionDate?: string | null }
+    | {
+        id?: string;
+        completed?: boolean;
+        estimatedCompletionDate?: string | null;
+        title?: string;
+        notes?: string | null;
+        category?: string | null;
+      }
     | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
@@ -138,6 +148,31 @@ export async function PATCH(req: NextRequest) {
         propertyGroupId: groupId,
         id: body.id,
         estimatedCompletionDate: body.estimatedCompletionDate ?? null,
+        actorEmail: session.email,
+        actorName: user?.name ?? null,
+      });
+      return item ? NextResponse.json({ ok: true, item }) : NextResponse.json({ error: "No such item." }, { status: 404 });
+    }
+
+    if (body.title !== undefined || body.notes !== undefined || body.category !== undefined) {
+      const title = body.title !== undefined ? body.title.trim() : undefined;
+      if (title !== undefined) {
+        if (!title) return NextResponse.json({ error: "Give the item a title." }, { status: 400 });
+        if (title.length > 300) return NextResponse.json({ error: "Keep the title under 300 characters." }, { status: 400 });
+      }
+      const notes = body.notes !== undefined ? body.notes?.trim() || null : undefined;
+      if (notes && notes.length > 2000) return NextResponse.json({ error: "Keep notes under 2000 characters." }, { status: 400 });
+      const category = body.category !== undefined ? body.category?.trim() || null : undefined;
+      if (category && category.length > 100) {
+        return NextResponse.json({ error: "Keep the category under 100 characters." }, { status: 400 });
+      }
+      const item = await updateConstructionItem({
+        organizationId: session.organizationId,
+        propertyGroupId: groupId,
+        id: body.id,
+        title,
+        notes,
+        category,
         actorEmail: session.email,
         actorName: user?.name ?? null,
       });
