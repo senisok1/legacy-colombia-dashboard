@@ -32,14 +32,29 @@ export type ConstructionItem = {
   completedAt: string | null;
   createdBy: string;
   createdAt: string;
+  /** How many notes are in this item's thread — drives the "Notes (N)"
+   * button in ConstructionBoard.tsx without a separate per-item fetch. */
+  noteCount: number;
 };
 
 export type ConstructionLogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted";
   actor: string;
   at: string;
+};
+
+/** One entry in an item's notes thread (2026-08-20, Seni's ask: "put in
+ * notes on how it was fixed or that it wasn't fixed and what they need to do
+ * next"). Append-only — no edit/delete affordance, it's meant as a running
+ * progress log rather than a single editable field. */
+export type ConstructionItemNote = {
+  id: string;
+  itemId: string;
+  body: string;
+  author: string;
+  createdAt: string;
 };
 
 type ItemRow = {
@@ -53,6 +68,16 @@ type ItemRow = {
   completed_at: string | null;
   created_by_email: string;
   created_by_name: string | null;
+  created_at: string;
+  note_count: string;
+};
+
+type NoteRow = {
+  id: string;
+  item_id: string;
+  body: string;
+  author_email: string;
+  author_name: string | null;
   created_at: string;
 };
 
@@ -80,6 +105,7 @@ function itemFromRow(r: ItemRow): ConstructionItem {
     completedAt: r.completed_at,
     createdBy: displayName(r.created_by_email, r.created_by_name),
     createdAt: r.created_at,
+    noteCount: Number(r.note_count) || 0,
   };
 }
 
@@ -93,6 +119,16 @@ function logFromRow(r: LogRow): ConstructionLogEntry {
   };
 }
 
+function noteFromRow(r: NoteRow): ConstructionItemNote {
+  return {
+    id: r.id,
+    itemId: r.item_id,
+    body: r.body,
+    author: displayName(r.author_email, r.author_name),
+    createdAt: r.created_at,
+  };
+}
+
 /** Open items first (newest first within each group), so the checklist
  * naturally surfaces what's outstanding without a separate filter toggle. */
 export async function listConstructionItems(
@@ -100,14 +136,75 @@ export async function listConstructionItems(
   propertyGroupId: string
 ): Promise<ConstructionItem[]> {
   const rows = await query<ItemRow>(
-    `select id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
-            created_by_email, created_by_name, created_at
-     from construction_items
-     where organization_id = $1 and property_group_id = $2
-     order by completed asc, created_at desc`,
+    `select ci.id, ci.title, ci.notes, ci.category, ci.completed, ci.completed_by_email, ci.completed_by_name,
+            ci.completed_at, ci.created_by_email, ci.created_by_name, ci.created_at,
+            (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count
+     from construction_items ci
+     where ci.organization_id = $1 and ci.property_group_id = $2
+     order by ci.completed asc, ci.created_at desc`,
     [organizationId, propertyGroupId]
   );
   return rows.map(itemFromRow);
+}
+
+/** One item's notes thread, oldest first (reads top-to-bottom like a
+ * conversation). Org+property-group scoped via a join back to
+ * construction_items so a construction-team login on one property can't
+ * read another's notes via a guessed item id. */
+export async function listConstructionItemNotes(
+  organizationId: string,
+  propertyGroupId: string,
+  itemId: string
+): Promise<ConstructionItemNote[]> {
+  const rows = await query<NoteRow>(
+    `select n.id, n.item_id, n.body, n.author_email, n.author_name, n.created_at
+     from construction_item_notes n
+     join construction_items ci on ci.id = n.item_id
+     where n.item_id = $1 and ci.organization_id = $2 and ci.property_group_id = $3
+     order by n.created_at asc`,
+    [itemId, organizationId, propertyGroupId]
+  );
+  return rows.map(noteFromRow);
+}
+
+/** Appends a note to an item's thread and logs a "noted" activity entry
+ * (same denormalized item_title-snapshot pattern as every other action here)
+ * so the activity log stays a complete "who did what" trail without anyone
+ * having to open each item's notes to notice progress happened. */
+export async function addConstructionItemNote(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  itemId: string;
+  body: string;
+  authorEmail: string;
+  authorName: string | null;
+}): Promise<ConstructionItemNote | null> {
+  const item = await queryOne<{ id: string; title: string }>(
+    `select id, title from construction_items where id = $1 and organization_id = $2 and property_group_id = $3`,
+    [input.itemId, input.organizationId, input.propertyGroupId]
+  );
+  if (!item) return null;
+
+  const row = await queryOne<NoteRow>(
+    `insert into construction_item_notes
+       (organization_id, property_group_id, item_id, body, author_email, author_name)
+     values ($1, $2, $3, $4, $5, $6)
+     returning id, item_id, body, author_email, author_name, created_at`,
+    [input.organizationId, input.propertyGroupId, input.itemId, input.body, input.authorEmail, input.authorName]
+  );
+  if (!row) throw new Error("Failed to add the note.");
+
+  await logActivity({
+    organizationId: input.organizationId,
+    propertyGroupId: input.propertyGroupId,
+    itemId: item.id,
+    itemTitle: item.title,
+    action: "noted",
+    actorEmail: input.authorEmail,
+    actorName: input.authorName,
+  });
+
+  return noteFromRow(row);
 }
 
 export async function listConstructionActivityLog(
@@ -201,14 +298,15 @@ export async function setConstructionItemCompleted(input: {
   actorName: string | null;
 }): Promise<ConstructionItem | null> {
   const row = await queryOne<ItemRow>(
-    `update construction_items
+    `update construction_items ci
        set completed = $4,
            completed_by_email = case when $4 then $5 else null end,
            completed_by_name = case when $4 then $6 else null end,
            completed_at = case when $4 then now() else null end
      where id = $1 and organization_id = $2 and property_group_id = $3
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
-               created_by_email, created_by_name, created_at`,
+               created_by_email, created_by_name, created_at,
+               (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
     [input.id, input.organizationId, input.propertyGroupId, input.completed, input.actorEmail, input.actorName]
   );
   if (!row) return null;

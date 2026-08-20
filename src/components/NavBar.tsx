@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
+  CONSTRUCTION_GROUP_TABS,
   MARKETING_GROUP_TABS,
   MESSAGING_GROUP_TABS,
   REPORTS_GROUP_TABS,
@@ -48,9 +49,13 @@ const navEntries: NavEntry[] = [
   // for now (see visibleEntries' propertyGroupId filter below, same
   // mechanism as Commissions), and admin/owner-only in the nav (see
   // TEAM_HIDDEN_LABELS below) — a regular READ_ONLY team login never sees
-  // it. A dedicated CONSTRUCTION-role login sees ONLY this tab (see
-  // roleEntries below); src/proxy.ts hard-blocks it from everything else.
-  { type: "link", href: "/construction", label: "Construction Management" },
+  // it. A dedicated CONSTRUCTION-role login sees ONLY the checklist as a
+  // plain link (see roleEntries below, which swaps this whole group entry
+  // out) — src/proxy.ts additionally hard-blocks that login from reaching
+  // /construction-budget at all, regardless of what the nav shows. Became a
+  // dropdown 2026-08-20 (Seni's ask) once Construction Budget was added as
+  // a CEO-only sibling tab.
+  { type: "group", label: "Construction Management", tabs: CONSTRUCTION_GROUP_TABS },
   { type: "group", label: "Messaging", tabs: MESSAGING_GROUP_TABS },
   { type: "group", label: "Marketing", tabs: MARKETING_GROUP_TABS },
   { type: "group", label: "Reports", tabs: REPORTS_GROUP_TABS },
@@ -270,7 +275,9 @@ export function NavBar({
   // can't open anyway.
   const roleEntries =
     role === "CONSTRUCTION"
-      ? navEntries.filter((e) => e.label === "Construction Management")
+      ? // A single plain link to the checklist — NOT the Construction
+        // Management dropdown, which also contains the CEO-only Budget tab.
+        [{ type: "link", href: "/construction", label: "Construction Management" } as NavEntry]
       : role === "READ_ONLY"
         ? navEntries
             .filter((e) => !TEAM_HIDDEN_LABELS.has(e.label))

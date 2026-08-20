@@ -28,6 +28,18 @@ export const TEAM_MANAGEMENT_GROUP_TABS: NavTab[] = [
   { href: "/team-log", label: "Team Activity Log" },
 ];
 
+// Construction Management + Construction Budget, grouped 2026-08-20 (Seni's
+// ask: "add a 'Construction Budget' tab that will be a dropdown from the
+// 'Construction Management' tab"). Budget is CEO-only (stricter than the
+// checklist, which the CONSTRUCTION login role can also use) — NavBar.tsx's
+// CONSTRUCTION-role branch renders the checklist link directly rather than
+// using this group, so a construction-team login never sees Budget in the
+// dropdown either.
+export const CONSTRUCTION_GROUP_TABS: NavTab[] = [
+  { href: "/construction", label: "Construction Management" },
+  { href: "/construction-budget", label: "Construction Budget" },
+];
+
 // Bill Pay stands alone as of 2026-08-17 (Seni's ask): the Vendors entry
 // was dropped ("we don't need that anymore since we have the bill pay tab
 // working the way it does") and Maintenance became the Team Expense Request

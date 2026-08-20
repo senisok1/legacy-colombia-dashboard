@@ -36,14 +36,22 @@ type Item = {
   completedAt: string | null;
   createdBy: string;
   createdAt: string;
+  noteCount: number;
 };
 
 type LogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted";
   actor: string;
   at: string;
+};
+
+type Note = {
+  id: string;
+  body: string;
+  author: string;
+  createdAt: string;
 };
 
 function fmtWhen(iso: string): string {
@@ -85,6 +93,15 @@ export function ConstructionBoard() {
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [removingLogId, setRemovingLogId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Per-item notes thread (2026-08-20, Seni's ask) — collapsed by default,
+  // fetched lazily on first expand and cached per item so reopening doesn't
+  // re-fetch. Keyed by item id, same closure-over-state pattern as the rest
+  // of this component.
+  const [openNotesId, setOpenNotesId] = useState<string | null>(null);
+  const [notesByItem, setNotesByItem] = useState<Record<string, Note[]>>({});
+  const [loadingNotesId, setLoadingNotesId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState<Record<string, string>>({});
+  const [postingNoteId, setPostingNoteId] = useState<string | null>(null);
   // Same guard as TeamActivityLog: a failed background refresh must never
   // blank out a list that's already on screen.
   const hasDataRef = useRef(false);
@@ -207,6 +224,51 @@ export function ConstructionBoard() {
     }
   }
 
+  async function toggleNotes(item: Item) {
+    if (openNotesId === item.id) {
+      setOpenNotesId(null);
+      return;
+    }
+    setOpenNotesId(item.id);
+    if (notesByItem[item.id]) return; // already cached
+    setLoadingNotesId(item.id);
+    try {
+      const res = await fetch(`/api/construction/notes?itemId=${encodeURIComponent(item.id)}`);
+      const json = await res.json();
+      if (res.ok) setNotesByItem((m) => ({ ...m, [item.id]: json.notes ?? [] }));
+    } catch {
+      // Silent — the panel just shows "no notes yet" and a retry happens
+      // next time it's reopened.
+    } finally {
+      setLoadingNotesId(null);
+    }
+  }
+
+  async function postNote(item: Item) {
+    const text = (noteDraft[item.id] ?? "").trim();
+    if (!text || postingNoteId) return;
+    setPostingNoteId(item.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, body: text }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setNotesByItem((m) => ({ ...m, [item.id]: [...(m[item.id] ?? []), json.note] }));
+      setNoteDraft((m) => ({ ...m, [item.id]: "" }));
+      // Background refresh so the "Notes (N)" badge and the activity log's
+      // new "noted" entry show up without the user having to do anything.
+      void load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to post the note.");
+    } finally {
+      setPostingNoteId(null);
+    }
+  }
+
   const open = (items ?? []).filter((i) => !i.completed);
   const completed = (items ?? []).filter((i) => i.completed);
   const openGroups = groupByCategory(open);
@@ -217,32 +279,86 @@ export function ConstructionBoard() {
   }
 
   function ItemRow({ item, completedRow }: { item: Item; completedRow: boolean }) {
+    const notesOpen = openNotesId === item.id;
+    const notes = notesByItem[item.id];
     return (
-      <li className="flex items-start gap-2 rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
-        <input
-          type="checkbox"
-          checked={completedRow}
-          disabled={togglingId === item.id}
-          onChange={() => void toggle(item)}
-          className="mt-0.5"
-        />
-        <div className="flex-1">
-          <div className={completedRow ? "line-through text-black/50 dark:text-white/50" : ""}>{item.title}</div>
-          {item.notes && <div className="text-xs text-black/50 dark:text-white/50">{item.notes}</div>}
-          <div className="text-xs text-black/40 dark:text-white/40">
-            {completedRow
-              ? `${item.completedBy}, ${item.completedAt ? fmtWhen(item.completedAt) : ""}`
-              : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
+      <li className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
+        <div className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={completedRow}
+            disabled={togglingId === item.id}
+            onChange={() => void toggle(item)}
+            className="mt-0.5"
+          />
+          <div className="flex-1">
+            <div className={completedRow ? "line-through text-black/50 dark:text-white/50" : ""}>{item.title}</div>
+            {item.notes && <div className="text-xs text-black/50 dark:text-white/50">{item.notes}</div>}
+            <div className="text-xs text-black/40 dark:text-white/40">
+              {completedRow
+                ? `${item.completedBy}, ${item.completedAt ? fmtWhen(item.completedAt) : ""}`
+                : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
+            </div>
           </div>
-        </div>
-        {canDelete && (
           <button
-            onClick={() => void remove(item)}
-            disabled={removingId === item.id}
-            className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+            onClick={() => void toggleNotes(item)}
+            className={`shrink-0 rounded px-1.5 py-0.5 text-xs ${
+              item.noteCount > 0
+                ? "text-[var(--accent)] hover:underline"
+                : "text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
+            }`}
           >
-            {removingId === item.id ? t("common.deleting") : t("common.delete")}
+            {t("construction.notesButton")}
+            {item.noteCount > 0 ? ` (${item.noteCount})` : ""}
           </button>
+          {canDelete && (
+            <button
+              onClick={() => void remove(item)}
+              disabled={removingId === item.id}
+              className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+            >
+              {removingId === item.id ? t("common.deleting") : t("common.delete")}
+            </button>
+          )}
+        </div>
+
+        {notesOpen && (
+          <div className="mt-2 ml-6 space-y-2 border-l-2 border-black/10 dark:border-white/10 pl-3">
+            {loadingNotesId === item.id && !notes ? (
+              <p className="text-xs text-black/50 dark:text-white/50">{t("construction.loading")}</p>
+            ) : !notes || notes.length === 0 ? (
+              <p className="text-xs text-black/50 dark:text-white/50">{t("construction.noNotes")}</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {notes.map((n) => (
+                  <li key={n.id} className="text-xs">
+                    <span className="text-black/80 dark:text-white/80">{n.body}</span>
+                    <div className="text-black/40 dark:text-white/40">
+                      {n.author}, {fmtWhen(n.createdAt)}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex gap-1.5">
+              <input
+                className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                placeholder={t("construction.notePlaceholder")}
+                value={noteDraft[item.id] ?? ""}
+                onChange={(e) => setNoteDraft((m) => ({ ...m, [item.id]: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void postNote(item);
+                }}
+              />
+              <button
+                onClick={() => void postNote(item)}
+                disabled={postingNoteId === item.id || !(noteDraft[item.id] ?? "").trim()}
+                className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
+              >
+                {postingNoteId === item.id ? t("construction.posting") : t("construction.postNote")}
+              </button>
+            </div>
+          </div>
         )}
       </li>
     );
