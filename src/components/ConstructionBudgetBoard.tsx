@@ -32,6 +32,18 @@ type Item = {
   sortOrder: number;
   updatedAt: string;
   updatedBy: string | null;
+  /** How many notes are in this item's thread (2026-08-20, Seni's ask: "add
+   * a notes button for each item in the budget for any user to add
+   * notes"). Drives the "Notes (N)" button, same pattern as
+   * ConstructionBoard.tsx's Progress Notes. */
+  noteCount: number;
+};
+
+type BudgetNote = {
+  id: string;
+  body: string;
+  author: string;
+  createdAt: string;
 };
 
 type ImportRow = {
@@ -50,7 +62,7 @@ type ImportRow = {
 type LogEntry = {
   id: string;
   itemDescription: string | null;
-  action: "imported" | "updated" | "deleted";
+  action: "imported" | "updated" | "deleted" | "noted";
   detail: string | null;
   actor: string;
   at: string;
@@ -277,6 +289,14 @@ export function ConstructionBudgetBoard() {
   const [fxRateDraft, setFxRateDraft] = useState("");
   const [editingFxRate, setEditingFxRate] = useState(false);
   const [savingFxRate, setSavingFxRate] = useState(false);
+  // Per-item notes thread (2026-08-20, Seni's ask: "add a notes button for
+  // each item in the budget for any user to add notes") — same lazy-fetch/
+  // cache-per-item pattern as ConstructionBoard.tsx's Progress Notes.
+  const [openNotesId, setOpenNotesId] = useState<string | null>(null);
+  const [notesByItem, setNotesByItem] = useState<Record<string, BudgetNote[]>>({});
+  const [loadingNotesId, setLoadingNotesId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState<Record<string, string>>({});
+  const [postingNoteId, setPostingNoteId] = useState<string | null>(null);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async (fresh = false) => {
@@ -342,6 +362,55 @@ export function ConstructionBudgetBoard() {
       setError(err instanceof Error ? err.message : "Failed to delete.");
     } finally {
       setRemovingLogId(null);
+    }
+  }
+
+  async function toggleNotes(item: Item) {
+    if (openNotesId === item.id) {
+      setOpenNotesId(null);
+      return;
+    }
+    setOpenNotesId(item.id);
+    if (notesByItem[item.id]) return; // already cached
+    setLoadingNotesId(item.id);
+    try {
+      const res = await fetch(`/api/construction-budget/notes?itemId=${encodeURIComponent(item.id)}`);
+      const json = await res.json();
+      if (res.ok) setNotesByItem((m) => ({ ...m, [item.id]: json.notes ?? [] }));
+    } catch {
+      // Silent — the panel just shows "no notes yet" and a retry happens
+      // next time it's reopened.
+    } finally {
+      setLoadingNotesId(null);
+    }
+  }
+
+  function onNoteDraftChange(itemId: string, value: string) {
+    setNoteDraft((m) => ({ ...m, [itemId]: value }));
+  }
+
+  async function postNote(item: Item) {
+    const text = (noteDraft[item.id] ?? "").trim();
+    if (!text || postingNoteId) return;
+    setPostingNoteId(item.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction-budget/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, body: text }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setNotesByItem((m) => ({ ...m, [item.id]: [...(m[item.id] ?? []), json.note] }));
+      setNoteDraft((m) => ({ ...m, [item.id]: "" }));
+      // Background refresh so the "Notes (N)" badge and the activity log's
+      // new "noted" entry show up without the user having to do anything.
+      void load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to post the note.");
+    } finally {
+      setPostingNoteId(null);
     }
   }
 
@@ -645,6 +714,14 @@ export function ConstructionBudgetBoard() {
                         canManage={canManage}
                         onSaveActual={(v) => void saveActual(item, v)}
                         onRemove={() => void removeItem(item)}
+                        notesOpen={openNotesId === item.id}
+                        notes={notesByItem[item.id]}
+                        loadingNotes={loadingNotesId === item.id}
+                        noteDraft={noteDraft[item.id] ?? ""}
+                        postingNote={postingNoteId === item.id}
+                        onToggleNotes={() => void toggleNotes(item)}
+                        onNoteDraftChange={(v) => onNoteDraftChange(item.id, v)}
+                        onPostNote={() => void postNote(item)}
                       />
                     ))}
                   </Fragment>
@@ -692,9 +769,11 @@ export function ConstructionBudgetBoard() {
                       ? `imported the budget (${entry.detail ?? ""})`
                       : entry.action === "deleted"
                         ? <>removed &ldquo;{entry.itemDescription}&rdquo;</>
-                        : entry.itemDescription === null
-                          ? entry.detail // e.g. an FX-rate change — no single item to name
-                          : <>updated &ldquo;{entry.itemDescription}&rdquo; — {entry.detail}</>}
+                        : entry.action === "noted"
+                          ? <>added a progress note on &ldquo;{entry.itemDescription}&rdquo;</>
+                          : entry.itemDescription === null
+                            ? entry.detail // e.g. an FX-rate change — no single item to name
+                            : <>updated &ldquo;{entry.itemDescription}&rdquo; — {entry.detail}</>}
                     <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
                   </div>
                   {canManage && (
@@ -721,57 +800,132 @@ function ItemRow({
   canManage,
   onSaveActual,
   onRemove,
+  notesOpen,
+  notes,
+  loadingNotes,
+  noteDraft,
+  postingNote,
+  onToggleNotes,
+  onNoteDraftChange,
+  onPostNote,
 }: {
   item: Item;
   saving: boolean;
   canManage: boolean;
   onSaveActual: (v: number | null) => void;
   onRemove: () => void;
+  notesOpen: boolean;
+  notes: BudgetNote[] | undefined;
+  loadingNotes: boolean;
+  noteDraft: string;
+  postingNote: boolean;
+  onToggleNotes: () => void;
+  onNoteDraftChange: (value: string) => void;
+  onPostNote: () => void;
 }) {
   const [draft, setDraft] = useState(item.actualUsd !== null ? String(item.actualUsd) : "");
   const variance = item.actualUsd !== null && item.budgetedUsd !== null ? item.budgetedUsd - item.actualUsd : null;
 
   return (
-    <tr className="border-b border-black/5 dark:border-white/5 align-top">
-      <td className="px-3 py-1.5 text-xs text-black/50 dark:text-white/50 whitespace-nowrap">{item.code}</td>
-      <td className="px-3 py-1.5">
-        {item.description}
-        {item.descriptionOriginal && (
-          <div className="text-xs text-black/40 dark:text-white/40">{item.descriptionOriginal}</div>
-        )}
-        {item.notes && <div className="text-xs text-black/40 dark:text-white/40">{item.notes}</div>}
-      </td>
-      <td className="px-3 py-1.5 whitespace-nowrap">{item.unit}</td>
-      <td className="px-3 py-1.5 text-right whitespace-nowrap">{item.quantity ?? ""}</td>
-      <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtCop(item.unitPriceCop)}</td>
-      <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtCop(item.totalCop)}</td>
-      <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtUsd(item.budgetedUsd)}</td>
-      <td className="px-3 py-1.5 text-right whitespace-nowrap">
-        <input
-          type="number"
-          min={0}
-          step="0.01"
-          className="w-24 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-right text-xs"
-          placeholder="—"
-          value={draft}
-          disabled={saving}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => {
-            const v = draft.trim() === "" ? null : Number(draft);
-            if (v !== item.actualUsd) onSaveActual(Number.isFinite(v as number) ? v : null);
-          }}
-        />
-      </td>
-      <td className={`px-3 py-1.5 text-right whitespace-nowrap ${variance !== null && variance < 0 ? "text-red-500" : ""}`}>
-        {variance !== null ? fmtUsd(variance) : "—"}
-      </td>
-      <td className="px-3 py-1.5">
-        {canManage && (
-          <button onClick={onRemove} className="text-xs text-black/40 hover:text-red-500 dark:text-white/40">
-            ✕
+    <>
+      <tr className="border-b border-black/5 dark:border-white/5 align-top">
+        <td className="px-3 py-1.5 text-xs text-black/50 dark:text-white/50 whitespace-nowrap">{item.code}</td>
+        <td className="px-3 py-1.5">
+          {item.description}
+          {item.descriptionOriginal && (
+            <div className="text-xs text-black/40 dark:text-white/40">{item.descriptionOriginal}</div>
+          )}
+          {item.notes && <div className="text-xs text-black/40 dark:text-white/40">{item.notes}</div>}
+          {/* Notes thread (2026-08-20, Seni's ask: "add a notes button for
+              each item in the budget for any user to add notes") — open to
+              any viewer, same as ConstructionBoard.tsx's Progress Notes. */}
+          <button
+            onClick={onToggleNotes}
+            className={`mt-0.5 rounded px-1 py-0.5 text-xs ${
+              item.noteCount > 0
+                ? "text-[var(--accent)] hover:underline"
+                : "text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
+            }`}
+          >
+            Notes
+            {item.noteCount > 0 ? ` (${item.noteCount})` : ""}
           </button>
-        )}
-      </td>
-    </tr>
+        </td>
+        <td className="px-3 py-1.5 whitespace-nowrap">{item.unit}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">{item.quantity ?? ""}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtCop(item.unitPriceCop)}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtCop(item.totalCop)}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtUsd(item.budgetedUsd)}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            className="w-24 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-right text-xs"
+            placeholder="—"
+            value={draft}
+            disabled={saving}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => {
+              const v = draft.trim() === "" ? null : Number(draft);
+              if (v !== item.actualUsd) onSaveActual(Number.isFinite(v as number) ? v : null);
+            }}
+          />
+        </td>
+        <td className={`px-3 py-1.5 text-right whitespace-nowrap ${variance !== null && variance < 0 ? "text-red-500" : ""}`}>
+          {variance !== null ? fmtUsd(variance) : "—"}
+        </td>
+        <td className="px-3 py-1.5">
+          {canManage && (
+            <button onClick={onRemove} className="text-xs text-black/40 hover:text-red-500 dark:text-white/40">
+              ✕
+            </button>
+          )}
+        </td>
+      </tr>
+      {notesOpen && (
+        <tr className="border-b border-black/5 dark:border-white/5">
+          <td />
+          <td colSpan={9} className="px-3 py-2">
+            <div className="ml-1 space-y-2 border-l-2 border-black/10 dark:border-white/10 pl-3">
+              {loadingNotes && !notes ? (
+                <p className="text-xs text-black/50 dark:text-white/50">Loading…</p>
+              ) : !notes || notes.length === 0 ? (
+                <p className="text-xs text-black/50 dark:text-white/50">No notes yet.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {notes.map((n) => (
+                    <li key={n.id} className="text-xs">
+                      <span className="text-black/80 dark:text-white/80">{n.body}</span>
+                      <div className="text-black/40 dark:text-white/40">
+                        {n.author}, {fmtWhen(n.createdAt)}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex gap-1.5">
+                <input
+                  className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                  placeholder="Add a note…"
+                  value={noteDraft}
+                  onChange={(e) => onNoteDraftChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onPostNote();
+                  }}
+                />
+                <button
+                  onClick={onPostNote}
+                  disabled={postingNote || !noteDraft.trim()}
+                  className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
+                >
+                  {postingNote ? "Posting…" : "Post note"}
+                </button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

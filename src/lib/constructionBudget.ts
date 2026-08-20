@@ -22,6 +22,12 @@ export type ConstructionBudgetItem = {
   sortOrder: number;
   updatedAt: string;
   updatedBy: string | null;
+  /** How many notes are in this item's thread — drives the "Notes (N)"
+   * button in ConstructionBudgetBoard.tsx without a separate per-item fetch
+   * (2026-08-20, Seni's ask: "add a notes button for each item in the
+   * budget for any user to add notes"). Same pattern as
+   * ConstructionItem.noteCount in lib/construction.ts. */
+  noteCount: number;
 };
 
 type Row = {
@@ -42,12 +48,14 @@ type Row = {
   updated_at: string;
   updated_by_email: string | null;
   updated_by_name: string | null;
+  note_count: string;
 };
 
 const COLUMNS =
-  "id, code, category, category_original, description, description_original, unit, quantity, " +
-  "unit_price_cop, total_cop, budgeted_usd, actual_usd, notes, sort_order, updated_at, " +
-  "updated_by_email, updated_by_name";
+  "cbi.id, cbi.code, cbi.category, cbi.category_original, cbi.description, cbi.description_original, cbi.unit, " +
+  "cbi.quantity, cbi.unit_price_cop, cbi.total_cop, cbi.budgeted_usd, cbi.actual_usd, cbi.notes, cbi.sort_order, " +
+  "cbi.updated_at, cbi.updated_by_email, cbi.updated_by_name, " +
+  "(select count(*) from construction_budget_item_notes n where n.item_id = cbi.id) as note_count";
 
 // node-postgres returns numeric columns as strings (to avoid float
 // precision surprises on large money values) — parse to number here so
@@ -77,6 +85,7 @@ function fromRow(r: Row): ConstructionBudgetItem {
     sortOrder: r.sort_order,
     updatedAt: r.updated_at,
     updatedBy: r.updated_by_name?.trim() || r.updated_by_email,
+    noteCount: Number(r.note_count) || 0,
   };
 }
 
@@ -90,7 +99,7 @@ function fromRow(r: Row): ConstructionBudgetItem {
 export type ConstructionBudgetLogEntry = {
   id: string;
   itemDescription: string | null;
-  action: "imported" | "updated" | "deleted";
+  action: "imported" | "updated" | "deleted" | "noted";
   detail: string | null;
   actor: string;
   at: string;
@@ -156,12 +165,97 @@ export async function listConstructionBudgetItems(
   propertyGroupId: string
 ): Promise<ConstructionBudgetItem[]> {
   const rows = await query<Row>(
-    `select ${COLUMNS} from construction_budget_items
-     where organization_id = $1 and property_group_id = $2
-     order by sort_order asc`,
+    `select ${COLUMNS} from construction_budget_items cbi
+     where cbi.organization_id = $1 and cbi.property_group_id = $2
+     order by cbi.sort_order asc`,
     [organizationId, propertyGroupId]
   );
   return rows.map(fromRow);
+}
+
+/** One budget line item's notes thread, oldest first — same append-only,
+ * org+property-group-scoped pattern as listConstructionItemNotes in
+ * lib/construction.ts (2026-08-20, Seni's ask: "add a notes button for each
+ * item in the budget for any user to add notes"). */
+export type ConstructionBudgetItemNote = {
+  id: string;
+  itemId: string;
+  body: string;
+  author: string;
+  createdAt: string;
+};
+
+type NoteRow = {
+  id: string;
+  item_id: string;
+  body: string;
+  author_email: string;
+  author_name: string | null;
+  created_at: string;
+};
+
+function noteFromRow(r: NoteRow): ConstructionBudgetItemNote {
+  return {
+    id: r.id,
+    itemId: r.item_id,
+    body: r.body,
+    author: r.author_name?.trim() || r.author_email,
+    createdAt: r.created_at,
+  };
+}
+
+export async function listConstructionBudgetItemNotes(
+  organizationId: string,
+  propertyGroupId: string,
+  itemId: string
+): Promise<ConstructionBudgetItemNote[]> {
+  const rows = await query<NoteRow>(
+    `select n.id, n.item_id, n.body, n.author_email, n.author_name, n.created_at
+     from construction_budget_item_notes n
+     join construction_budget_items cbi on cbi.id = n.item_id
+     where n.item_id = $1 and cbi.organization_id = $2 and cbi.property_group_id = $3
+     order by n.created_at asc`,
+    [itemId, organizationId, propertyGroupId]
+  );
+  return rows.map(noteFromRow);
+}
+
+/** Appends a note to a budget line item's thread and logs a "noted" activity
+ * entry, same pattern as addConstructionItemNote in lib/construction.ts.
+ * Open to any viewer of this tab (CEO or CONSTRUCTION) — enforced by the
+ * caller, see api/construction-budget/notes/route.ts. */
+export async function addConstructionBudgetItemNote(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  itemId: string;
+  body: string;
+  authorEmail: string;
+  authorName: string | null;
+}): Promise<ConstructionBudgetItemNote | null> {
+  const item = await queryOne<{ id: string; description: string }>(
+    `select id, description from construction_budget_items
+     where id = $1 and organization_id = $2 and property_group_id = $3`,
+    [input.itemId, input.organizationId, input.propertyGroupId]
+  );
+  if (!item) return null;
+
+  const row = await queryOne<NoteRow>(
+    `insert into construction_budget_item_notes
+       (organization_id, property_group_id, item_id, body, author_email, author_name)
+     values ($1, $2, $3, $4, $5, $6)
+     returning id, item_id, body, author_email, author_name, created_at`,
+    [input.organizationId, input.propertyGroupId, input.itemId, input.body, input.authorEmail, input.authorName]
+  );
+  if (!row) throw new Error("Failed to add the note.");
+
+  await query(
+    `insert into construction_budget_activity_log
+       (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
+     values ($1, $2, $3, $4, 'noted', null, $5, $6)`,
+    [input.organizationId, input.propertyGroupId, item.id, item.description, input.authorEmail, input.authorName]
+  );
+
+  return noteFromRow(row);
 }
 
 // Editable COP -> USD exchange rate (2026-08-20, Seni's ask: "this is
@@ -324,8 +418,8 @@ export async function updateConstructionBudgetItem(input: {
     sets.push(`notes = $${values.length}`);
   }
   const row = await queryOne<Row>(
-    `update construction_budget_items set ${sets.join(", ")}
-     where id = $1 and organization_id = $2 and property_group_id = $3
+    `update construction_budget_items cbi set ${sets.join(", ")}
+     where cbi.id = $1 and cbi.organization_id = $2 and cbi.property_group_id = $3
      returning ${COLUMNS}`,
     values
   );
