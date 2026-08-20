@@ -57,8 +57,12 @@ export default async function DashboardPage() {
   const guestsById = buildGuestsById(guests);
   // READ_ONLY team logins get an ops-focused dashboard: no revenue boxes,
   // no Total column, no MTD money stats (2026-08-16, Seni's ask). Admins
-  // see everything.
-  const isTeam = session?.role === "READ_ONLY";
+  // see everything. CONSTRUCTION logins get the SAME ops-focused view
+  // (2026-08-20, Seni's ask: "give the construction management team members
+  // the same dashboard tab view that the team members have") — construction
+  // team members shouldn't see property revenue any more than a cleaner
+  // would.
+  const isTeam = session?.role === "READ_ONLY" || session?.role === "CONSTRUCTION";
   const withNames = (list: typeof bookings) =>
     list.map((b) => ({ ...b, raw: undefined, guestName: resolveGuestName(b, guestsById) || b.guestName }));
   const stats = summaryStats(bookings);

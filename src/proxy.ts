@@ -241,15 +241,21 @@ export async function proxy(req: NextRequest) {
 
     // CONSTRUCTION role gate (2026-08-20, Seni's ask: a login for the
     // construction team that "will only have access to the construction
-    // management tab" — nothing else, not even Dashboard or their own
-    // Settings page. Allowlist rather than the READ_ONLY block's denylist
-    // below, since the allowed surface here is a single tab: anything not
-    // explicitly listed is refused. Pages bounce to /construction; APIs get
-    // 403. Checked BEFORE the READ_ONLY block since a session is exactly one
-    // role — this return short-circuits so the (much wider) READ_ONLY
-    // allowlist further down never runs for a CONSTRUCTION session.
+    // management tab" — nothing else, not even their own Settings page.
+    // Widened same day (Seni's ask: "give the construction management team
+    // members the same dashboard tab view that the team members have") to
+    // also allow /dashboard — the page is a self-contained server render
+    // (AutoRefresh just re-requests /dashboard itself; no separate client
+    // API call), so no extra /api/* entry was needed for it. Still an
+    // allowlist rather than the READ_ONLY block's denylist below, since the
+    // allowed surface is two tabs: anything not explicitly listed is
+    // refused. Pages bounce to /construction; APIs get 403. Checked BEFORE
+    // the READ_ONLY block since a session is exactly one role — this return
+    // short-circuits so the (much wider) READ_ONLY allowlist further down
+    // never runs for a CONSTRUCTION session.
     if (session!.role === "CONSTRUCTION") {
       const allowed =
+        pathname === "/dashboard" ||
         pathname === "/construction" ||
         pathname.startsWith("/construction/") ||
         pathname === "/api/construction" ||

@@ -268,16 +268,22 @@ export function NavBar({
   // returns enabled:false for other property groups, this just stops the
   // tab from appearing at all on them. Nav-level hiding only; the real
   // scoping stays server-side in api/management/commissions.
-  // CONSTRUCTION logins (2026-08-20) see EXACTLY one nav entry — no
-  // Dashboard, no Settings, nothing else. This is a UI-layer mirror of the
-  // hard proxy.ts block; that block is the real enforcement (typing a URL
-  // still bounces), this just keeps the nav from advertising tabs the login
-  // can't open anyway.
+  // CONSTRUCTION logins (2026-08-20) see exactly two nav entries: Dashboard
+  // (added same day, Seni's ask: "give the construction management team
+  // members the same dashboard tab view that the team members have" — the
+  // same ops-focused view READ_ONLY gets, see app/dashboard/page.tsx's
+  // isTeam flag) and the Construction Management checklist — no Settings,
+  // nothing else. This is a UI-layer mirror of the hard proxy.ts block; that
+  // block is the real enforcement (typing a URL still bounces), this just
+  // keeps the nav from advertising tabs the login can't open anyway.
   const roleEntries =
     role === "CONSTRUCTION"
-      ? // A single plain link to the checklist — NOT the Construction
-        // Management dropdown, which also contains the CEO-only Budget tab.
-        [{ type: "link", href: "/construction", label: "Construction Management" } as NavEntry]
+      ? // Plain links, NOT the Construction Management dropdown group — that
+        // group also contains the CEO-only Budget tab.
+        ([
+          { type: "link", href: "/dashboard", label: "Dashboard" },
+          { type: "link", href: "/construction", label: "Construction Management" },
+        ] as NavEntry[])
       : role === "READ_ONLY"
         ? navEntries
             .filter((e) => !TEAM_HIDDEN_LABELS.has(e.label))
@@ -364,8 +370,10 @@ export function NavBar({
     // /api/bills, /api/approvals, /api/leads and friends at all (2026-08-17
     // audit). The middleware now returns 403 for those, so skipping the polls
     // here isn't the security fix, just the reason the console isn't full of
-    // 403s for requests that were never wanted.
-    if (role === "READ_ONLY") return;
+    // 403s for requests that were never wanted. CONSTRUCTION logins have an
+    // even narrower API allowlist (proxy.ts) than READ_ONLY, so they're
+    // skipped here too.
+    if (role === "READ_ONLY" || role === "CONSTRUCTION") return;
     let cancelled = false;
 
     async function poll() {
