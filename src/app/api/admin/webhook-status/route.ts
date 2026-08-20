@@ -76,6 +76,58 @@ export async function GET(req: NextRequest) {
   // no bookings-level name search (and /v2/guests?q= doesn't search by name
   // either — see memory), so this is the only way to answer "where is this
   // guest's booking" without paging through the OwnerRez UI by hand.
+  // ?property_month_report=<propertyId>:<YYYY-MM> — one-off reconciliation
+  // helper (2026-08-19, Seni: "check the property management numbers against
+  // the CRM revenue numbers"). Pulls every CRM-side booking for ONE physical
+  // OwnerRez property (e.g. Nukak Casa #19 = 492014, distinct from the other
+  // listing merged into the same "Legacy Colombia" property GROUP) whose
+  // CHECK-IN falls in the given month — matches how Gutierrez Group's
+  // "Operational Income" table groups a stay (e.g. their July sheet includes
+  // a guest checking in 31-Jul/out 2-Aug under "JULY"). Read-only, same
+  // isOccupying() definition as the Dashboard/Team Management calendars —
+  // Cancelled/blocks/Inquiry/Quote excluded, matching what an actual paid
+  // stay is.
+  const propertyMonthReport = req.nextUrl.searchParams.get("property_month_report");
+  if (propertyMonthReport) {
+    const [propertyIdRaw, month] = propertyMonthReport.split(":");
+    const propertyId = Number(propertyIdRaw);
+    if (!Number.isFinite(propertyId) || !/^\d{4}-\d{2}$/.test(month || "")) {
+      return NextResponse.json({ ok: false, error: "Use ?property_month_report=<propertyId>:<YYYY-MM>" }, { status: 400 });
+    }
+    const { getBookings: gb, getGuests: gg } = await import("@/lib/ownerrez");
+    const { isOccupying } = await import("@/lib/finance");
+    const { resolveGuestName: rgn, buildGuestsById: bgb } = await import("@/lib/guestName");
+    const { PROPERTY_GROUPS: groups } = await import("@/lib/propertyGroups");
+    const rows: Record<string, unknown>[] = [];
+    for (const group of groups) {
+      try {
+        const [bookings, guests] = await Promise.all([gb(undefined, group.id), gg(undefined, group.id).catch(() => [])]);
+        const guestsById = bgb(guests);
+        for (const b of bookings) {
+          if (b.propertyId !== propertyId) continue;
+          if (!isOccupying(b)) continue;
+          if (!b.arrival || !b.arrival.slice(0, 7).startsWith(month)) continue;
+          rows.push({
+            guestName: rgn(b, guestsById),
+            checkIn: b.arrival,
+            checkOut: b.departure,
+            nights: b.nights,
+            totalAmountUsd: b.totalAmount,
+            status: b.status,
+            source: b.source,
+            propertyGroup: group.id,
+          });
+        }
+      } catch (err) {
+        console.error(`[property_month_report] ${group.id} failed:`, err);
+      }
+    }
+    rows.sort((a, b) => String(a.checkIn).localeCompare(String(b.checkIn)));
+    const totalUsd = Math.round(rows.reduce((s, r) => s + (Number(r.totalAmountUsd) || 0), 0) * 100) / 100;
+    const totalNights = rows.reduce((s, r) => s + (Number(r.nights) || 0), 0);
+    return NextResponse.json({ ok: true, propertyId, month, count: rows.length, totalUsd, totalNights, rows });
+  }
+
   const findGuest = req.nextUrl.searchParams.get("find_guest");
   if (findGuest) {
     const needle = findGuest.toLowerCase();
