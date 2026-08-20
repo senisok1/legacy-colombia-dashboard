@@ -367,20 +367,33 @@ const STRINGS: Dict = {
   "construction.actionCompleted": { English: "completed", Spanish: "completó", Portuguese: "concluiu" },
   "construction.actionReopened": { English: "reopened", Spanish: "reabrió", Portuguese: "reabriu" },
   "construction.actionDeleted": { English: "deleted", Spanish: "eliminó", Portuguese: "excluiu" },
-  "construction.actionNoted": { English: "noted on", Spanish: "agregó una nota en", Portuguese: "adicionou uma nota em" },
+  "construction.actionNoted": {
+    English: "added a progress note on",
+    Spanish: "agregó una nota de progreso en",
+    Portuguese: "adicionou uma nota de progresso em",
+  },
 
-  // Per-item notes thread (2026-08-20, Seni's ask: "add a notes section
-  // under each item... how it was fixed or that it wasn't fixed and what
-  // they need to do next"). Append-only — no edit/delete, it's meant to be a
-  // running progress log, not a single editable field.
-  "construction.notesButton": { English: "Notes", Spanish: "Notas", Portuguese: "Notas" },
-  "construction.noNotes": { English: "No notes yet.", Spanish: "Aún no hay notas.", Portuguese: "Ainda não há notas." },
+  // Per-item progress notes thread (2026-08-20, Seni's ask: "add a notes
+  // section under each item... how it was fixed or that it wasn't fixed and
+  // what they need to do next"; renamed "Notes" -> "Progress Notes" same
+  // day). Append-only — no edit/delete, it's meant to be a running progress
+  // log, not a single editable field.
+  "construction.notesButton": { English: "Progress Notes", Spanish: "Notas de Progreso", Portuguese: "Notas de Progresso" },
+  "construction.noNotes": {
+    English: "No progress notes yet.",
+    Spanish: "Aún no hay notas de progreso.",
+    Portuguese: "Ainda não há notas de progresso.",
+  },
   "construction.notePlaceholder": {
     English: "What's the status — fixed, not fixed, what's next?",
     Spanish: "¿Cuál es el estado? ¿Se arregló, no se arregló, qué sigue?",
     Portuguese: "Qual é o status? Foi consertado, não foi, o que vem a seguir?",
   },
-  "construction.postNote": { English: "Post note", Spanish: "Publicar nota", Portuguese: "Publicar nota" },
+  "construction.postNote": {
+    English: "Post progress note",
+    Spanish: "Publicar nota de progreso",
+    Portuguese: "Publicar nota de progresso",
+  },
   "construction.posting": { English: "Posting…", Spanish: "Publicando…", Portuguese: "Publicando…" },
 
   // ---------- Team Requests ----------
