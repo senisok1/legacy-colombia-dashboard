@@ -56,6 +56,11 @@ export function TeamActivityLog() {
   const [busy, setBusy] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Collapsed by default (2026-08-20, Seni's ask: "hide all of the activity
+  // in the activity log... make it an Activity Log button so when you click
+  // on it, it then expands") — keeps the "log what you did" form front and
+  // center without the full history cluttering the tab on every visit.
+  const [showLog, setShowLog] = useState(false);
   // Same guard as the Management board: a failed background refresh must
   // never blank out a list that's already on screen.
   const hasDataRef = useRef(false);
@@ -144,36 +149,45 @@ export function TeamActivityLog() {
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
-      {!entries ? (
-        <p className="text-sm text-black/50 dark:text-white/50">{t("log.loadingActivity")}</p>
-      ) : entries.length === 0 ? (
-        <p className="text-sm text-black/50 dark:text-white/50">{t("log.nothingLogged")}</p>
-      ) : (
-        <ul className="space-y-1">
-          {entries.map((a) => (
-            <li key={a.id} className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  {textFor(a, viewerLanguage)}
-                  <span className="ml-2 text-xs text-black/40 dark:text-white/40">
-                    — {a.author}, {fmtWhen(a.at)}
-                  </span>
+      <button
+        onClick={() => setShowLog((v) => !v)}
+        className="text-xs font-medium uppercase tracking-wide text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80"
+      >
+        {t("log.toggleButton")}
+        {entries ? ` (${entries.length})` : ""} {showLog ? "▾" : "▸"}
+      </button>
+
+      {showLog &&
+        (!entries ? (
+          <p className="text-sm text-black/50 dark:text-white/50">{t("log.loadingActivity")}</p>
+        ) : entries.length === 0 ? (
+          <p className="text-sm text-black/50 dark:text-white/50">{t("log.nothingLogged")}</p>
+        ) : (
+          <ul className="space-y-1">
+            {entries.map((a) => (
+              <li key={a.id} className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    {textFor(a, viewerLanguage)}
+                    <span className="ml-2 text-xs text-black/40 dark:text-white/40">
+                      — {a.author}, {fmtWhen(a.at)}
+                    </span>
+                  </div>
+                  {/* Admin/Owner only (2026-08-18, Seni's ask). */}
+                  {viewerRole === "CEO" && (
+                    <button
+                      onClick={() => void remove(a.id)}
+                      disabled={removingId === a.id}
+                      className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                    >
+                      {removingId === a.id ? t("common.deleting") : t("common.delete")}
+                    </button>
+                  )}
                 </div>
-                {/* Admin/Owner only (2026-08-18, Seni's ask). */}
-                {viewerRole === "CEO" && (
-                  <button
-                    onClick={() => void remove(a.id)}
-                    disabled={removingId === a.id}
-                    className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
-                  >
-                    {removingId === a.id ? t("common.deleting") : t("common.delete")}
-                  </button>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+              </li>
+            ))}
+          </ul>
+        ))}
     </section>
   );
 }

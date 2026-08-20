@@ -329,6 +329,10 @@ const STRINGS: Dict = {
   "log.nothingLogged": { English: "Nothing logged yet.", Spanish: "Aún no hay nada registrado.", Portuguese: "Ainda não há nada registrado." },
   "log.deleteConfirm": { English: "Delete this log entry?", Spanish: "¿Eliminar esta entrada del registro?", Portuguese: "Excluir este registro?" },
   "log.failedDelete": { English: "Failed to delete.", Spanish: "No se pudo eliminar.", Portuguese: "Falha ao excluir." },
+  // Collapsed-by-default activity feed (2026-08-20, Seni's ask, applies to
+  // both the Team Activity Log tab and Construction Management's activity
+  // log — see "construction.activityLog" below for that one's own button).
+  "log.toggleButton": { English: "Activity Log", Spanish: "Registro de Actividad", Portuguese: "Registro de Atividade" },
 
   // ---------- Construction Management ----------
   "construction.title": { English: "Construction Management", Spanish: "Gestión de Construcción", Portuguese: "Gestão de Construção" },

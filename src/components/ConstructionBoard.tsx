@@ -102,6 +102,10 @@ export function ConstructionBoard() {
   const [loadingNotesId, setLoadingNotesId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState<Record<string, string>>({});
   const [postingNoteId, setPostingNoteId] = useState<string | null>(null);
+  // The activity log itself is collapsed by default (2026-08-20, Seni's ask:
+  // "hide all of the activity in the activity log... make it an Activity Log
+  // button so when you click on it, it then expands").
+  const [showLog, setShowLog] = useState(false);
   // Same guard as TeamActivityLog: a failed background refresh must never
   // blank out a list that's already on screen.
   const hasDataRef = useRef(false);
@@ -463,34 +467,39 @@ export function ConstructionBoard() {
       </section>
 
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-2">
-        <h3 className="text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
+        <button
+          onClick={() => setShowLog((v) => !v)}
+          className="text-xs font-medium uppercase tracking-wide text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80"
+        >
           {t("construction.activityLog")}
-        </h3>
-        {!log ? (
-          <p className="text-sm text-black/50 dark:text-white/50">{t("construction.loading")}</p>
-        ) : log.length === 0 ? (
-          <p className="text-sm text-black/50 dark:text-white/50">{t("construction.nothingLogged")}</p>
-        ) : (
-          <ul className="space-y-1">
-            {log.map((entry) => (
-              <li key={entry.id} className="flex items-start justify-between gap-2 text-sm text-black/70 dark:text-white/70">
-                <div>
-                  <strong>{entry.actor}</strong> {actionLabel(entry.action)} &ldquo;{entry.itemTitle}&rdquo;
-                  <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
-                </div>
-                {canDelete && (
-                  <button
-                    onClick={() => void removeLogEntry(entry)}
-                    disabled={removingLogId === entry.id}
-                    className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
-                  >
-                    {removingLogId === entry.id ? t("common.deleting") : t("common.delete")}
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+          {log ? ` (${log.length})` : ""} {showLog ? "▾" : "▸"}
+        </button>
+        {showLog &&
+          (!log ? (
+            <p className="text-sm text-black/50 dark:text-white/50">{t("construction.loading")}</p>
+          ) : log.length === 0 ? (
+            <p className="text-sm text-black/50 dark:text-white/50">{t("construction.nothingLogged")}</p>
+          ) : (
+            <ul className="space-y-1">
+              {log.map((entry) => (
+                <li key={entry.id} className="flex items-start justify-between gap-2 text-sm text-black/70 dark:text-white/70">
+                  <div>
+                    <strong>{entry.actor}</strong> {actionLabel(entry.action)} &ldquo;{entry.itemTitle}&rdquo;
+                    <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
+                  </div>
+                  {canDelete && (
+                    <button
+                      onClick={() => void removeLogEntry(entry)}
+                      disabled={removingLogId === entry.id}
+                      className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                    >
+                      {removingLogId === entry.id ? t("common.deleting") : t("common.delete")}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ))}
       </section>
     </div>
   );
