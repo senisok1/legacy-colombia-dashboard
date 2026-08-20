@@ -231,20 +231,22 @@ export function TeamLoginsManager() {
   }
 
   return (
-    <div className="space-y-3">
-      <div>
+    <div className="space-y-6">
+      {/* Card 1: create a login. A visually separate card from the members
+          list below (2026-08-20, Seni's ask) — each section owns its own
+          border/background instead of sharing one outer wrapper. */}
+      <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5 space-y-3">
         <p className="text-xs text-black/50 dark:text-white/50">
           <strong>Admin</strong> logins can do everything. <strong>Team member</strong> logins can view every
           tab but only add notes and activities on the Management tab — they can&apos;t message guests or
           change anything. <strong>Construction team</strong> logins see ONLY the Construction Management tab
           — nothing else, not even Dashboard. Submitting an existing email resets that person&apos;s password.
         </p>
-      </div>
 
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-      {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
+        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+        {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
 
-      <form onSubmit={createLogin} className="flex flex-wrap items-end gap-2">
+        <form onSubmit={createLogin} className="flex flex-wrap items-end gap-2">
         <label className="text-xs text-black/60 dark:text-white/60">
           Name
           <input
@@ -326,11 +328,14 @@ export function TeamLoginsManager() {
         >
           {busy ? "Saving…" : "Create login"}
         </button>
-      </form>
+        </form>
+      </div>
 
+      {/* Card 2: current team members — its own card, entirely separate
+          from Card 1 above (not nested inside it). */}
       {users && users.length > 0 && (
-        <div>
-          <h3 className="mb-1.5 text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
+        <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
             Current team members
           </h3>
           <div className="rounded-lg border border-black/10 dark:border-white/10 divide-y divide-black/5 dark:divide-white/5">

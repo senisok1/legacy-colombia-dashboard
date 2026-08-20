@@ -19,9 +19,12 @@ export default async function TeamMembersPage() {
           add notes on the Management tab.
         </p>
       </div>
-      <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
-        <TeamLoginsManager />
-      </div>
+      {/* TeamLoginsManager renders its own two separate cards (create-login
+          form, then current team members below it) — no shared wrapper here
+          anymore, so the two sections read as genuinely distinct boxes
+          instead of one big card with a divider inside it (2026-08-20,
+          Seni's ask: "I want it visually as a separate box"). */}
+      <TeamLoginsManager />
     </div>
   );
 }
