@@ -376,6 +376,18 @@ const STRINGS: Dict = {
     Spanish: "agregó una nota de progreso en",
     Portuguese: "adicionou uma nota de progresso em",
   },
+  "construction.actionScheduled": {
+    English: "updated the estimated completion date on",
+    Spanish: "actualizó la fecha estimada de finalización en",
+    Portuguese: "atualizou a data estimada de conclusão em",
+  },
+  // Estimated completion date (2026-08-20, Seni's ask: "add estimated date
+  // of completion for each open item for the construction team to input").
+  "construction.estCompletion": {
+    English: "Est. completion:",
+    Spanish: "Fin. estimada:",
+    Portuguese: "Conclusão est.:",
+  },
 
   // Per-item progress notes thread (2026-08-20, Seni's ask: "add a notes
   // section under each item... how it was fixed or that it wasn't fixed and

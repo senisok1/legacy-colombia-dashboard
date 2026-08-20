@@ -9,7 +9,10 @@ import {
   listConstructionActivityLog,
   listConstructionItems,
   setConstructionItemCompleted,
+  setConstructionItemEstimatedCompletion,
 } from "@/lib/construction";
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const dynamic = "force-dynamic";
 
@@ -92,7 +95,12 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Toggle completed/reopened — anyone with tab access (CEO or CONSTRUCTION).
+// Toggle completed/reopened, OR set/clear the estimated completion date
+// (2026-08-20, Seni's ask: "add estimated date of completion for each open
+// item for the construction team to input") — anyone with tab access (CEO
+// or CONSTRUCTION), same as toggling completed always was. A single PATCH
+// body only ever carries one or the other; `completed` takes priority if
+// somehow both are present.
 export async function PATCH(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
@@ -100,23 +108,43 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 });
   }
 
-  const body = (await req.json().catch(() => null)) as { id?: string; completed?: boolean } | null;
-  if (!body?.id || typeof body.completed !== "boolean") {
-    return NextResponse.json({ error: "id and completed are required." }, { status: 400 });
-  }
+  const body = (await req.json().catch(() => null)) as
+    | { id?: string; completed?: boolean; estimatedCompletionDate?: string | null }
+    | null;
+  if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
   try {
     const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
-    const item = await setConstructionItemCompleted({
-      organizationId: session.organizationId,
-      propertyGroupId: groupId,
-      id: body.id,
-      completed: body.completed,
-      actorEmail: session.email,
-      actorName: user?.name ?? null,
-    });
-    return item ? NextResponse.json({ ok: true, item }) : NextResponse.json({ error: "No such item." }, { status: 404 });
+
+    if (typeof body.completed === "boolean") {
+      const item = await setConstructionItemCompleted({
+        organizationId: session.organizationId,
+        propertyGroupId: groupId,
+        id: body.id,
+        completed: body.completed,
+        actorEmail: session.email,
+        actorName: user?.name ?? null,
+      });
+      return item ? NextResponse.json({ ok: true, item }) : NextResponse.json({ error: "No such item." }, { status: 404 });
+    }
+
+    if ("estimatedCompletionDate" in body) {
+      if (body.estimatedCompletionDate !== null && !DATE_RE.test(body.estimatedCompletionDate ?? "")) {
+        return NextResponse.json({ error: "estimatedCompletionDate must be YYYY-MM-DD or null." }, { status: 400 });
+      }
+      const item = await setConstructionItemEstimatedCompletion({
+        organizationId: session.organizationId,
+        propertyGroupId: groupId,
+        id: body.id,
+        estimatedCompletionDate: body.estimatedCompletionDate ?? null,
+        actorEmail: session.email,
+        actorName: user?.name ?? null,
+      });
+      return item ? NextResponse.json({ ok: true, item }) : NextResponse.json({ error: "No such item." }, { status: 404 });
+    }
+
+    return NextResponse.json({ error: "Nothing to update." }, { status: 400 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("PATCH /api/construction failed:", message);

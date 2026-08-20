@@ -37,12 +37,17 @@ type Item = {
   createdBy: string;
   createdAt: string;
   noteCount: number;
+  /** ISO date (YYYY-MM-DD), or null (2026-08-20, Seni's ask: "add estimated
+   * date of completion for each open item for the construction team to
+   * input"). */
+  estimatedCompletionDate: string | null;
 };
 
 type LogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted" | "noted";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled";
+  detail: string | null;
   actor: string;
   at: string;
 };
@@ -106,6 +111,9 @@ export function ConstructionBoard() {
   // "hide all of the activity in the activity log... make it an Activity Log
   // button so when you click on it, it then expands").
   const [showLog, setShowLog] = useState(false);
+  // Estimated completion date (2026-08-20, Seni's ask) — per-item saving
+  // indicator, same pattern as togglingId/removingId above.
+  const [savingDateId, setSavingDateId] = useState<string | null>(null);
   // Same guard as TeamActivityLog: a failed background refresh must never
   // blank out a list that's already on screen.
   const hasDataRef = useRef(false);
@@ -228,6 +236,28 @@ export function ConstructionBoard() {
     }
   }
 
+  async function updateEstimatedDate(item: Item, dateStr: string) {
+    if (savingDateId) return;
+    const value = dateStr || null;
+    if (value === item.estimatedCompletionDate) return;
+    setSavingDateId(item.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: item.id, estimatedCompletionDate: value }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update the date.");
+    } finally {
+      setSavingDateId(null);
+    }
+  }
+
   async function toggleNotes(item: Item) {
     if (openNotesId === item.id) {
       setOpenNotesId(null);
@@ -302,6 +332,16 @@ export function ConstructionBoard() {
               {completedRow
                 ? `${item.completedBy}, ${item.completedAt ? fmtWhen(item.completedAt) : ""}`
                 : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
+            </div>
+            <div className="mt-1 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50">
+              <span>{t("construction.estCompletion")}</span>
+              <input
+                type="date"
+                value={item.estimatedCompletionDate ?? ""}
+                disabled={savingDateId === item.id}
+                onChange={(e) => void updateEstimatedDate(item, e.target.value)}
+                className="rounded border border-black/15 dark:border-white/15 bg-transparent px-1 py-0.5 text-xs disabled:opacity-40"
+              />
             </div>
           </div>
           <button
@@ -379,8 +419,12 @@ export function ConstructionBoard() {
       <div className="space-y-3">
         {groups.map((g) => (
           <div key={g.key}>
+            {/* Category headings colored red (2026-08-20, Seni's ask: "change
+                the color of the category description... to red so that it
+                stands out more") — visually separates a category divider
+                from ordinary item text at a glance. */}
             {g.label && (
-              <div className="mb-1 text-xs font-semibold text-black/60 dark:text-white/60">{g.label}</div>
+              <div className="mb-1 text-xs font-semibold text-red-600 dark:text-red-400">{g.label}</div>
             )}
             {!g.label && groups.length > 1 && (
               <div className="mb-1 text-xs font-semibold text-black/40 dark:text-white/40">
@@ -485,6 +529,7 @@ export function ConstructionBoard() {
                 <li key={entry.id} className="flex items-start justify-between gap-2 text-sm text-black/70 dark:text-white/70">
                   <div>
                     <strong>{entry.actor}</strong> {actionLabel(entry.action)} &ldquo;{entry.itemTitle}&rdquo;
+                    {entry.detail && <span className="text-black/50 dark:text-white/50"> — {entry.detail}</span>}
                     <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
                   </div>
                   {canDelete && (

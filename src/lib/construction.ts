@@ -35,12 +35,22 @@ export type ConstructionItem = {
   /** How many notes are in this item's thread — drives the "Notes (N)"
    * button in ConstructionBoard.tsx without a separate per-item fetch. */
   noteCount: number;
+  /** ISO date (YYYY-MM-DD), or null (2026-08-20, Seni's ask: "add estimated
+   * date of completion for each open item for the construction team to
+   * input"). Editable by anyone with tab access, same as toggling
+   * completed — not restricted to Seni. */
+  estimatedCompletionDate: string | null;
 };
 
 export type ConstructionLogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted" | "noted";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled";
+  /** Extra context for an action that isn't fully self-describing from
+   * action+itemTitle alone — currently only "scheduled" uses this (e.g. "Set
+   * estimated completion to Aug 25, 2026" or "Cleared estimated completion").
+   * Added 2026-08-20 alongside the estimated-completion-date feature. */
+  detail: string | null;
   actor: string;
   at: string;
 };
@@ -70,6 +80,7 @@ type ItemRow = {
   created_by_name: string | null;
   created_at: string;
   note_count: string;
+  estimated_completion_date: string | null;
 };
 
 type NoteRow = {
@@ -85,6 +96,7 @@ type LogRow = {
   id: string;
   item_title: string;
   action: string;
+  detail: string | null;
   actor_email: string;
   actor_name: string | null;
   at: string;
@@ -106,6 +118,7 @@ function itemFromRow(r: ItemRow): ConstructionItem {
     createdBy: displayName(r.created_by_email, r.created_by_name),
     createdAt: r.created_at,
     noteCount: Number(r.note_count) || 0,
+    estimatedCompletionDate: r.estimated_completion_date,
   };
 }
 
@@ -114,6 +127,7 @@ function logFromRow(r: LogRow): ConstructionLogEntry {
     id: r.id,
     itemTitle: r.item_title,
     action: r.action as ConstructionLogEntry["action"],
+    detail: r.detail,
     actor: displayName(r.actor_email, r.actor_name),
     at: r.at,
   };
@@ -138,6 +152,7 @@ export async function listConstructionItems(
   const rows = await query<ItemRow>(
     `select ci.id, ci.title, ci.notes, ci.category, ci.completed, ci.completed_by_email, ci.completed_by_name,
             ci.completed_at, ci.created_by_email, ci.created_by_name, ci.created_at,
+            ci.estimated_completion_date::text as estimated_completion_date,
             (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count
      from construction_items ci
      where ci.organization_id = $1 and ci.property_group_id = $2
@@ -213,7 +228,7 @@ export async function listConstructionActivityLog(
   limit = 200
 ): Promise<ConstructionLogEntry[]> {
   const rows = await query<LogRow>(
-    `select id, item_title, action, actor_email, actor_name, at
+    `select id, item_title, action, detail, actor_email, actor_name, at
      from construction_activity_log
      where organization_id = $1 and property_group_id = $2
      order by at desc
@@ -229,19 +244,21 @@ async function logActivity(input: {
   itemId: string | null;
   itemTitle: string;
   action: ConstructionLogEntry["action"];
+  detail?: string | null;
   actorEmail: string;
   actorName: string | null;
 }): Promise<void> {
   await query(
     `insert into construction_activity_log
-       (organization_id, property_group_id, item_id, item_title, action, actor_email, actor_name)
-     values ($1, $2, $3, $4, $5, $6, $7)`,
+       (organization_id, property_group_id, item_id, item_title, action, detail, actor_email, actor_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [
       input.organizationId,
       input.propertyGroupId,
       input.itemId,
       input.itemTitle,
       input.action,
+      input.detail ?? null,
       input.actorEmail,
       input.actorName,
     ]
@@ -262,7 +279,9 @@ export async function createConstructionItem(input: {
        (organization_id, property_group_id, title, notes, category, created_by_email, created_by_name)
      values ($1, $2, $3, $4, $5, $6, $7)
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
-               created_by_email, created_by_name, created_at`,
+               created_by_email, created_by_name, created_at,
+               estimated_completion_date::text as estimated_completion_date,
+               '0' as note_count`,
     [
       input.organizationId,
       input.propertyGroupId,
@@ -306,6 +325,7 @@ export async function setConstructionItemCompleted(input: {
      where id = $1 and organization_id = $2 and property_group_id = $3
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at,
+               estimated_completion_date::text as estimated_completion_date,
                (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
     [input.id, input.organizationId, input.propertyGroupId, input.completed, input.actorEmail, input.actorName]
   );
@@ -316,6 +336,59 @@ export async function setConstructionItemCompleted(input: {
     itemId: row.id,
     itemTitle: row.title,
     action: input.completed ? "completed" : "reopened",
+    actorEmail: input.actorEmail,
+    actorName: input.actorName,
+  });
+  return itemFromRow(row);
+}
+
+/** "2026-08-25" -> "Aug 25, 2026". Formats explicitly in UTC — the value is
+ * a pure calendar date with no time component, and letting toLocaleDateString
+ * fall back to the machine's local timezone can silently shift a date like
+ * "2026-08-25" back a day in negative-UTC-offset zones. */
+function formatEstimatedDate(iso: string): string {
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** Sets or clears an item's estimated completion date (2026-08-20, Seni's
+ * ask: "add estimated date of completion for each open item for the
+ * construction team to input... add that to the activity log so we can see
+ * if they modified this date"). Open to anyone with tab access (CEO or the
+ * CONSTRUCTION login) — enforced by the caller, see api/construction/
+ * route.ts's canAccessConstruction, same gate as toggling completed. */
+export async function setConstructionItemEstimatedCompletion(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  id: string;
+  estimatedCompletionDate: string | null;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<ConstructionItem | null> {
+  const row = await queryOne<ItemRow>(
+    `update construction_items ci
+       set estimated_completion_date = $4
+     where id = $1 and organization_id = $2 and property_group_id = $3
+     returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
+               created_by_email, created_by_name, created_at,
+               estimated_completion_date::text as estimated_completion_date,
+               (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
+    [input.id, input.organizationId, input.propertyGroupId, input.estimatedCompletionDate]
+  );
+  if (!row) return null;
+  await logActivity({
+    organizationId: input.organizationId,
+    propertyGroupId: input.propertyGroupId,
+    itemId: row.id,
+    itemTitle: row.title,
+    action: "scheduled",
+    detail: input.estimatedCompletionDate
+      ? `Set estimated completion to ${formatEstimatedDate(input.estimatedCompletionDate)}`
+      : "Cleared estimated completion date",
     actorEmail: input.actorEmail,
     actorName: input.actorName,
   });
