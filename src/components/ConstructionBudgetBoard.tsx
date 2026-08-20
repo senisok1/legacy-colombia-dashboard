@@ -99,12 +99,42 @@ const HEADER_ALIASES: Record<string, string[]> = {
   budgetedUsd: ["budgeted total (usd)", "budgeted (usd)", "budgeted usd", "budget usd", "budgeted total"],
 };
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Bug fixed 2026-08-20 (Seni: "unit price, total (COP), budgeted (USD)...
+// missing" after import): the old version returned the FIRST role (in
+// object-declaration order) whose alias was a raw substring of the header
+// cell. Two collisions silently stole real columns: "unit" (the Unit
+// role's own alias) is a substring of "unitario", so "Valor Unitario"
+// matched the Unit role instead of unitPriceCop — and "total" (totalCop's
+// generic alias) is a substring of "Budgeted Total (USD)", so that column
+// matched totalCop instead of budgetedUsd. Both times the real target role
+// ended up with zero matching columns, so every row imported that field as
+// null. Fixed two ways: (1) require a WORD boundary around the alias so
+// "unit" can't match inside "unitario" (it's followed by "a", not a
+// boundary) — this alone fixes the unit/unitario collision; (2) when a cell
+// matches more than one role's alias, prefer the LONGEST alias rather than
+// the first-declared role — "budgeted total (usd)"/"budgeted total" (14-21
+// chars) beats the generic "total" (5 chars) even though "total" is a
+// legitimate standalone word inside that header too.
 function matchHeaderRole(cell: string): string | null {
   const n = normHeader(cell);
+  const candidates: { role: string; alias: string }[] = [];
   for (const [role, aliases] of Object.entries(HEADER_ALIASES)) {
-    if (aliases.some((a) => n === a || n.includes(a))) return role;
+    for (const a of aliases) {
+      if (n === a) {
+        candidates.push({ role, alias: a });
+        continue;
+      }
+      const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(a)}(?:[^a-z0-9]|$)`);
+      if (re.test(n)) candidates.push({ role, alias: a });
+    }
   }
-  return null;
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.alias.length - a.alias.length);
+  return candidates[0].role;
 }
 
 /** Parses a raw paste (tab-separated, as Google Sheets copies by default —
