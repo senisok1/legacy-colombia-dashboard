@@ -208,7 +208,7 @@ function parseImportText(raw: string): { rows: ImportRow[] } | { error: string }
       }
       return "";
     };
-    const code = get("code") || null;
+    const rawCode = get("code");
     const descEs = get("descriptionEs");
     const descEn = get("descriptionEn");
     const unit = get("unit") || null;
@@ -216,12 +216,64 @@ function parseImportText(raw: string): { rows: ImportRow[] } | { error: string }
     const unitPriceCop = parseCoNumber(get("unitPriceCop"));
     const totalCop = parseCoNumber(get("totalCop"));
     const budgetedUsd = parseCoNumber(get("budgetedUsd"));
-    const description = descEn || descEs;
-    if (!description) continue; // blank row
 
-    // Chapter header: no unit/quantity/price at all — the sheet's convention
-    // for "this row names a chapter, not a line item".
+    // Bug fixed 2026-08-20 (Seni: "I also don't see honorary fees and the
+    // 19% tax rows at the bottom of the budget"): confirmed live against
+    // Seni's actual sheet — "HONORARY FEES (8.5%)", "TAX 19%", and the
+    // final "TOTAL" are merged cells spanning the Code+Description columns.
+    // When copy-pasted as tab-separated text, a merged cell's text lands in
+    // its FIRST column only (here, the Code column) and every other column
+    // it spans comes through blank — so descEn/descEs were always empty for
+    // these rows, and they got silently dropped by the "blank row" check
+    // below. Chapter codes ("1".."26") always parse as a plain whole
+    // number; these rows' "code" cell is real text, which is how we tell
+    // them apart from an actual chapter header a few lines down.
+    const codeIsChapterNumber =
+      rawCode !== "" && parseCoNumber(rawCode) !== null && !rawCode.includes(".") && !rawCode.includes(",");
+    const codeAsLabel = rawCode && !codeIsChapterNumber && parseCoNumber(rawCode) === null ? rawCode : null;
+    const description = descEn || descEs || codeAsLabel;
+    if (!description) continue; // blank row
+    const code = codeAsLabel ? null : rawCode || null;
+
+    // Chapter header vs. standalone summary row: both have no unit/qty/price
+    // of their own (a chapter's cost is the sum of its line items below;
+    // Honorary Fees/Tax have no line items at all).
     if (!unit && quantity === null && unitPriceCop === null) {
+      // Pure recap rows ("TOTAL", "TOTAL COSTO DIRECTO") just restate a sum
+      // of rows already counted above — importing them as their own line
+      // item would double-count the grand total.
+      if (/^total\b/i.test(description)) continue;
+
+      if (codeIsChapterNumber) {
+        // A real chapter (e.g. "1  PRELIMINARES") — the decimal-coded rows
+        // under it (1.01, 1.02...) get grouped under this category next.
+        currentCategory = description;
+        currentCategoryOriginal = descEn ? descEs || null : null;
+        continue;
+      }
+
+      if (totalCop !== null || budgetedUsd !== null) {
+        // A standalone fee/tax line with real money and no chapter code or
+        // line items of its own — file it under its own category instead
+        // of discarding it or misfiling it into whatever chapter happened
+        // to be last.
+        rows.push({
+          code: null,
+          category: "Fees & Taxes",
+          categoryOriginal: null,
+          description,
+          descriptionOriginal: null,
+          unit: null,
+          quantity: null,
+          unitPriceCop: null,
+          totalCop,
+          budgetedUsd,
+        });
+        continue;
+      }
+
+      // No code, no money, no unit/qty/price — a genuinely empty section
+      // title. Harmless to treat as a header even if nothing follows it.
       currentCategory = description;
       currentCategoryOriginal = descEn ? descEs || null : null;
       continue;
