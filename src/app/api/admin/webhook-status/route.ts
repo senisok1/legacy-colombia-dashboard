@@ -98,6 +98,11 @@ export async function GET(req: NextRequest) {
     const { isOccupying } = await import("@/lib/finance");
     const { resolveGuestName: rgn, buildGuestsById: bgb } = await import("@/lib/guestName");
     const { PROPERTY_GROUPS: groups } = await import("@/lib/propertyGroups");
+    // ?include_cancelled=1 — also lists Cancelled bookings for this property/
+    // month (excluded from totals), so a property-manager statement claiming
+    // income for a stay OwnerRez shows cancelled is visible instead of just
+    // silently missing.
+    const includeCancelled = req.nextUrl.searchParams.get("include_cancelled") === "1";
     const rows: Record<string, unknown>[] = [];
     for (const group of groups) {
       try {
@@ -105,7 +110,9 @@ export async function GET(req: NextRequest) {
         const guestsById = bgb(guests);
         for (const b of bookings) {
           if (b.propertyId !== propertyId) continue;
-          if (!isOccupying(b)) continue;
+          if (b.isBlock) continue;
+          const occupying = isOccupying(b);
+          if (!occupying && !(includeCancelled && b.status === "Cancelled")) continue;
           if (!b.arrival || !b.arrival.slice(0, 7).startsWith(month)) continue;
           rows.push({
             guestName: rgn(b, guestsById),
@@ -113,9 +120,12 @@ export async function GET(req: NextRequest) {
             checkOut: b.departure,
             nights: b.nights,
             totalAmountUsd: b.totalAmount,
+            hostFeeUsd: b.hostFee,
+            netAmountUsd: Math.round((b.totalAmount - (b.hostFee || 0)) * 100) / 100,
             status: b.status,
             source: b.source,
             propertyGroup: group.id,
+            countsTowardTotal: occupying,
           });
         }
       } catch (err) {
@@ -123,9 +133,20 @@ export async function GET(req: NextRequest) {
       }
     }
     rows.sort((a, b) => String(a.checkIn).localeCompare(String(b.checkIn)));
-    const totalUsd = Math.round(rows.reduce((s, r) => s + (Number(r.totalAmountUsd) || 0), 0) * 100) / 100;
-    const totalNights = rows.reduce((s, r) => s + (Number(r.nights) || 0), 0);
-    return NextResponse.json({ ok: true, propertyId, month, count: rows.length, totalUsd, totalNights, rows });
+    const counted = rows.filter((r) => r.countsTowardTotal);
+    const totalUsd = Math.round(counted.reduce((s, r) => s + (Number(r.totalAmountUsd) || 0), 0) * 100) / 100;
+    const totalNetUsd = Math.round(counted.reduce((s, r) => s + (Number(r.netAmountUsd) || 0), 0) * 100) / 100;
+    const totalNights = counted.reduce((s, r) => s + (Number(r.nights) || 0), 0);
+    return NextResponse.json({
+      ok: true,
+      propertyId,
+      month,
+      count: counted.length,
+      totalUsd,
+      totalNetUsd,
+      totalNights,
+      rows,
+    });
   }
 
   const findGuest = req.nextUrl.searchParams.get("find_guest");
