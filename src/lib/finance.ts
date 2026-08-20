@@ -9,6 +9,20 @@ export function isRevenueCounting(b: Booking): boolean {
   return !b.isBlock && REVENUE_COUNTING_STATUSES.has(b.status);
 }
 
+// Shared "does this booking occupy a calendar day" definition (2026-08-19,
+// fixing the Team Management calendar disagreeing with the Dashboard one:
+// Team Management's calendarStays filter only excluded Cancelled, so a mere
+// Inquiry or Quote painted the day blue/booked there but gray/available on
+// the Dashboard, which already used this exact whitelist). Deliberately
+// includes "Hold" (a held date IS unavailable) unlike REVENUE_COUNTING_STATUSES
+// above (a hold hasn't actually been paid for) — these are different
+// questions and shouldn't be conflated into one set.
+const OCCUPYING_STATUSES = new Set(["Booked", "Checked In", "Checked Out", "Hold"]);
+
+export function isOccupying(b: Booking): boolean {
+  return !b.isBlock && OCCUPYING_STATUSES.has(b.status);
+}
+
 // totalAmount is the GROSS amount charged to the guest. hostFee (OwnerRez's
 // `total_host_fees`) is what's deducted before Seni actually gets paid —
 // computed here rather than stored on the booking so gross and net can

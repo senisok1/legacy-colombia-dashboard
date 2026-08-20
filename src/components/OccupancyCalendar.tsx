@@ -14,7 +14,7 @@ import {
   startOfMonth,
 } from "date-fns";
 import type { Booking } from "@/lib/types";
-import { isRevenueCounting, netAmount } from "@/lib/finance";
+import { isRevenueCounting, isOccupying, netAmount } from "@/lib/finance";
 import { useCurrency } from "@/components/CurrencyProvider";
 import { useT, useLanguage } from "@/components/LanguageProvider";
 
@@ -23,8 +23,6 @@ const DOW_BY_LANG: Record<string, string[]> = {
   Spanish: ["D", "L", "M", "M", "J", "V", "S"],
   Portuguese: ["D", "S", "T", "Q", "Q", "S", "S"],
 };
-
-const OCCUPIED_STATUSES = new Set(["Booked", "Checked In", "Checked Out", "Hold"]);
 
 // How far Seni can browse in either direction from the current month — far
 // enough to review a full year of history or look a year out for planning,
@@ -54,9 +52,7 @@ export function OccupancyCalendar({ bookings, showFinancials = true }: { booking
   // blue "Booked" even in months with only a handful of actual reservations
   // (see lib/finance.ts's isRevenueCounting, which excludes them the same
   // way for revenue).
-  const occupiedBookings = bookings.filter(
-    (b) => !b.isBlock && OCCUPIED_STATUSES.has(b.status) && b.arrival && b.departure
-  );
+  const occupiedBookings = bookings.filter((b) => isOccupying(b) && b.arrival && b.departure);
 
   function bookingForDay(day: Date): Booking | undefined {
     return occupiedBookings.find((b) => {

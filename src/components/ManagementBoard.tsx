@@ -68,6 +68,20 @@ function stayDates(arrival?: string, departure?: string): string[] {
   }
   return out;
 }
+
+/** Same as stayDates() but excludes the departure/checkout day — a stay
+ * doesn't occupy the property that night (2026-08-19 fix, Seni: "why
+ * doesn't the calendar on the team management tab match with the calendar
+ * on the dashboard"). The Dashboard's OccupancyCalendar has always used a
+ * half-open [arrival, departure) interval; this file's stayDates() was
+ * inclusive of departure, so every checkout day painted blue/booked here but
+ * gray/available on the Dashboard. Only used for the calendar cells below —
+ * stayDates() itself stays inclusive for the event-date picker further down,
+ * where the checkout day is still a valid day to schedule something. */
+function occupiedDates(arrival?: string, departure?: string): string[] {
+  const all = stayDates(arrival, departure);
+  return all.length > 1 ? all.slice(0, -1) : all;
+}
 type LogEntry = StayNote;
 type CalendarStay = { bookingId: number; guestName: string; arrival?: string; departure?: string };
 type BoardData = {
@@ -185,19 +199,22 @@ function StayCalendar({ stays, calendarStays }: { stays: Stay[]; calendarStays: 
   const todayIso = new Date().toISOString().slice(0, 10);
 
   const byDay = new Map<string, { guests: string[]; events: string[] }>();
-  // Occupancy comes from calendarStays (past + future) so past booked
-  // nights stay blue; events come from the upcoming/in-house stays list.
+  // Occupancy comes ONLY from calendarStays (past + future, already filtered
+  // to isOccupying() statuses server-side — see api/management/route.ts) so
+  // past booked nights stay blue and a mere Inquiry/Quote doesn't paint a day
+  // blue here just because it's also in the upcoming stays list below (fixed
+  // 2026-08-19 — this loop used to ALSO add every `stays` entry to `guests`
+  // regardless of status, which is what made this calendar disagree with the
+  // Dashboard's: `stays`/upcoming only excludes Cancelled, not Inquiry/Quote).
+  // Events still come from the upcoming/in-house stays list — that's a
+  // separate, unrelated concept from occupancy.
   for (const cs of calendarStays) {
-    for (const d of stayDates(cs.arrival, cs.departure)) {
+    for (const d of occupiedDates(cs.arrival, cs.departure)) {
       if (!byDay.has(d)) byDay.set(d, { guests: [], events: [] });
       if (!byDay.get(d)!.guests.includes(cs.guestName)) byDay.get(d)!.guests.push(cs.guestName);
     }
   }
   for (const s of stays) {
-    for (const d of stayDates(s.arrival, s.departure)) {
-      if (!byDay.has(d)) byDay.set(d, { guests: [], events: [] });
-      if (!byDay.get(d)!.guests.includes(s.guestName)) byDay.get(d)!.guests.push(s.guestName);
-    }
     if (s.eventScheduled && s.eventDate) {
       if (!byDay.has(s.eventDate)) byDay.set(s.eventDate, { guests: [], events: [] });
       byDay

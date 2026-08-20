@@ -7,6 +7,7 @@ import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { redisGet, redisSet } from "@/lib/redis";
 import { PROPERTY_GROUP_COOKIE, DEFAULT_PROPERTY_GROUP_ID, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import { isOccupying } from "@/lib/finance";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -92,15 +93,17 @@ async function buildBoard(orgId: string, groupId: string) {
   // Calendar occupancy needs PAST stays too (2026-08-16, Seni: "so that I
   // can see what days were actually booked") — the stays list above is
   // deliberately upcoming/in-house only. Minimal fields, ~12 months back.
+  //
+  // isOccupying (2026-08-19 fix, Seni: "why doesn't the calendar on the team
+  // management tab match with the calendar on the dashboard"): this used to
+  // only exclude Cancelled, so an Inquiry or Quote painted the day blue here
+  // but gray on the Dashboard's OccupancyCalendar, which already used the
+  // stricter Booked/Checked In/Checked Out/Hold whitelist. Both calendars
+  // now share that exact definition — see lib/finance.ts.
   const calendarWindowMs = Date.now() - 365 * 24 * 60 * 60 * 1000;
   const calendarStays = bookings
     .filter(
-      (b) =>
-        !b.isBlock &&
-        b.status !== "Cancelled" &&
-        b.arrival &&
-        b.departure &&
-        new Date(b.departure).getTime() >= calendarWindowMs
+      (b) => isOccupying(b) && b.arrival && b.departure && new Date(b.departure).getTime() >= calendarWindowMs
     )
     .map((b) => ({
       bookingId: b.id,
