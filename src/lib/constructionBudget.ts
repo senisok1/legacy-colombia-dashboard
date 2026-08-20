@@ -164,6 +164,68 @@ export async function listConstructionBudgetItems(
   return rows.map(fromRow);
 }
 
+// Editable COP -> USD exchange rate (2026-08-20, Seni's ask: "this is
+// currently at a 3700 COP to USD exchange rate. add a box somewhere where I
+// can modify that rate which will then modify the USD budget"). The source
+// spreadsheet baked in a fixed historical rate when it computed each row's
+// Budgeted (USD) — this makes that number live instead: applyFxRate()
+// recomputes budgetedUsd = totalCop / rate for every row that has a
+// totalCop, falling back to the originally-imported figure only when a row
+// has no totalCop to recompute from. See db/migrations/0047.
+export const DEFAULT_FX_RATE_COP_PER_USD = 3700;
+
+export async function getConstructionBudgetFxRate(organizationId: string, propertyGroupId: string): Promise<number> {
+  const row = await queryOne<{ fx_rate_cop_per_usd: string }>(
+    `select fx_rate_cop_per_usd from construction_budget_settings
+     where organization_id = $1 and property_group_id = $2`,
+    [organizationId, propertyGroupId]
+  );
+  const rate = row ? Number(row.fx_rate_cop_per_usd) : DEFAULT_FX_RATE_COP_PER_USD;
+  return Number.isFinite(rate) && rate > 0 ? rate : DEFAULT_FX_RATE_COP_PER_USD;
+}
+
+/** Seni-only (enforced by the caller — see api/construction-budget/fx-rate/
+ * route.ts) — the rate materially changes every Budgeted (USD) figure on the
+ * tab, same "changing the budget" policy as import/delete. */
+export async function setConstructionBudgetFxRate(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  rate: number;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<number> {
+  await query(
+    `insert into construction_budget_settings
+       (organization_id, property_group_id, fx_rate_cop_per_usd, updated_at, updated_by_email, updated_by_name)
+     values ($1, $2, $3, now(), $4, $5)
+     on conflict (organization_id, property_group_id)
+     do update set fx_rate_cop_per_usd = excluded.fx_rate_cop_per_usd, updated_at = now(),
+                    updated_by_email = excluded.updated_by_email, updated_by_name = excluded.updated_by_name`,
+    [input.organizationId, input.propertyGroupId, input.rate, input.actorEmail, input.actorName]
+  );
+  await query(
+    `insert into construction_budget_activity_log
+       (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
+     values ($1, $2, null, null, 'updated', $3, $4, $5)`,
+    [
+      input.organizationId,
+      input.propertyGroupId,
+      `FX rate set to ${input.rate.toLocaleString("en-US")} COP/USD`,
+      input.actorEmail,
+      input.actorName,
+    ]
+  );
+  return input.rate;
+}
+
+/** Recomputes Budgeted (USD) from each row's total_cop at the given rate —
+ * pure function, no DB access, so the same logic can be reused wherever
+ * items are read (list, single-row fetches) without duplicating it. */
+export function applyFxRate(items: ConstructionBudgetItem[], rateCopPerUsd: number): ConstructionBudgetItem[] {
+  if (!Number.isFinite(rateCopPerUsd) || rateCopPerUsd <= 0) return items;
+  return items.map((item) => (item.totalCop !== null ? { ...item, budgetedUsd: item.totalCop / rateCopPerUsd } : item));
+}
+
 export type ImportRow = {
   code: string | null;
   category: string;

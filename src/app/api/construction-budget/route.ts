@@ -4,7 +4,9 @@ import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { isConstructionOwner } from "@/lib/construction";
 import {
+  applyFxRate,
   deleteConstructionBudgetItem,
+  getConstructionBudgetFxRate,
   listConstructionBudgetActivityLog,
   listConstructionBudgetItems,
   replaceConstructionBudgetItems,
@@ -59,16 +61,23 @@ export async function GET(req: NextRequest) {
   if (error) return error;
   try {
     const groupId = await resolveGroupId(req, session.email);
-    const [items, log] = await Promise.all([
+    const [rawItems, log, fxRate] = await Promise.all([
       listConstructionBudgetItems(session.organizationId, groupId),
       listConstructionBudgetActivityLog(session.organizationId, groupId),
+      getConstructionBudgetFxRate(session.organizationId, groupId),
     ]);
+    // Budgeted (USD) is recomputed live from each row's total_cop at the
+    // current rate (2026-08-20, Seni's ask) rather than staying pinned to
+    // whatever fixed rate the source spreadsheet baked in at import time.
+    const items = applyFxRate(rawItems, fxRate);
     return NextResponse.json({
       items,
       log,
+      fxRate,
       viewerRole: session.role,
-      // Drives the Import panel and the per-row/per-log delete buttons in
-      // ConstructionBudgetBoard.tsx — Seni specifically, not every CEO login.
+      // Drives the Import panel, the per-row/per-log delete buttons, and the
+      // FX rate edit box in ConstructionBudgetBoard.tsx — Seni specifically,
+      // not every CEO login.
       canManage: isConstructionOwner(session.email),
     });
   } catch (err) {
@@ -138,7 +147,9 @@ export async function PATCH(req: NextRequest) {
       actorEmail: session.email,
       actorName: user?.name ?? null,
     });
-    return item ? NextResponse.json({ ok: true, item }) : NextResponse.json({ error: "No such row." }, { status: 404 });
+    if (!item) return NextResponse.json({ error: "No such row." }, { status: 404 });
+    const fxRate = await getConstructionBudgetFxRate(session.organizationId, groupId);
+    return NextResponse.json({ ok: true, item: applyFxRate([item], fxRate)[0] });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("PATCH /api/construction-budget failed:", message);

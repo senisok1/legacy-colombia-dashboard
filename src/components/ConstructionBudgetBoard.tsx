@@ -266,6 +266,17 @@ export function ConstructionBudgetBoard() {
   const [log, setLog] = useState<LogEntry[] | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [removingLogId, setRemovingLogId] = useState<string | null>(null);
+  // Editable COP -> USD exchange rate (2026-08-20, Seni's ask: "add a box
+  // somewhere where I can modify that rate which will then modify the USD
+  // budget"). Seni-only to edit — everyone else (other CEO logins, the
+  // CONSTRUCTION login) sees it read-only, same policy as import/delete.
+  // Budgeted (USD) below is already recomputed server-side at this rate
+  // (see api/construction-budget/route.ts), so editing it and reloading is
+  // enough — no client-side recompute needed.
+  const [fxRate, setFxRate] = useState<number | null>(null);
+  const [fxRateDraft, setFxRateDraft] = useState("");
+  const [editingFxRate, setEditingFxRate] = useState(false);
+  const [savingFxRate, setSavingFxRate] = useState(false);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async (fresh = false) => {
@@ -276,6 +287,7 @@ export function ConstructionBudgetBoard() {
       setItems(json.items ?? []);
       setLog(json.log ?? []);
       setCanManage(Boolean(json.canManage));
+      if (typeof json.fxRate === "number") setFxRate(json.fxRate);
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
@@ -286,6 +298,32 @@ export function ConstructionBudgetBoard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function saveFxRate() {
+    const rate = parseCoNumber(fxRateDraft);
+    if (rate === null || rate <= 0) {
+      setError("Enter a valid exchange rate (e.g. 3700).");
+      return;
+    }
+    setSavingFxRate(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction-budget/fx-rate", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rate }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setEditingFxRate(false);
+      setNotice(`Exchange rate set to ${rate.toLocaleString("en-US")} COP = $1 USD. Budgeted (USD) updated below.`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save the rate.");
+    } finally {
+      setSavingFxRate(false);
+    }
+  }
 
   async function removeLogEntry(entry: LogEntry) {
     if (removingLogId || !window.confirm("Delete this log entry? This can't be undone.")) return;
@@ -394,6 +432,63 @@ export function ConstructionBudgetBoard() {
 
   return (
     <div className="space-y-4">
+      {/* Exchange rate — Seni-only to edit (2026-08-20, Seni's ask: "add a
+          box somewhere where I can modify that rate which will then modify
+          the USD budget"). Everyone else sees the current rate read-only. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2.5 text-sm">
+        <span className="text-black/50 dark:text-white/50">Exchange rate:</span>
+        {editingFxRate ? (
+          <>
+            <input
+              type="text"
+              inputMode="decimal"
+              className="w-28 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-right text-sm"
+              value={fxRateDraft}
+              onChange={(e) => setFxRateDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void saveFxRate();
+              }}
+              autoFocus
+            />
+            <span className="text-black/50 dark:text-white/50">COP = $1 USD</span>
+            <button
+              onClick={() => void saveFxRate()}
+              disabled={savingFxRate}
+              className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs text-white disabled:opacity-40"
+            >
+              {savingFxRate ? "Saving…" : "Save"}
+            </button>
+            <button
+              onClick={() => setEditingFxRate(false)}
+              disabled={savingFxRate}
+              className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="font-semibold">
+              {fxRate !== null ? `${fxRate.toLocaleString("en-US")} COP = $1 USD` : "…"}
+            </span>
+            {canManage && fxRate !== null && (
+              <button
+                onClick={() => {
+                  setFxRateDraft(String(fxRate));
+                  setEditingFxRate(true);
+                }}
+                className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5"
+              >
+                Edit
+              </button>
+            )}
+          </>
+        )}
+        <span className="text-xs text-black/40 dark:text-white/40">
+          Changing this recalculates every Budgeted (USD) figure below from each line&apos;s Total (COP).
+        </span>
+      </div>
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
@@ -597,7 +692,9 @@ export function ConstructionBudgetBoard() {
                       ? `imported the budget (${entry.detail ?? ""})`
                       : entry.action === "deleted"
                         ? <>removed &ldquo;{entry.itemDescription}&rdquo;</>
-                        : <>updated &ldquo;{entry.itemDescription}&rdquo; — {entry.detail}</>}
+                        : entry.itemDescription === null
+                          ? entry.detail // e.g. an FX-rate change — no single item to name
+                          : <>updated &ldquo;{entry.itemDescription}&rdquo; — {entry.detail}</>}
                     <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
                   </div>
                   {canManage && (
