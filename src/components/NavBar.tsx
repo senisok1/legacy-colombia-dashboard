@@ -268,21 +268,26 @@ export function NavBar({
   // returns enabled:false for other property groups, this just stops the
   // tab from appearing at all on them. Nav-level hiding only; the real
   // scoping stays server-side in api/management/commissions.
-  // CONSTRUCTION logins (2026-08-20) see exactly two nav entries: Dashboard
+  // CONSTRUCTION logins (2026-08-20) see exactly three nav entries: Dashboard
   // (added same day, Seni's ask: "give the construction management team
   // members the same dashboard tab view that the team members have" — the
   // same ops-focused view READ_ONLY gets, see app/dashboard/page.tsx's
-  // isTeam flag) and the Construction Management checklist — no Settings,
+  // isTeam flag), the Construction Management checklist, and Construction
+  // Budget (widened same day, Seni's ask: "the construction team member can
+  // enter actual amount as well" — import/delete on that tab stays Seni-only
+  // via api/construction-budget/route.ts's requireManager) — no Settings,
   // nothing else. This is a UI-layer mirror of the hard proxy.ts block; that
   // block is the real enforcement (typing a URL still bounces), this just
   // keeps the nav from advertising tabs the login can't open anyway.
   const roleEntries =
     role === "CONSTRUCTION"
-      ? // Plain links, NOT the Construction Management dropdown group — that
-        // group also contains the CEO-only Budget tab.
+      ? // Plain links, NOT the Construction Management dropdown group — kept
+        // as separate entries so this list stays exactly what the role can
+        // reach, independent of how the CEO nav happens to group them.
         ([
           { type: "link", href: "/dashboard", label: "Dashboard" },
           { type: "link", href: "/construction", label: "Construction Management" },
+          { type: "link", href: "/construction-budget", label: "Construction Budget" },
         ] as NavEntry[])
       : role === "READ_ONLY"
         ? navEntries
@@ -291,9 +296,9 @@ export function NavBar({
             .map((e): NavEntry => (e.label === "Settings" ? { type: "link", href: "/settings", label: "Settings" } : e))
         : navEntries;
   // Legacy Colombia only, for now (2026-08-19 for Commissions, 2026-08-20
-  // for Construction Management — same mechanism, same "not enabled on the
-  // other four properties yet" reasoning).
-  const PROPERTY_SCOPED_LABELS = new Set(["Commissions", "Construction Management"]);
+  // for Construction Management and Construction Budget — same mechanism,
+  // same "not enabled on the other four properties yet" reasoning).
+  const PROPERTY_SCOPED_LABELS = new Set(["Commissions", "Construction Management", "Construction Budget"]);
   const visibleEntries =
     (propertyGroupId ?? "legacy-colombia") === "legacy-colombia"
       ? roleEntries

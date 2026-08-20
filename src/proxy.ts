@@ -246,20 +246,29 @@ export async function proxy(req: NextRequest) {
     // members the same dashboard tab view that the team members have") to
     // also allow /dashboard — the page is a self-contained server render
     // (AutoRefresh just re-requests /dashboard itself; no separate client
-    // API call), so no extra /api/* entry was needed for it. Still an
-    // allowlist rather than the READ_ONLY block's denylist below, since the
-    // allowed surface is two tabs: anything not explicitly listed is
-    // refused. Pages bounce to /construction; APIs get 403. Checked BEFORE
-    // the READ_ONLY block since a session is exactly one role — this return
-    // short-circuits so the (much wider) READ_ONLY allowlist further down
-    // never runs for a CONSTRUCTION session.
+    // API call), so no extra /api/* entry was needed for it. Widened again
+    // same day (Seni's ask: "the construction team member can enter actual
+    // amount as well" on the Budget tab) to also allow /construction-budget
+    // — the route itself still enforces Seni-only for import/delete (see
+    // api/construction-budget/route.ts's requireManager), this just lets
+    // the login reach the page/API at all so it can view + PATCH actuals.
+    // Still an allowlist rather than the READ_ONLY block's denylist below,
+    // since the allowed surface is three tabs: anything not explicitly
+    // listed is refused. Pages bounce to /construction; APIs get 403.
+    // Checked BEFORE the READ_ONLY block since a session is exactly one
+    // role — this return short-circuits so the (much wider) READ_ONLY
+    // allowlist further down never runs for a CONSTRUCTION session.
     if (session!.role === "CONSTRUCTION") {
       const allowed =
         pathname === "/dashboard" ||
         pathname === "/construction" ||
         pathname.startsWith("/construction/") ||
+        pathname === "/construction-budget" ||
+        pathname.startsWith("/construction-budget/") ||
         pathname === "/api/construction" ||
         pathname.startsWith("/api/construction/") ||
+        pathname === "/api/construction-budget" ||
+        pathname.startsWith("/api/construction-budget/") ||
         pathname === "/api/logout";
       if (!allowed) {
         if (pathname.startsWith("/api/")) {

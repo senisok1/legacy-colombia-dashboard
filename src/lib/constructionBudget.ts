@@ -80,6 +80,77 @@ function fromRow(r: Row): ConstructionBudgetItem {
   };
 }
 
+// Activity log (2026-08-20, Seni's ask: "add an activity log button here
+// too... so that we can monitor who entered what on this screen"). Mirrors
+// construction_activity_log's role in lib/construction.ts, but its own
+// table (construction_budget_activity_log) since budget rows live in a
+// separate table with a separate lifecycle (import/replace, not create/
+// complete). Collapsed-by-default in the UI, same pattern as the other two
+// activity logs in this app.
+export type ConstructionBudgetLogEntry = {
+  id: string;
+  itemDescription: string | null;
+  action: "imported" | "updated" | "deleted";
+  detail: string | null;
+  actor: string;
+  at: string;
+};
+
+type LogRow = {
+  id: string;
+  item_description: string | null;
+  action: string;
+  detail: string | null;
+  actor_email: string;
+  actor_name: string | null;
+  at: string;
+};
+
+function logFromRow(r: LogRow): ConstructionBudgetLogEntry {
+  return {
+    id: r.id,
+    itemDescription: r.item_description,
+    action: r.action as ConstructionBudgetLogEntry["action"],
+    detail: r.detail,
+    actor: r.actor_name?.trim() || r.actor_email,
+    at: r.at,
+  };
+}
+
+export async function listConstructionBudgetActivityLog(
+  organizationId: string,
+  propertyGroupId: string,
+  limit = 200
+): Promise<ConstructionBudgetLogEntry[]> {
+  const rows = await query<LogRow>(
+    `select id, item_description, action, detail, actor_email, actor_name, at
+     from construction_budget_activity_log
+     where organization_id = $1 and property_group_id = $2
+     order by at desc
+     limit $3`,
+    [organizationId, propertyGroupId, limit]
+  );
+  return rows.map(logFromRow);
+}
+
+/** Deletes a single activity-log entry outright. Restricted to Seni
+ * specifically — enforced by the caller, see
+ * api/construction-budget/log/route.ts (same policy as the Construction
+ * Management checklist's log, and as import/delete on this budget itself). */
+export async function deleteConstructionBudgetActivityLogEntry(
+  organizationId: string,
+  propertyGroupId: string,
+  id: string
+): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `delete from construction_budget_activity_log
+     where id = $1 and organization_id = $2 and property_group_id = $3
+     returning id`,
+    [id, organizationId, propertyGroupId]
+  );
+  return Boolean(row);
+}
+
 export async function listConstructionBudgetItems(
   organizationId: string,
   propertyGroupId: string
@@ -114,7 +185,9 @@ export type ImportRow = {
 export async function replaceConstructionBudgetItems(
   organizationId: string,
   propertyGroupId: string,
-  items: ImportRow[]
+  items: ImportRow[],
+  actorEmail: string,
+  actorName: string | null
 ): Promise<number> {
   return withClient(async (client) => {
     await client.query("begin");
@@ -148,6 +221,15 @@ export async function replaceConstructionBudgetItems(
           ]
         );
       }
+      // Logged inside the same transaction — an import that fails partway
+      // rolls back the log entry too, so the log never claims an import
+      // happened when it didn't.
+      await client.query(
+        `insert into construction_budget_activity_log
+           (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
+         values ($1, $2, null, null, 'imported', $3, $4, $5)`,
+        [organizationId, propertyGroupId, `${items.length} line item(s)`, actorEmail, actorName]
+      );
       await client.query("commit");
       return items.length;
     } catch (err) {
@@ -185,19 +267,45 @@ export async function updateConstructionBudgetItem(input: {
      returning ${COLUMNS}`,
     values
   );
-  return row ? fromRow(row) : null;
+  if (!row) return null;
+
+  // Human-readable summary of what changed — the log line itself stays
+  // short; the full note text is already visible on the row.
+  const parts: string[] = [];
+  if (input.actualUsd !== undefined) {
+    parts.push(input.actualUsd === null ? "Actual cleared" : `Actual set to $${Math.round(input.actualUsd).toLocaleString("en-US")}`);
+  }
+  if (input.notes !== undefined) parts.push("Notes updated");
+  if (parts.length > 0) {
+    await query(
+      `insert into construction_budget_activity_log
+         (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
+       values ($1, $2, $3, $4, 'updated', $5, $6, $7)`,
+      [input.organizationId, input.propertyGroupId, row.id, row.description, parts.join("; "), input.actorEmail, input.actorName]
+    );
+  }
+  return fromRow(row);
 }
 
-export async function deleteConstructionBudgetItem(
-  organizationId: string,
-  propertyGroupId: string,
-  id: string
-): Promise<boolean> {
-  const row = await queryOne<{ id: string }>(
+export async function deleteConstructionBudgetItem(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  id: string;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<boolean> {
+  const row = await queryOne<{ id: string; description: string }>(
     `delete from construction_budget_items
      where id = $1 and organization_id = $2 and property_group_id = $3
-     returning id`,
-    [id, organizationId, propertyGroupId]
+     returning id, description`,
+    [input.id, input.organizationId, input.propertyGroupId]
   );
-  return Boolean(row);
+  if (!row) return false;
+  await query(
+    `insert into construction_budget_activity_log
+       (organization_id, property_group_id, item_id, item_description, action, actor_email, actor_name)
+     values ($1, $2, null, $3, 'deleted', $4, $5)`,
+    [input.organizationId, input.propertyGroupId, row.description, input.actorEmail, input.actorName]
+  );
+  return true;
 }

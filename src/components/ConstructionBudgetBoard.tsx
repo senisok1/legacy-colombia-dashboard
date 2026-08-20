@@ -47,6 +47,15 @@ type ImportRow = {
   budgetedUsd: number | null;
 };
 
+type LogEntry = {
+  id: string;
+  itemDescription: string | null;
+  action: "imported" | "updated" | "deleted";
+  detail: string | null;
+  actor: string;
+  at: string;
+};
+
 function fmtUsd(n: number | null): string {
   if (n === null) return "—";
   return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -246,6 +255,17 @@ export function ConstructionBudgetBoard() {
   const [preview, setPreview] = useState<ImportRow[] | null>(null);
   const [importing, setImporting] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  // Import/delete are Seni-only (2026-08-20, Seni's ask: "make sure that I,
+  // Seni Sok, is the only one that can import budgets or change budgets") —
+  // drives whether the Import panel and per-row/per-log delete buttons even
+  // render. Entering Actual (USD) stays open to any viewer (CEO or the
+  // CONSTRUCTION login), so it's NOT gated by this flag.
+  const [canManage, setCanManage] = useState(false);
+  // Activity log, collapsed by default (2026-08-20, Seni's ask: "add an
+  // activity log button here too... so we can monitor who entered what").
+  const [log, setLog] = useState<LogEntry[] | null>(null);
+  const [showLog, setShowLog] = useState(false);
+  const [removingLogId, setRemovingLogId] = useState<string | null>(null);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async (fresh = false) => {
@@ -254,6 +274,8 @@ export function ConstructionBudgetBoard() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setItems(json.items ?? []);
+      setLog(json.log ?? []);
+      setCanManage(Boolean(json.canManage));
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
@@ -264,6 +286,26 @@ export function ConstructionBudgetBoard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function removeLogEntry(entry: LogEntry) {
+    if (removingLogId || !window.confirm("Delete this log entry? This can't be undone.")) return;
+    setRemovingLogId(entry.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction-budget/log", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: entry.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete.");
+    } finally {
+      setRemovingLogId(null);
+    }
+  }
 
   function handlePreview() {
     setNotice(null);
@@ -313,6 +355,9 @@ export function ConstructionBudgetBoard() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setItems((prev) => (prev ? prev.map((i) => (i.id === item.id ? json.item : i)) : prev));
+      // Background refresh so the activity log picks up the new "updated"
+      // entry without the user having to do anything.
+      void load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
@@ -373,7 +418,13 @@ export function ConstructionBudgetBoard() {
         </div>
       </div>
 
-      {/* Import panel */}
+      {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+      {/* Import panel — Seni only (2026-08-20, Seni's ask). Everyone else
+          (other CEO logins, the CONSTRUCTION login) can view the budget and
+          enter Actual (USD) below, but can't import or restructure it. */}
+      {canManage && (
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
         <div className="flex items-center justify-between">
           <div>
@@ -391,9 +442,6 @@ export function ConstructionBudgetBoard() {
             {showImport ? "Cancel" : items && items.length > 0 ? "Re-import" : "Import"}
           </button>
         </div>
-
-        {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
-        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
         {showImport && (
           <div className="space-y-2">
@@ -445,6 +493,7 @@ export function ConstructionBudgetBoard() {
           </div>
         )}
       </section>
+      )}
 
       {/* Line items, grouped by chapter/category */}
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 overflow-x-auto">
@@ -452,7 +501,9 @@ export function ConstructionBudgetBoard() {
           <p className="p-4 text-sm text-black/50 dark:text-white/50">Loading…</p>
         ) : items.length === 0 ? (
           <p className="p-4 text-sm text-black/50 dark:text-white/50">
-            Nothing imported yet — use Import above to paste in the budget spreadsheet.
+            {canManage
+              ? "Nothing imported yet — use Import above to paste in the budget spreadsheet."
+              : "Nothing imported yet."}
           </p>
         ) : (
           <table className="w-full min-w-[64rem] text-sm">
@@ -496,6 +547,7 @@ export function ConstructionBudgetBoard() {
                         key={item.id}
                         item={item}
                         saving={savingId === item.id}
+                        canManage={canManage}
                         onSaveActual={(v) => void saveActual(item, v)}
                         onRemove={() => void removeItem(item)}
                       />
@@ -520,6 +572,48 @@ export function ConstructionBudgetBoard() {
           </table>
         )}
       </section>
+
+      {/* Activity log, collapsed by default (2026-08-20, Seni's ask). */}
+      <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-2">
+        <button
+          onClick={() => setShowLog((v) => !v)}
+          className="text-xs font-medium uppercase tracking-wide text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80"
+        >
+          Activity Log
+          {log ? ` (${log.length})` : ""} {showLog ? "▾" : "▸"}
+        </button>
+        {showLog &&
+          (!log ? (
+            <p className="text-sm text-black/50 dark:text-white/50">Loading…</p>
+          ) : log.length === 0 ? (
+            <p className="text-sm text-black/50 dark:text-white/50">Nothing logged yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {log.map((entry) => (
+                <li key={entry.id} className="flex items-start justify-between gap-2 text-sm text-black/70 dark:text-white/70">
+                  <div>
+                    <strong>{entry.actor}</strong>{" "}
+                    {entry.action === "imported"
+                      ? `imported the budget (${entry.detail ?? ""})`
+                      : entry.action === "deleted"
+                        ? <>removed &ldquo;{entry.itemDescription}&rdquo;</>
+                        : <>updated &ldquo;{entry.itemDescription}&rdquo; — {entry.detail}</>}
+                    <span className="ml-2 text-xs text-black/40 dark:text-white/40">{fmtWhen(entry.at)}</span>
+                  </div>
+                  {canManage && (
+                    <button
+                      onClick={() => void removeLogEntry(entry)}
+                      disabled={removingLogId === entry.id}
+                      className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                    >
+                      {removingLogId === entry.id ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ))}
+      </section>
     </div>
   );
 }
@@ -527,11 +621,13 @@ export function ConstructionBudgetBoard() {
 function ItemRow({
   item,
   saving,
+  canManage,
   onSaveActual,
   onRemove,
 }: {
   item: Item;
   saving: boolean;
+  canManage: boolean;
   onSaveActual: (v: number | null) => void;
   onRemove: () => void;
 }) {
@@ -573,9 +669,11 @@ function ItemRow({
         {variance !== null ? fmtUsd(variance) : "—"}
       </td>
       <td className="px-3 py-1.5">
-        <button onClick={onRemove} className="text-xs text-black/40 hover:text-red-500 dark:text-white/40">
-          ✕
-        </button>
+        {canManage && (
+          <button onClick={onRemove} className="text-xs text-black/40 hover:text-red-500 dark:text-white/40">
+            ✕
+          </button>
+        )}
       </td>
     </tr>
   );

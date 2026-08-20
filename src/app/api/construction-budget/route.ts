@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import { isConstructionOwner } from "@/lib/construction";
 import {
   deleteConstructionBudgetItem,
+  listConstructionBudgetActivityLog,
   listConstructionBudgetItems,
   replaceConstructionBudgetItems,
   updateConstructionBudgetItem,
@@ -12,21 +14,37 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// Construction Budget (2026-08-20, Seni's ask) — admin/owner (CEO) ONLY,
-// stricter than the Construction Management checklist (which the
-// CONSTRUCTION login role can also use): real budget numbers (unit prices,
-// totals) are more sensitive than an open-items checklist, and the
-// dedicated CONSTRUCTION login is meant for the construction team, not for
-// seeing the owner's budget. Lives at a sibling path/route
-// (/construction-budget, /api/construction-budget) rather than nested under
-// /construction so it does NOT match src/proxy.ts's CONSTRUCTION-role
-// allowlist (which only covers the literal "/construction" prefix) — that
-// login is hard-blocked here without needing any proxy.ts changes.
-function requireCeo(req: NextRequest) {
+// Construction Budget (2026-08-20, Seni's ask). Two tiers of access, tightened
+// further 2026-08-20 (Seni: "make sure that I, Seni Sok, is the only one that
+// can import budgets or change budgets. The construction team member can
+// enter actual amount as well"):
+//   - VIEW + enter Actual (USD)/notes: CEO role OR the CONSTRUCTION login.
+//   - Import (replace the whole budget) / delete a line item / delete an
+//     activity-log entry: Seni specifically (isConstructionOwner), not any
+//     CEO login — Ahmed and Geo are CEO-role too but can no longer restructure
+//     the budget, same policy as Construction Management's checklist deletes.
+// Still lives at a sibling path/route (/construction-budget,
+// /api/construction-budget) rather than nested under /construction —
+// src/proxy.ts now explicitly allowlists this prefix for the CONSTRUCTION
+// role (widened same day) so the team can reach it to enter actuals.
+function canView(role: string | undefined): boolean {
+  return role === "CEO" || role === "CONSTRUCTION";
+}
+
+function requireViewer(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
-  if (session.role !== "CEO") {
-    return { error: NextResponse.json({ error: "Admin/owner only." }, { status: 403 }) };
+  if (!canView(session.role)) {
+    return { error: NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 }) };
+  }
+  return { session };
+}
+
+function requireManager(req: NextRequest) {
+  const session = getSessionFromRequest(req);
+  if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
+  if (!isConstructionOwner(session.email)) {
+    return { error: NextResponse.json({ error: "Only Seni can import or change the budget." }, { status: 403 }) };
   }
   return { session };
 }
@@ -37,12 +55,22 @@ async function resolveGroupId(req: NextRequest, email: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const { session, error } = requireCeo(req);
+  const { session, error } = requireViewer(req);
   if (error) return error;
   try {
     const groupId = await resolveGroupId(req, session.email);
-    const items = await listConstructionBudgetItems(session.organizationId, groupId);
-    return NextResponse.json({ items });
+    const [items, log] = await Promise.all([
+      listConstructionBudgetItems(session.organizationId, groupId),
+      listConstructionBudgetActivityLog(session.organizationId, groupId),
+    ]);
+    return NextResponse.json({
+      items,
+      log,
+      viewerRole: session.role,
+      // Drives the Import panel and the per-row/per-log delete buttons in
+      // ConstructionBudgetBoard.tsx — Seni specifically, not every CEO login.
+      canManage: isConstructionOwner(session.email),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
     console.error("GET /api/construction-budget failed:", message);
@@ -52,9 +80,9 @@ export async function GET(req: NextRequest) {
 
 // Full re-import — replaces the entire budget for this property group. See
 // ConstructionBudgetBoard.tsx for the paste-from-spreadsheet parser that
-// builds this payload.
+// builds this payload. Seni only.
 export async function POST(req: NextRequest) {
-  const { session, error } = requireCeo(req);
+  const { session, error } = requireManager(req);
   if (error) return error;
 
   const body = (await req.json().catch(() => null)) as { items?: ImportRow[] } | null;
@@ -71,8 +99,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
-    const count = await replaceConstructionBudgetItems(session.organizationId, groupId, body.items);
+    const count = await replaceConstructionBudgetItems(session.organizationId, groupId, body.items, session.email, user?.name ?? null);
     return NextResponse.json({ ok: true, count });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -82,9 +111,11 @@ export async function POST(req: NextRequest) {
 }
 
 // Editing the Actual (USD)/notes on one row — the day-to-day use of this
-// tab once the budget is imported.
+// tab once the budget is imported. Open to CEO or the CONSTRUCTION login
+// (2026-08-20, Seni's ask: "the construction team member can enter actual
+// amount as well") — this is deliberately NOT gated to Seni like POST/DELETE.
 export async function PATCH(req: NextRequest) {
-  const { session, error } = requireCeo(req);
+  const { session, error } = requireViewer(req);
   if (error) return error;
 
   const body = (await req.json().catch(() => null)) as
@@ -115,16 +146,24 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
+// Seni only (2026-08-20, Seni's ask) — NOT every CEO login.
 export async function DELETE(req: NextRequest) {
-  const { session, error } = requireCeo(req);
+  const { session, error } = requireManager(req);
   if (error) return error;
 
   const body = (await req.json().catch(() => null)) as { id?: string } | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
   try {
+    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
-    const ok = await deleteConstructionBudgetItem(session.organizationId, groupId, body.id);
+    const ok = await deleteConstructionBudgetItem({
+      organizationId: session.organizationId,
+      propertyGroupId: groupId,
+      id: body.id,
+      actorEmail: session.email,
+      actorName: user?.name ?? null,
+    });
     return ok ? NextResponse.json({ ok: true }) : NextResponse.json({ error: "No such row." }, { status: 404 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
