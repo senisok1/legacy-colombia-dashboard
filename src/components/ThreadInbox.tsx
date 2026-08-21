@@ -1,9 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PendingDraft, ThreadMessage } from "@/lib/types";
 import type { MessageTranslation } from "@/lib/translate";
 import { formatDate, formatRelativeTime } from "@/lib/format";
+
+// Translation retry ladder (2026-08-21, Seni's ask: "I need to see all
+// messages in English no matter what language the guest is in", reported
+// against a message from Natalia Velez that stayed in Spanish). The enrich
+// endpoint does the actual translation work in the background after the
+// conversation paints — before this fix, a single failed/slow enrich call
+// (e.g. an OwnerRez rate-limit hiccup — this app really does hit those, see
+// lib/inbox.ts) was silently swallowed by a bare `.catch(() => {})`, leaving
+// the guest's message in its original language with no retry and no
+// indication anything had gone wrong. Now it retries automatically with
+// backoff, and MessageBubble shows a "Translating…" note on any guest
+// message that hasn't resolved yet instead of silently presenting the
+// original-language text as if it were final.
+const TRANSLATE_RETRY_DELAYS_MS = [2000, 5000, 10000];
 
 type InboxThread = {
   threadId: number;
@@ -41,6 +55,10 @@ type ThreadDetail = {
   messages: ThreadMessage[];
   translations: Record<number, MessageTranslation>;
   pendingDraft: PendingDraft | null;
+  // "pending" while the enrich pass (still) hasn't successfully resolved a
+  // translation for every guest message with text; "failed" once the retry
+  // ladder is exhausted — drives the banner + manual retry button below.
+  translationStatus: "pending" | "done" | "failed";
 };
 
 export function ThreadInbox({ messagingConfigured }: { messagingConfigured: boolean }) {
@@ -53,6 +71,10 @@ export function ThreadInbox({ messagingConfigured }: { messagingConfigured: bool
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [limit, setLimit] = useState(20);
+  // Guards the retry ladder below (2026-08-21) — if Seni opens a different
+  // conversation while an earlier one's retries are still pending, a stale
+  // retry's response must not get applied to whatever's on screen now.
+  const activeThreadIdRef = useRef<number | null>(null);
 
   // Two layers, same idea as opening a conversation (see openThread below):
   // an instant paint from the short server cache, immediately followed by a
@@ -118,16 +140,27 @@ export function ThreadInbox({ messagingConfigured }: { messagingConfigured: bool
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messagingConfigured, limit]);
 
+  // True once every guest message that has text also has a translations[]
+  // entry — presence in that dict means translateThreadMessages() actually
+  // attempted it (even a message that's already English gets an entry, just
+  // with isEnglish: true), so this is the real signal that nothing was left
+  // behind untranslated. Used to decide whether the retry ladder below
+  // should keep going or can stop.
+  function allGuestMessagesTranslated(messages: ThreadMessage[], translations: Record<number, MessageTranslation>) {
+    return messages.every((m) => !m.isGuest || !m.body.trim() || Boolean(translations[m.id]));
+  }
+
   async function openThread(threadId: number) {
     setSelectedThreadId(threadId);
     setDetail(null);
     setLoadingDetail(true);
+    activeThreadIdRef.current = threadId;
     // Fast path first — real message history plus whatever's already
     // cached, with no live translation or AI drafting, so the conversation
     // itself appears instantly instead of waiting on Claude calls.
     const res = await fetch(`/api/messages/thread/${threadId}`);
     const data = (await res.json()) as ThreadDetail;
-    setDetail(data);
+    setDetail({ ...data, translationStatus: "pending" });
     setLoadingDetail(false);
 
     // Slower work — translating anything not yet cached, generating a fresh
@@ -137,6 +170,27 @@ export function ThreadInbox({ messagingConfigured }: { messagingConfigured: bool
     // showing. The fast path above now reads messages from a 120s cache (see
     // that route's header comment for why), so this is what corrects any
     // staleness back to fully live a moment later.
+    //
+    // RETRY LADDER (2026-08-21, Seni's ask — see the header comment at the
+    // top of this file for the full story). A single enrich call is no
+    // longer trusted as the last word: if it errors, or it comes back but
+    // some guest message still has no translation entry (e.g. OwnerRez's
+    // live message fetch inside that route hit its rate limit and fell back
+    // to a slightly-behind cached copy that's missing the newest message),
+    // this automatically tries again a few times with backoff before giving
+    // up and surfacing a visible "failed" state with a manual retry button —
+    // never silently leaving a guest's message stuck in its original
+    // language with no indication anything's wrong.
+    runEnrich(threadId, 0);
+
+    // Refresh list after opening a conversation (in case list is out of date).
+    // Since route returns cached data only, refresh is just a safety poll.
+    if (messagingConfigured) {
+      fetchThreads().catch(() => {});
+    }
+  }
+
+  function runEnrich(threadId: number, attempt: number) {
     fetch(`/api/messages/thread/${threadId}/enrich`)
       .then((r) => r.json())
       .then(
@@ -146,27 +200,53 @@ export function ThreadInbox({ messagingConfigured }: { messagingConfigured: bool
           translations: Record<number, MessageTranslation>;
           pendingDraft: PendingDraft | null;
           messages?: ThreadMessage[];
+          error?: string;
         }) => {
-          if (enriched.threadId !== threadId) return; // stale response from a since-abandoned thread
+          if (enriched.threadId !== threadId || activeThreadIdRef.current !== threadId) return; // stale/abandoned
+
+          let mergedMessages: ThreadMessage[] = [];
+          let mergedTranslations: Record<number, MessageTranslation> = {};
           setDetail((prev) => {
             if (!prev || prev.threadId !== threadId) return prev;
+            mergedMessages = enriched.messages ?? prev.messages;
+            mergedTranslations = { ...prev.translations, ...enriched.translations };
             return {
               ...prev,
               guestLanguage: enriched.guestLanguage ?? prev.guestLanguage,
-              translations: { ...prev.translations, ...enriched.translations },
+              translations: mergedTranslations,
               pendingDraft: enriched.pendingDraft ?? prev.pendingDraft,
-              messages: enriched.messages ?? prev.messages,
+              messages: mergedMessages,
+              translationStatus: prev.translationStatus,
             };
           });
+
+          const complete =
+            !enriched.error && mergedMessages.length > 0 && allGuestMessagesTranslated(mergedMessages, mergedTranslations);
+
+          if (complete) {
+            setDetail((prev) => (prev && prev.threadId === threadId ? { ...prev, translationStatus: "done" } : prev));
+            return;
+          }
+
+          if (attempt < TRANSLATE_RETRY_DELAYS_MS.length) {
+            setTimeout(() => {
+              if (activeThreadIdRef.current === threadId) runEnrich(threadId, attempt + 1);
+            }, TRANSLATE_RETRY_DELAYS_MS[attempt]);
+          } else {
+            setDetail((prev) => (prev && prev.threadId === threadId ? { ...prev, translationStatus: "failed" } : prev));
+          }
         }
       )
-      .catch(() => {});
-
-    // Refresh list after opening a conversation (in case list is out of date).
-    // Since route returns cached data only, refresh is just a safety poll.
-    if (messagingConfigured) {
-      fetchThreads().catch(() => {});
-    }
+      .catch(() => {
+        if (activeThreadIdRef.current !== threadId) return;
+        if (attempt < TRANSLATE_RETRY_DELAYS_MS.length) {
+          setTimeout(() => {
+            if (activeThreadIdRef.current === threadId) runEnrich(threadId, attempt + 1);
+          }, TRANSLATE_RETRY_DELAYS_MS[attempt]);
+        } else {
+          setDetail((prev) => (prev && prev.threadId === threadId ? { ...prev, translationStatus: "failed" } : prev));
+        }
+      });
   }
 
   function refreshAfterReply() {
@@ -279,7 +359,12 @@ export function ThreadInbox({ messagingConfigured }: { messagingConfigured: bool
         ) : loadingDetail || !detail ? (
           <p className="text-sm text-black/50 dark:text-white/50 py-8 text-center m-auto">Loading conversation…</p>
         ) : (
-          <ThreadDetailView detail={detail} onReplied={refreshAfterReply} onBack={() => setSelectedThreadId(null)} />
+          <ThreadDetailView
+            detail={detail}
+            onReplied={refreshAfterReply}
+            onBack={() => setSelectedThreadId(null)}
+            onRetryTranslation={() => openThread(detail.threadId)}
+          />
         )}
       </div>
     </div>
@@ -290,12 +375,14 @@ function ThreadDetailView({
   detail,
   onReplied,
   onBack,
+  onRetryTranslation,
 }: {
   detail: ThreadDetail;
   onReplied: () => void;
   onBack: () => void;
+  onRetryTranslation: () => void;
 }) {
-  const { booking, guestName, guestLanguage, messages, translations, pendingDraft } = detail;
+  const { booking, guestName, guestLanguage, messages, translations, pendingDraft, translationStatus } = detail;
 
   return (
     <div className="flex flex-col min-h-0 h-full">
@@ -314,12 +401,36 @@ function ThreadDetailView({
         </div>
       </div>
 
+      {/* Failed-state banner (2026-08-21) — the retry ladder in openThread()
+          gave up after a few attempts. Rather than silently leaving whatever
+          language each message happens to show, say so plainly and let Seni
+          retry by hand. */}
+      {translationStatus === "failed" && (
+        <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900/50 flex items-center justify-between gap-2">
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            Couldn&rsquo;t confirm every message is translated (likely an OwnerRez hiccup) — some text below may still
+            be in the guest&rsquo;s original language.
+          </p>
+          <button
+            onClick={onRetryTranslation}
+            className="shrink-0 text-xs font-medium text-amber-700 dark:text-amber-400 underline hover:no-underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
         {messages.length === 0 && (
           <p className="text-sm text-black/40 dark:text-white/40 text-center py-6">No messages in this thread yet.</p>
         )}
         {messages.map((m) => (
-          <MessageBubble key={m.id} message={m} translation={translations[m.id]} />
+          <MessageBubble
+            key={m.id}
+            message={m}
+            translation={translations[m.id]}
+            translating={translationStatus === "pending" && m.isGuest && Boolean(m.body.trim()) && !translations[m.id]}
+          />
         ))}
       </div>
 
@@ -345,7 +456,19 @@ function ThreadDetailView({
   );
 }
 
-function MessageBubble({ message, translation }: { message: ThreadMessage; translation?: MessageTranslation }) {
+function MessageBubble({
+  message,
+  translation,
+  translating,
+}: {
+  message: ThreadMessage;
+  translation?: MessageTranslation;
+  // True while this guest message has no translations[] entry yet and the
+  // retry ladder in openThread() is still working on it (2026-08-21) — shown
+  // instead of silently displaying the original-language text as if
+  // translation were done or simply not needed.
+  translating?: boolean;
+}) {
   const isGuest = message.isGuest;
   const showsTranslation = translation && !translation.isEnglish && translation.english;
 
@@ -362,6 +485,11 @@ function MessageBubble({ message, translation }: { message: ThreadMessage; trans
         {showsTranslation && (
           <div className="mt-1.5 pt-1.5 border-t border-black/10 dark:border-white/10 text-[11px] text-black/40 dark:text-white/40 whitespace-pre-wrap">
             Original ({translation.language}): {message.body}
+          </div>
+        )}
+        {translating && (
+          <div className="mt-1.5 pt-1.5 border-t border-black/10 dark:border-white/10 text-[11px] text-black/40 dark:text-white/40 italic">
+            Translating…
           </div>
         )}
         <div className="mt-1 text-[10px] text-black/35 dark:text-white/35">

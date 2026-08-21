@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBookings, getGuests, getThreadMessages } from "@/lib/ownerrez";
-import { translateThreadMessages } from "@/lib/translate";
+import { translateThreadMessages, type MessageTranslation } from "@/lib/translate";
 import { draftGuestReply } from "@/lib/aiReply";
-import { getGlobalHostStyleExamples } from "@/lib/inbox";
+import { getGlobalHostStyleExamples, getCachedThreadMessages, getSnapshotThreadMessages } from "@/lib/inbox";
 import { resolveGuestName, resolveGuestPhone, buildGuestsById } from "@/lib/guestName";
 import { createPendingDraft, getPendingDraftByThreadId } from "@/lib/pendingDrafts";
 import { isAiReplyConfigured, isMessagingConfigured } from "@/lib/config";
@@ -10,6 +10,7 @@ import { trailingGuestMessages, combineGuestMessageBodies } from "@/lib/guestMes
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import type { Booking, Guest, ThreadMessage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -37,36 +38,97 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
     return NextResponse.json({ error: "OwnerRez messaging isn't connected yet." }, { status: 400 });
   }
 
-  const session = getSessionFromRequest(req);
-  // Property scoping (2026-08-17): without it, getBookings/getGuests below
-  // defaulted to Legacy Colombia, so an Alva thread resolved to no booking,
-  // showed the guest as "Guest", and never got an AI-drafted reply.
-  const groupId = effectivePropertyGroupId(
-    req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
-    (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
-  );
   const { threadId: threadIdParam } = await params;
   const threadId = Number(threadIdParam);
   if (!threadId || Number.isNaN(threadId)) {
     return NextResponse.json({ error: "Invalid threadId." }, { status: 400 });
   }
 
-  const [messages, bookings, guests] = await Promise.all([
-    getThreadMessages(threadId, session?.organizationId),
-    getBookings(session?.organizationId, groupId),
-    getGuests(session?.organizationId, groupId),
-  ]);
-  const booking = bookings.find((b) => b.threadIds.includes(threadId));
-  const guestsById = buildGuestsById(guests);
-  const guestName = booking ? resolveGuestName(booking, guestsById) : "Guest";
+  // Top-level try/catch (2026-08-21, Seni's ask: "I need to see all messages
+  // in English no matter what language the guest is in" — reported against
+  // Natalia Velez's thread staying untranslated). Root cause: this route
+  // previously had NO error handling at all around its live OwnerRez calls —
+  // if OwnerRez rate-limited or hiccuped (it does: ~300 req/5min, see
+  // lib/inbox.ts) the whole handler threw unhandled, Next returned a
+  // non-JSON error response, and ThreadInbox.tsx's `.catch(() => {})` on
+  // this fetch silently swallowed it — the guest's message stayed in its
+  // original language forever, with no retry and no on-screen indication
+  // anything failed. Wrapping the entire handler guarantees this route
+  // always returns valid JSON the frontend can act on (see the `error` field
+  // it now sets on failure, used to drive an automatic retry client-side).
+  try {
+    return await buildEnrichedThread(req, threadId);
+  } catch (err) {
+    console.error(`GET /api/messages/thread/${threadId}/enrich failed:`, err);
+    return NextResponse.json({ threadId, guestLanguage: null, translations: {}, pendingDraft: null, error: "enrich_failed" });
+  }
+}
 
+async function buildEnrichedThread(req: NextRequest, threadId: number) {
+  const session = getSessionFromRequest(req);
+  const groupId = effectivePropertyGroupId(
+    req.cookies.get(PROPERTY_GROUP_COOKIE)?.value,
+    (await getUserByEmail(session?.email ?? "").catch(() => null))?.propertyAccess
+  );
+
+  // Message fetch with a fallback ladder (2026-08-21, Seni's ask: "I need to
+  // see all messages in English no matter what language the guest is in" —
+  // reported against Natalia Velez's thread staying untranslated). Root
+  // cause: this route had NO top-level error handling, and getThreadMessages
+  // is a fully-live, uncached OwnerRez call — if OwnerRez rate-limits or
+  // hiccups (confirmed happens for real: OwnerRez enforces ~300 req/5min,
+  // see lib/inbox.ts), the live call throws, the whole handler throws
+  // unhandled, Next returns a non-JSON error response, and
+  // ThreadInbox.tsx's `.catch(() => {})` on this fetch silently swallows it
+  // — the guest's message is left showing in its original language forever,
+  // with no retry and no on-screen indication anything failed. Falling back
+  // to the 120s-cached copy, then the Redis snapshot (same two layers the
+  // FAST route already trusts), means a single live-fetch hiccup no longer
+  // blocks translation — translateThreadMessages below still runs against
+  // whatever message set we DO have.
+  let messages: ThreadMessage[];
+  try {
+    messages = await getThreadMessages(threadId, session?.organizationId);
+  } catch {
+    try {
+      messages = await getCachedThreadMessages(threadId, session?.organizationId);
+    } catch {
+      messages = (await getSnapshotThreadMessages(threadId, session?.organizationId).catch(() => null)) ?? [];
+    }
+  }
+
+  // Booking/guest lookup is best-effort here too — a failure just means the
+  // guest name/booking context can't be resolved this pass (the fast route
+  // already has a warm/cached fallback for that), but it must never block
+  // translation, which is the one thing this ask is about guaranteeing.
+  let booking: Booking | undefined;
+  let guestName = "Guest";
+  let guestsById = new Map<number, Guest>();
+  try {
+    const [bookings, guests] = await Promise.all([
+      getBookings(session?.organizationId, groupId),
+      getGuests(session?.organizationId, groupId),
+    ]);
+    booking = bookings.find((b) => b.threadIds.includes(threadId));
+    guestsById = buildGuestsById(guests);
+    guestName = booking ? resolveGuestName(booking, guestsById) : "Guest";
+  } catch {
+    // booking stays undefined, guestName stays "Guest" — translation below
+    // is unaffected.
+  }
+
+  // The actual guarantee: always attempt translation for whatever messages
+  // we have, and never let a failure here produce an unhandled exception —
+  // translateThreadMessages() itself already never throws (see its own
+  // per-message fallback), but wrapping defensively means a future change
+  // there can't silently regress this guarantee either.
   const translations = await translateThreadMessages(
     threadId,
     messages.map((m) => ({ id: m.id, body: m.body })),
     session?.organizationId
-  );
+  ).catch(() => ({}) as Record<number, MessageTranslation>);
 
-  let pendingDraft = await getPendingDraftByThreadId(threadId, session?.organizationId);
+  let pendingDraft = await getPendingDraftByThreadId(threadId, session?.organizationId).catch(() => null);
   // A guest can send several messages in a row — draft against (and dedupe
   // on) the whole trailing run of them, not just the very last one. See
   // lib/guestMessageGroup.ts.
