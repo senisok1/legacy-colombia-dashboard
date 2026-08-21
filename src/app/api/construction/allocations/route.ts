@@ -4,31 +4,21 @@ import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import {
   addConstructionFundAllocation,
+  canManageConstruction,
+  canWriteConstruction,
   deleteConstructionFundAllocation,
-  isConstructionOwner,
 } from "@/lib/construction";
 
 export const dynamic = "force-dynamic";
 
 // Fund allocations (2026-08-21, Seni's ask: "allocate deposited
 // construction funds in COP to those open item expenses as well so every
-// dollar is accounted for"). Adding is open to anyone with tab access (CEO
-// or CONSTRUCTION — same policy as entering an estimated cost or a budget
-// line's actual); removing changes the funds accounting and is Seni-only,
-// same trust tier as removing a deposit. The list itself rides the main
-// GET /api/construction response.
-function canAccess(role: string | undefined): boolean {
-  return role === "CEO" || role === "CONSTRUCTION";
-}
-
-// Adding an allocation is write access, narrower than view (2026-08-21,
-// Seni's ask: "Do not allow Ahmed and Geo to have any add edit allocate on
-// the construction tabs. They can have view only") — Seni or the dedicated
-// CONSTRUCTION login only. A plain CEO login that isn't Seni is view-only.
-function canWrite(session: { role?: string; email: string }): boolean {
-  return isConstructionOwner(session.email) || session.role === "CONSTRUCTION";
-}
-
+// dollar is accounted for"). Access is property-scoped (2026-08-21, later
+// same day: "make them view only for Legacy Colombia only but give them
+// same access as me on all the other properties" — Seni-level access, not
+// just standard write): on Legacy Colombia, adding is Seni-or-CONSTRUCTION
+// only and removing is Seni-only; on every other property, any CEO login
+// gets full Seni-level rights (add AND remove) via canManageConstruction.
 async function resolveGroupId(req: NextRequest, email: string) {
   const user = await getUserByEmail(email).catch(() => null);
   return effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
@@ -37,9 +27,6 @@ async function resolveGroupId(req: NextRequest, email: string) {
 export async function POST(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canWrite(session)) {
-    return NextResponse.json({ error: "You have view-only access to Construction." }, { status: 403 });
-  }
 
   const body = (await req.json().catch(() => null)) as
     | { itemId?: string; amountCop?: number; note?: string }
@@ -53,8 +40,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
+    if (!canWriteConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "You have view-only access to Construction." }, { status: 403 });
+    }
+    const user = await getUserByEmail(session.email).catch(() => null);
     const allocation = await addConstructionFundAllocation({
       organizationId: session.organizationId,
       propertyGroupId: groupId,
@@ -76,16 +66,16 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!isConstructionOwner(session.email)) {
-    return NextResponse.json({ error: "Only Seni can remove an allocation." }, { status: 403 });
-  }
 
   const body = (await req.json().catch(() => null)) as { id?: string } | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
+    if (!canManageConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "Only Seni can remove an allocation on this property." }, { status: 403 });
+    }
+    const user = await getUserByEmail(session.email).catch(() => null);
     const ok = await deleteConstructionFundAllocation({
       organizationId: session.organizationId,
       propertyGroupId: groupId,

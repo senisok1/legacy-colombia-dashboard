@@ -1,4 +1,5 @@
 import { query, queryOne } from "./db";
+import { DEFAULT_PROPERTY_GROUP_ID } from "./propertyGroups";
 
 // Deletion (both items and activity-log entries) is restricted to Seni
 // specifically, not just any CEO login (2026-08-20, Seni's ask: "only allow
@@ -10,6 +11,37 @@ export const CONSTRUCTION_OWNER_EMAIL = "senisok1@gmail.com";
 
 export function isConstructionOwner(email: string | undefined | null): boolean {
   return (email ?? "").trim().toLowerCase() === CONSTRUCTION_OWNER_EMAIL;
+}
+
+// Property-scoped access tiers (2026-08-21, Seni's ask: "make them view only
+// for Legacy Colombia only but give them same access as me on all the other
+// properties" — clarified to mean full Seni-level access, not just standard
+// write access). Legacy Colombia keeps the tight, Seni-or-CONSTRUCTION-only
+// policy from earlier the same day; every OTHER property group treats any
+// CEO login as if they were Seni — full manage rights (delete, budget
+// import, FX-rate edit, removing a deposit/allocation), not just add/edit.
+// View (GET) is unaffected by any of this — still any CEO or CONSTRUCTION
+// login, on every property.
+export function canManageConstruction(
+  email: string | undefined | null,
+  role: string | undefined,
+  groupId: string
+): boolean {
+  if (isConstructionOwner(email)) return true;
+  return role === "CEO" && groupId !== DEFAULT_PROPERTY_GROUP_ID;
+}
+
+// Write access (add/edit/toggle/allocate/enter actual spend/notes) — a
+// superset of canManageConstruction that also covers the dedicated
+// CONSTRUCTION team login (which only ever operates on Legacy Colombia, see
+// src/proxy.ts's allowlist, so it never benefits from the other-property
+// carve-out above but keeps its existing day-to-day access there).
+export function canWriteConstruction(
+  email: string | undefined | null,
+  role: string | undefined,
+  groupId: string
+): boolean {
+  return canManageConstruction(email, role, groupId) || role === "CONSTRUCTION";
 }
 
 // Construction Management tab (2026-08-20, Seni's ask) — an open-items

@@ -3,8 +3,8 @@ import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import {
+  canManageConstruction,
   getTotalConstructionFundAllocationsCop,
-  isConstructionOwner,
   listConstructionFundAllocations,
 } from "@/lib/construction";
 import {
@@ -21,10 +21,11 @@ export const dynamic = "force-dynamic";
 // Construction Funds (2026-08-20, Seni's ask: "a 'remaining balance' box
 // that shows construction funds I've deposited but haven't been used yet...
 // a column that shows where the balance is spent so that funds that I
-// deposit are always accounted for"). Same two-tier access as
-// /api/construction-budget: viewing is CEO or the CONSTRUCTION login;
-// logging/removing a deposit is Seni specifically — a real money event, not
-// day-to-day budget upkeep.
+// deposit are always accounted for"). Viewing is CEO or the CONSTRUCTION
+// login, on every property. Logging/removing a deposit — a real money event,
+// not day-to-day budget upkeep — is property-scoped (2026-08-21, Seni's
+// ask): Seni specifically on Legacy Colombia, any CEO login on every other
+// property (full Seni-level access there).
 function canView(role: string | undefined): boolean {
   return role === "CEO" || role === "CONSTRUCTION";
 }
@@ -34,15 +35,6 @@ function requireViewer(req: NextRequest) {
   if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
   if (!canView(session.role)) {
     return { error: NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 }) };
-  }
-  return { session };
-}
-
-function requireManager(req: NextRequest) {
-  const session = getSessionFromRequest(req);
-  if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
-  if (!isConstructionOwner(session.email)) {
-    return { error: NextResponse.json({ error: "Only Seni can log or remove deposits." }, { status: 403 }) };
   }
   return { session };
 }
@@ -83,7 +75,7 @@ export async function GET(req: NextRequest) {
       spendByCategory,
       allocations,
       fxRate,
-      canManage: isConstructionOwner(session.email),
+      canManage: canManageConstruction(session.email, session.role, groupId),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -93,8 +85,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = requireManager(req);
-  if (error) return error;
+  const session = getSessionFromRequest(req);
+  if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const body = (await req.json().catch(() => null)) as { amountCop?: number; note?: string; depositedAt?: string } | null;
   if (typeof body?.amountCop !== "number" || !Number.isFinite(body.amountCop) || body.amountCop <= 0) {
@@ -108,8 +100,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
+    if (!canManageConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "Only Seni can log deposits on this property." }, { status: 403 });
+    }
+    const user = await getUserByEmail(session.email).catch(() => null);
     const deposit = await addConstructionFundsDeposit({
       organizationId: session.organizationId,
       propertyGroupId: groupId,
@@ -128,15 +123,18 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const { session, error } = requireManager(req);
-  if (error) return error;
+  const session = getSessionFromRequest(req);
+  if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const body = (await req.json().catch(() => null)) as { id?: string } | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
+    if (!canManageConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "Only Seni can remove deposits on this property." }, { status: 403 });
+    }
+    const user = await getUserByEmail(session.email).catch(() => null);
     const ok = await deleteConstructionFundsDeposit({
       organizationId: session.organizationId,
       propertyGroupId: groupId,

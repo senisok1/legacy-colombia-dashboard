@@ -3,9 +3,10 @@ import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import {
+  canManageConstruction,
+  canWriteConstruction,
   createConstructionItem,
   deleteConstructionItem,
-  isConstructionOwner,
   listConstructionActivityLog,
   listConstructionFundAllocations,
   listConstructionItems,
@@ -29,13 +30,9 @@ function canAccessConstruction(role: string | undefined): boolean {
   return role === "CEO" || role === "CONSTRUCTION";
 }
 
-// Write access (add item, toggle complete, set dates/cost, edit
-// title/notes/category) is narrower than view: Seni or the dedicated
-// CONSTRUCTION login only (2026-08-21, Seni's ask: "Do not allow Ahmed and
-// Geo to have any add edit allocate on the construction tabs. They can have
-// view only"). A plain CEO login that isn't Seni is now view-only here.
-function canWriteConstruction(session: { role?: string; email: string }): boolean {
-  return isConstructionOwner(session.email) || session.role === "CONSTRUCTION";
+async function resolveGroupId(req: NextRequest, session: { email: string }): Promise<string> {
+  const user = await getUserByEmail(session.email).catch(() => null);
+  return effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
 }
 
 export async function GET(req: NextRequest) {
@@ -46,8 +43,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
-    const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
+    const groupId = await resolveGroupId(req, session);
     const [items, log, allocations] = await Promise.all([
       listConstructionItems(session.organizationId, groupId),
       listConstructionActivityLog(session.organizationId, groupId),
@@ -61,13 +57,15 @@ export async function GET(req: NextRequest) {
       log,
       allocations,
       viewerRole: session.role,
-      // Drives the delete buttons in ConstructionBoard.tsx — restricted to
-      // Seni specifically, not every CEO login (2026-08-20, Seni's ask).
-      canDelete: isConstructionOwner(session.email),
-      // Drives add/edit/toggle/estimated-cost controls — Seni or the
-      // CONSTRUCTION login only (2026-08-21, Seni's ask). A CEO login other
-      // than Seni (e.g. Ahmed, Geo) is view-only.
-      canWrite: canWriteConstruction(session),
+      // Drives the delete buttons in ConstructionBoard.tsx — Seni always;
+      // any other CEO login also gets it on every property EXCEPT Legacy
+      // Colombia (2026-08-21, Seni's ask: view-only on Colombia, Seni-level
+      // access elsewhere).
+      canDelete: canManageConstruction(session.email, session.role, groupId),
+      // Drives add/edit/toggle/estimated-cost/allocate controls — same tiers
+      // as canDelete, plus the CONSTRUCTION login (Colombia-only in
+      // practice).
+      canWrite: canWriteConstruction(session.email, session.role, groupId),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -79,9 +77,6 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canWriteConstruction(session)) {
-    return NextResponse.json({ error: "You have view-only access to Construction Management." }, { status: 403 });
-  }
 
   const body = (await req.json().catch(() => null)) as
     | { title?: string; notes?: string; category?: string }
@@ -97,8 +92,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const groupId = await resolveGroupId(req, session);
+    if (!canWriteConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "You have view-only access to Construction Management." }, { status: 403 });
+    }
     const user = await getUserByEmail(session.email).catch(() => null);
-    const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
     const item = await createConstructionItem({
       organizationId: session.organizationId,
       propertyGroupId: groupId,
@@ -127,9 +125,6 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canWriteConstruction(session)) {
-    return NextResponse.json({ error: "You have view-only access to Construction Management." }, { status: 403 });
-  }
 
   const body = (await req.json().catch(() => null)) as
     | {
@@ -145,8 +140,11 @@ export async function PATCH(req: NextRequest) {
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
   try {
+    const groupId = await resolveGroupId(req, session);
+    if (!canWriteConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "You have view-only access to Construction Management." }, { status: 403 });
+    }
     const user = await getUserByEmail(session.email).catch(() => null);
-    const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
 
     if (typeof body.completed === "boolean") {
       const item = await setConstructionItemCompleted({
@@ -223,21 +221,22 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// Seni only (2026-08-20, Seni's ask) — NOT every CEO login. Ahmed and Geo
-// are CEO-role too but shouldn't be able to erase a checklist item.
+// Seni always; any other CEO login also gets this on every property EXCEPT
+// Legacy Colombia (2026-08-21, Seni's ask: view-only for Ahmed/Geo on
+// Colombia, full Seni-level access — including delete — everywhere else).
 export async function DELETE(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!isConstructionOwner(session.email)) {
-    return NextResponse.json({ error: "Only Seni can delete an item." }, { status: 403 });
-  }
 
   const body = (await req.json().catch(() => null)) as { id?: string } | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
   try {
+    const groupId = await resolveGroupId(req, session);
+    if (!canManageConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "Only Seni can delete an item on this property." }, { status: 403 });
+    }
     const user = await getUserByEmail(session.email).catch(() => null);
-    const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
     const ok = await deleteConstructionItem({
       organizationId: session.organizationId,
       propertyGroupId: groupId,

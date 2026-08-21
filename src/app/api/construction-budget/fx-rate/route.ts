@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
-import { isConstructionOwner } from "@/lib/construction";
+import { canManageConstruction } from "@/lib/construction";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { setConstructionBudgetFxRate } from "@/lib/constructionBudget";
 
@@ -9,15 +9,14 @@ export const dynamic = "force-dynamic";
 
 // Editable COP -> USD exchange rate (2026-08-20, Seni's ask: "add a box
 // somewhere where I can modify that rate which will then modify the USD
-// budget"). Seni only — the rate materially changes every Budgeted (USD)
-// figure on the tab, same "changing the budget" policy as import/delete
-// (see api/construction-budget/route.ts's requireManager, mirrored here).
+// budget"). Property-scoped (2026-08-21, Seni's ask): Seni only on Legacy
+// Colombia — the rate materially changes every Budgeted (USD) figure on the
+// tab, same "changing the budget" policy as import/delete (see
+// api/construction-budget/route.ts) — but any CEO login gets this on every
+// other property (full Seni-level access there).
 export async function PATCH(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!isConstructionOwner(session.email)) {
-    return NextResponse.json({ error: "Only Seni can change the exchange rate." }, { status: 403 });
-  }
 
   const body = (await req.json().catch(() => null)) as { rate?: number } | null;
   if (typeof body?.rate !== "number" || !Number.isFinite(body.rate) || body.rate <= 0) {
@@ -30,6 +29,9 @@ export async function PATCH(req: NextRequest) {
   try {
     const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
+    if (!canManageConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "Only Seni can change the exchange rate on this property." }, { status: 403 });
+    }
     const rate = await setConstructionBudgetFxRate({
       organizationId: session.organizationId,
       propertyGroupId: groupId,

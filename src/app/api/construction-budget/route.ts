@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
-import { isConstructionOwner } from "@/lib/construction";
+import { canManageConstruction, canWriteConstruction } from "@/lib/construction";
 import {
   applyFxRate,
   deleteConstructionBudgetItem,
@@ -16,21 +16,27 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// Construction Budget (2026-08-20, Seni's ask). Two tiers of access, tightened
-// further 2026-08-20 (Seni: "make sure that I, Seni Sok, is the only one that
-// can import budgets or change budgets. The construction team member can
-// enter actual amount as well"):
-//   - VIEW + enter Actual (USD)/notes: CEO role OR the CONSTRUCTION login.
-//   - Import (replace the whole budget) / delete a line item / delete an
-//     activity-log entry: Seni specifically (isConstructionOwner), not any
-//     CEO login — Ahmed and Geo are CEO-role too but can no longer restructure
-//     the budget, same policy as Construction Management's checklist deletes.
+// Construction Budget (2026-08-20, Seni's ask). Access is property-scoped
+// (2026-08-21, Seni's ask: "make them view only for Legacy Colombia only but
+// give them same access as me on all the other properties" — clarified to
+// mean full Seni-level access):
+//   - VIEW: CEO role OR the CONSTRUCTION login, on every property.
+//   - WRITE (enter Actual COP/notes): on Legacy Colombia, Seni or the
+//     CONSTRUCTION login only; on every OTHER property, any CEO login.
+//   - MANAGE (import/replace the whole budget, delete a line item, delete an
+//     activity-log entry): on Legacy Colombia, Seni specifically; on every
+//     OTHER property, any CEO login gets this too (full Seni-level access).
 // Still lives at a sibling path/route (/construction-budget,
 // /api/construction-budget) rather than nested under /construction —
 // src/proxy.ts now explicitly allowlists this prefix for the CONSTRUCTION
 // role (widened same day) so the team can reach it to enter actuals.
 function canView(role: string | undefined): boolean {
   return role === "CEO" || role === "CONSTRUCTION";
+}
+
+async function resolveGroupId(req: NextRequest, email: string) {
+  const user = await getUserByEmail(email).catch(() => null);
+  return effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
 }
 
 function requireViewer(req: NextRequest) {
@@ -40,35 +46,6 @@ function requireViewer(req: NextRequest) {
     return { error: NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 }) };
   }
   return { session };
-}
-
-// Entering Actual (COP)/notes is write access, narrower than view
-// (2026-08-21, Seni's ask: "Do not allow Ahmed and Geo to have any add edit
-// allocate on the construction tabs. They can have view only") — Seni or the
-// CONSTRUCTION login only. A plain CEO login that isn't Seni (Ahmed, Geo) is
-// now view-only, same as the old "team member enters actuals" carve-out but
-// scoped to the dedicated CONSTRUCTION role instead of the whole CEO role.
-function requireEditor(req: NextRequest) {
-  const session = getSessionFromRequest(req);
-  if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
-  if (!isConstructionOwner(session.email) && session.role !== "CONSTRUCTION") {
-    return { error: NextResponse.json({ error: "You have view-only access to the Construction Budget." }, { status: 403 }) };
-  }
-  return { session };
-}
-
-function requireManager(req: NextRequest) {
-  const session = getSessionFromRequest(req);
-  if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
-  if (!isConstructionOwner(session.email)) {
-    return { error: NextResponse.json({ error: "Only Seni can import or change the budget." }, { status: 403 }) };
-  }
-  return { session };
-}
-
-async function resolveGroupId(req: NextRequest, email: string) {
-  const user = await getUserByEmail(email).catch(() => null);
-  return effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
 }
 
 export async function GET(req: NextRequest) {
@@ -91,14 +68,13 @@ export async function GET(req: NextRequest) {
       fxRate,
       viewerRole: session.role,
       // Drives the Import panel, the per-row/per-log delete buttons, and the
-      // FX rate edit box in ConstructionBudgetBoard.tsx — Seni specifically,
-      // not every CEO login.
-      canManage: isConstructionOwner(session.email),
+      // FX rate edit box in ConstructionBudgetBoard.tsx — Seni on Legacy
+      // Colombia; any CEO login on every other property (2026-08-21).
+      canManage: canManageConstruction(session.email, session.role, groupId),
       // Drives the Actual (COP)/notes entry fields and the "Funds used"
-      // allocation control in ConstructionBudgetBoard.tsx — Seni or the
-      // CONSTRUCTION login only (2026-08-21, Seni's ask). A CEO login other
-      // than Seni (e.g. Ahmed, Geo) is view-only.
-      canWrite: isConstructionOwner(session.email) || session.role === "CONSTRUCTION",
+      // allocation control — same property-scoped policy as canManage, plus
+      // the CONSTRUCTION login.
+      canWrite: canWriteConstruction(session.email, session.role, groupId),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -107,12 +83,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// Full re-import — replaces the entire budget for this property group. See
-// ConstructionBudgetBoard.tsx for the paste-from-spreadsheet parser that
-// builds this payload. Seni only.
+// Full re-import — replaces the entire budget for this property group. Seni
+// on Legacy Colombia; any CEO login on every other property (2026-08-21).
+// See ConstructionBudgetBoard.tsx for the paste-from-spreadsheet parser that
+// builds this payload.
 export async function POST(req: NextRequest) {
-  const { session, error } = requireManager(req);
-  if (error) return error;
+  const session = getSessionFromRequest(req);
+  if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const body = (await req.json().catch(() => null)) as { items?: ImportRow[] } | null;
   if (!body?.items || !Array.isArray(body.items) || body.items.length === 0) {
@@ -128,8 +105,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
+    if (!canManageConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "Only Seni can import or change the budget on this property." }, { status: 403 });
+    }
+    const user = await getUserByEmail(session.email).catch(() => null);
     const count = await replaceConstructionBudgetItems(session.organizationId, groupId, body.items, session.email, user?.name ?? null);
     return NextResponse.json({ ok: true, count });
   } catch (err) {
@@ -139,13 +119,12 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Editing the Actual (USD)/notes on one row — the day-to-day use of this
-// tab once the budget is imported. Open to CEO or the CONSTRUCTION login
-// (2026-08-20, Seni's ask: "the construction team member can enter actual
-// amount as well") — this is deliberately NOT gated to Seni like POST/DELETE.
+// Editing the Actual (COP)/notes on one row — the day-to-day use of this
+// tab once the budget is imported. Property-scoped write access (2026-08-21):
+// Seni or the CONSTRUCTION login on Legacy Colombia, any CEO login elsewhere.
 export async function PATCH(req: NextRequest) {
-  const { session, error } = requireEditor(req);
-  if (error) return error;
+  const session = getSessionFromRequest(req);
+  if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   // COP is the entry currency since 2026-08-21 (Seni: "make everything COP
   // on the budget section"). actualCop replaces the old actualUsd field.
@@ -158,8 +137,11 @@ export async function PATCH(req: NextRequest) {
   }
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
+    if (!canWriteConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "You have view-only access to the Construction Budget." }, { status: 403 });
+    }
+    const user = await getUserByEmail(session.email).catch(() => null);
     const item = await updateConstructionBudgetItem({
       organizationId: session.organizationId,
       propertyGroupId: groupId,
@@ -179,17 +161,20 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// Seni only (2026-08-20, Seni's ask) — NOT every CEO login.
+// Seni on Legacy Colombia; any CEO login on every other property (2026-08-21).
 export async function DELETE(req: NextRequest) {
-  const { session, error } = requireManager(req);
-  if (error) return error;
+  const session = getSessionFromRequest(req);
+  if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const body = (await req.json().catch(() => null)) as { id?: string } | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
 
   try {
-    const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = await resolveGroupId(req, session.email);
+    if (!canManageConstruction(session.email, session.role, groupId)) {
+      return NextResponse.json({ error: "Only Seni can change the budget on this property." }, { status: 403 });
+    }
+    const user = await getUserByEmail(session.email).catch(() => null);
     const ok = await deleteConstructionBudgetItem({
       organizationId: session.organizationId,
       propertyGroupId: groupId,

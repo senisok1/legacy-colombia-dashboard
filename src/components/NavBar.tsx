@@ -295,10 +295,16 @@ export function NavBar({
             // Settings collapses from a dropdown to a single link for the team.
             .map((e): NavEntry => (e.label === "Settings" ? { type: "link", href: "/settings", label: "Settings" } : e))
         : navEntries;
-  // Legacy Colombia only, for now (2026-08-19 for Commissions, 2026-08-20
-  // for Construction Management and Construction Budget — same mechanism,
-  // same "not enabled on the other four properties yet" reasoning).
-  const PROPERTY_SCOPED_LABELS = new Set(["Commissions", "Construction Management", "Construction Budget"]);
+  // Commissions stays Legacy Colombia only for now (2026-08-19, Seni's ask).
+  // Construction Management and Construction Budget were Colombia-only from
+  // 2026-08-20 through 2026-08-21, then opened up to every property
+  // (2026-08-21, Seni's ask: "make those construction management tabs and
+  // construction budget tabs visible on all properties now") — access on
+  // the other four properties is Seni-level for any CEO login (see
+  // lib/construction.ts's canManageConstruction/canWriteConstruction), the
+  // CONSTRUCTION login stays hard-locked to Legacy Colombia via proxy.ts
+  // regardless of this nav-visibility change.
+  const PROPERTY_SCOPED_LABELS = new Set(["Commissions"]);
   const visibleEntries =
     (propertyGroupId ?? "legacy-colombia") === "legacy-colombia"
       ? roleEntries
