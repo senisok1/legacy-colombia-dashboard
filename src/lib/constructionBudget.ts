@@ -5,6 +5,78 @@ import { query, queryOne, withClient } from "./db";
 // column for tracking real spend against the original budget over time. See
 // db/migrations/0044_construction_budget.sql for the schema rationale.
 
+// Projects (2026-08-21, Seni's ask: "we need to be able to toggle between
+// different projects within that property... House 17 Construction...
+// Pool Construction... upload the spreadsheet and do the same thing for
+// this project"). A property can hold more than one independent budget —
+// each project has its own line items, notes, and item-level activity-log
+// entries; the FX rate and Construction Funds deposits/balance stay
+// property-wide (shared across every project on that property), see
+// db/migrations/0052_construction_budget_projects.sql.
+export type ConstructionBudgetProject = {
+  id: string;
+  name: string;
+  sortOrder: number;
+  createdAt: string;
+};
+
+type ProjectRow = { id: string; name: string; sort_order: number; created_at: string };
+
+function projectFromRow(r: ProjectRow): ConstructionBudgetProject {
+  return { id: r.id, name: r.name, sortOrder: r.sort_order, createdAt: r.created_at };
+}
+
+export async function listConstructionBudgetProjects(
+  organizationId: string,
+  propertyGroupId: string
+): Promise<ConstructionBudgetProject[]> {
+  const rows = await query<ProjectRow>(
+    `select id, name, sort_order, created_at from construction_budget_projects
+     where organization_id = $1 and property_group_id = $2
+     order by sort_order asc, created_at asc`,
+    [organizationId, propertyGroupId]
+  );
+  return rows.map(projectFromRow);
+}
+
+/** Restricted to the same "manage" tier as import/delete on the budget
+ * itself (enforced by the caller, see api/construction-budget/projects/
+ * route.ts) — starting a new project is a structural change to the tab,
+ * not day-to-day data entry. Logged as a property-wide ('updated') activity
+ * entry with a null project_id, so it shows regardless of which project
+ * tab is open at the time. */
+export async function createConstructionBudgetProject(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  name: string;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<ConstructionBudgetProject> {
+  const [{ max_sort: maxSort } = { max_sort: null }] = await query<{ max_sort: number | null }>(
+    `select max(sort_order) as max_sort from construction_budget_projects
+     where organization_id = $1 and property_group_id = $2`,
+    [input.organizationId, input.propertyGroupId]
+  );
+  const nextSort = (maxSort ?? -1) + 1;
+  const row = await queryOne<ProjectRow>(
+    `insert into construction_budget_projects
+       (organization_id, property_group_id, name, sort_order, created_by_email, created_by_name)
+     values ($1, $2, $3, $4, $5, $6)
+     returning id, name, sort_order, created_at`,
+    [input.organizationId, input.propertyGroupId, input.name, nextSort, input.actorEmail, input.actorName]
+  );
+  if (!row) throw new Error("Failed to create the project.");
+
+  await query(
+    `insert into construction_budget_activity_log
+       (organization_id, property_group_id, project_id, item_id, item_description, action, detail, actor_email, actor_name)
+     values ($1, $2, null, null, null, 'updated', $3, $4, $5)`,
+    [input.organizationId, input.propertyGroupId, `Created project "${input.name}"`, input.actorEmail, input.actorName]
+  );
+
+  return projectFromRow(row);
+}
+
 export type ConstructionBudgetItem = {
   id: string;
   code: string | null;
@@ -38,6 +110,7 @@ export type ConstructionBudgetItem = {
 
 type Row = {
   id: string;
+  project_id: string;
   code: string | null;
   category: string;
   category_original: string | null;
@@ -58,7 +131,7 @@ type Row = {
 };
 
 const COLUMNS =
-  "cbi.id, cbi.code, cbi.category, cbi.category_original, cbi.description, cbi.description_original, cbi.unit, " +
+  "cbi.id, cbi.project_id, cbi.code, cbi.category, cbi.category_original, cbi.description, cbi.description_original, cbi.unit, " +
   "cbi.quantity, cbi.unit_price_cop, cbi.total_cop, cbi.budgeted_usd, cbi.actual_cop, cbi.notes, cbi.sort_order, " +
   "cbi.updated_at, cbi.updated_by_email, cbi.updated_by_name, " +
   "(select count(*) from construction_budget_item_notes n where n.item_id = cbi.id) as note_count";
@@ -133,18 +206,23 @@ function logFromRow(r: LogRow): ConstructionBudgetLogEntry {
   };
 }
 
+/** Project-scoped, plus property-wide entries (FX rate changes, fund
+ * deposits, new-project creation — all logged with a null project_id) so
+ * those still show no matter which project tab is open. */
 export async function listConstructionBudgetActivityLog(
   organizationId: string,
   propertyGroupId: string,
+  projectId: string | null,
   limit = 200
 ): Promise<ConstructionBudgetLogEntry[]> {
   const rows = await query<LogRow>(
     `select id, item_description, action, detail, actor_email, actor_name, at
      from construction_budget_activity_log
      where organization_id = $1 and property_group_id = $2
+       and (project_id = $3 or project_id is null)
      order by at desc
-     limit $3`,
-    [organizationId, propertyGroupId, limit]
+     limit $4`,
+    [organizationId, propertyGroupId, projectId, limit]
   );
   return rows.map(logFromRow);
 }
@@ -168,6 +246,26 @@ export async function deleteConstructionBudgetActivityLogEntry(
 }
 
 export async function listConstructionBudgetItems(
+  organizationId: string,
+  propertyGroupId: string,
+  projectId: string
+): Promise<ConstructionBudgetItem[]> {
+  const rows = await query<Row>(
+    `select ${COLUMNS} from construction_budget_items cbi
+     where cbi.organization_id = $1 and cbi.property_group_id = $2 and cbi.project_id = $3
+     order by cbi.sort_order asc`,
+    [organizationId, propertyGroupId, projectId]
+  );
+  return rows.map(fromRow);
+}
+
+/** ACROSS EVERY PROJECT on the property — used only for Construction Funds'
+ * "Spent from deposits" total (api/construction-budget/funds/route.ts),
+ * since deposits are a shared pot spent down by whichever project's actuals
+ * draw on it (2026-08-21, Seni's call when asked directly: "shared pot").
+ * Every other caller wants a single project's items — use
+ * listConstructionBudgetItems instead. */
+export async function listConstructionBudgetItemsAcrossProjects(
   organizationId: string,
   propertyGroupId: string
 ): Promise<ConstructionBudgetItem[]> {
@@ -239,8 +337,8 @@ export async function addConstructionBudgetItemNote(input: {
   authorEmail: string;
   authorName: string | null;
 }): Promise<ConstructionBudgetItemNote | null> {
-  const item = await queryOne<{ id: string; description: string }>(
-    `select id, description from construction_budget_items
+  const item = await queryOne<{ id: string; description: string; project_id: string }>(
+    `select id, description, project_id from construction_budget_items
      where id = $1 and organization_id = $2 and property_group_id = $3`,
     [input.itemId, input.organizationId, input.propertyGroupId]
   );
@@ -257,9 +355,9 @@ export async function addConstructionBudgetItemNote(input: {
 
   await query(
     `insert into construction_budget_activity_log
-       (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
-     values ($1, $2, $3, $4, 'noted', null, $5, $6)`,
-    [input.organizationId, input.propertyGroupId, item.id, item.description, input.authorEmail, input.authorName]
+       (organization_id, property_group_id, project_id, item_id, item_description, action, detail, actor_email, actor_name)
+     values ($1, $2, $3, $4, $5, 'noted', null, $6, $7)`,
+    [input.organizationId, input.propertyGroupId, item.project_id, item.id, item.description, input.authorEmail, input.authorName]
   );
 
   return noteFromRow(row);
@@ -355,6 +453,7 @@ export type ImportRow = {
 export async function replaceConstructionBudgetItems(
   organizationId: string,
   propertyGroupId: string,
+  projectId: string,
   items: ImportRow[],
   actorEmail: string,
   actorName: string | null
@@ -362,21 +461,26 @@ export async function replaceConstructionBudgetItems(
   return withClient(async (client) => {
     await client.query("begin");
     try {
+      // Scoped to this project only — a re-import replaces THIS project's
+      // budget, leaving every other project on the property untouched
+      // (2026-08-21, Seni's ask to hold multiple independent budgets per
+      // property).
       await client.query(
-        "delete from construction_budget_items where organization_id = $1 and property_group_id = $2",
-        [organizationId, propertyGroupId]
+        "delete from construction_budget_items where organization_id = $1 and property_group_id = $2 and project_id = $3",
+        [organizationId, propertyGroupId, projectId]
       );
       let i = 0;
       for (const item of items) {
         i += 1;
         await client.query(
           `insert into construction_budget_items
-             (organization_id, property_group_id, code, category, category_original, description,
+             (organization_id, property_group_id, project_id, code, category, category_original, description,
               description_original, unit, quantity, unit_price_cop, total_cop, budgeted_usd, sort_order)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
           [
             organizationId,
             propertyGroupId,
+            projectId,
             item.code,
             item.category,
             item.categoryOriginal,
@@ -396,9 +500,9 @@ export async function replaceConstructionBudgetItems(
       // happened when it didn't.
       await client.query(
         `insert into construction_budget_activity_log
-           (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
-         values ($1, $2, null, null, 'imported', $3, $4, $5)`,
-        [organizationId, propertyGroupId, `${items.length} line item(s)`, actorEmail, actorName]
+           (organization_id, property_group_id, project_id, item_id, item_description, action, detail, actor_email, actor_name)
+         values ($1, $2, $3, null, null, 'imported', $4, $5, $6)`,
+        [organizationId, propertyGroupId, projectId, `${items.length} line item(s)`, actorEmail, actorName]
       );
       await client.query("commit");
       return items.length;
@@ -454,9 +558,18 @@ export async function updateConstructionBudgetItem(input: {
   if (parts.length > 0) {
     await query(
       `insert into construction_budget_activity_log
-         (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
-       values ($1, $2, $3, $4, 'updated', $5, $6, $7)`,
-      [input.organizationId, input.propertyGroupId, row.id, row.description, parts.join("; "), input.actorEmail, input.actorName]
+         (organization_id, property_group_id, project_id, item_id, item_description, action, detail, actor_email, actor_name)
+       values ($1, $2, $3, $4, $5, 'updated', $6, $7, $8)`,
+      [
+        input.organizationId,
+        input.propertyGroupId,
+        row.project_id,
+        row.id,
+        row.description,
+        parts.join("; "),
+        input.actorEmail,
+        input.actorName,
+      ]
     );
   }
   return fromRow(row);
@@ -620,18 +733,18 @@ export async function deleteConstructionBudgetItem(input: {
   actorEmail: string;
   actorName: string | null;
 }): Promise<boolean> {
-  const row = await queryOne<{ id: string; description: string }>(
+  const row = await queryOne<{ id: string; description: string; project_id: string }>(
     `delete from construction_budget_items
      where id = $1 and organization_id = $2 and property_group_id = $3
-     returning id, description`,
+     returning id, description, project_id`,
     [input.id, input.organizationId, input.propertyGroupId]
   );
   if (!row) return false;
   await query(
     `insert into construction_budget_activity_log
-       (organization_id, property_group_id, item_id, item_description, action, actor_email, actor_name)
-     values ($1, $2, null, $3, 'deleted', $4, $5)`,
-    [input.organizationId, input.propertyGroupId, row.description, input.actorEmail, input.actorName]
+       (organization_id, property_group_id, project_id, item_id, item_description, action, actor_email, actor_name)
+     values ($1, $2, $3, null, $4, 'deleted', $5, $6)`,
+    [input.organizationId, input.propertyGroupId, row.project_id, row.description, input.actorEmail, input.actorName]
   );
   return true;
 }

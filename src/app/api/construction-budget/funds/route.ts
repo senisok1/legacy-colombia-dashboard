@@ -12,7 +12,7 @@ import {
   deleteConstructionFundsDeposit,
   getConstructionBudgetFxRate,
   getConstructionFundsSpendByCategory,
-  listConstructionBudgetItems,
+  listConstructionBudgetItemsAcrossProjects,
   listConstructionFundsDeposits,
 } from "@/lib/constructionBudget";
 
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
     // comment for why rate 1 is the correct passthrough.
     const [deposits, items, spendByCategory, allocations, allocatedCop, fxRate] = await Promise.all([
       listConstructionFundsDeposits(session.organizationId, groupId),
-      listConstructionBudgetItems(session.organizationId, groupId),
+      listConstructionBudgetItemsAcrossProjects(session.organizationId, groupId),
       getConstructionFundsSpendByCategory(session.organizationId, groupId),
       listConstructionFundAllocations(session.organizationId, groupId),
       getTotalConstructionFundAllocationsCop(session.organizationId, groupId),

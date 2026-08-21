@@ -9,6 +9,7 @@ import {
   getConstructionBudgetFxRate,
   listConstructionBudgetActivityLog,
   listConstructionBudgetItems,
+  listConstructionBudgetProjects,
   replaceConstructionBudgetItems,
   updateConstructionBudgetItem,
   type ImportRow,
@@ -54,9 +55,19 @@ export async function GET(req: NextRequest) {
   try {
     const groupId = await resolveGroupId(req, session.email);
     const colombia = isColombiaGroup(groupId);
+    const projects = await listConstructionBudgetProjects(session.organizationId, groupId);
+    // Project switcher (2026-08-21, Seni's ask: toggle between House 17
+    // Construction and Pool Construction on the same property). Falls back
+    // to the first project (by sort order) when the client doesn't ask for
+    // a specific one, or when the requested id doesn't belong to this
+    // property; null when the property has no projects yet at all (a fresh
+    // property, or Seni hasn't created one here yet) — items/log come back
+    // empty and ConstructionBudgetBoard.tsx prompts to create the first one.
+    const requestedProjectId = req.nextUrl.searchParams.get("projectId");
+    const projectId = projects.find((p) => p.id === requestedProjectId)?.id ?? projects[0]?.id ?? null;
     const [rawItems, log, fxRate] = await Promise.all([
-      listConstructionBudgetItems(session.organizationId, groupId),
-      listConstructionBudgetActivityLog(session.organizationId, groupId),
+      projectId ? listConstructionBudgetItems(session.organizationId, groupId, projectId) : Promise.resolve([]),
+      listConstructionBudgetActivityLog(session.organizationId, groupId, projectId),
       // USD-only properties (2026-08-21, Seni's ask: "for all properties
       // except Legacy Colombia... USD ONLY, remove the toggle and exchange
       // rate feature") never look up a stored rate — rate 1 makes
@@ -69,6 +80,8 @@ export async function GET(req: NextRequest) {
     // whatever fixed rate the source spreadsheet baked in at import time.
     const items = applyFxRate(rawItems, fxRate);
     return NextResponse.json({
+      projects,
+      projectId,
       items,
       log,
       fxRate,
@@ -101,7 +114,8 @@ export async function POST(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
-  const body = (await req.json().catch(() => null)) as { items?: ImportRow[] } | null;
+  const body = (await req.json().catch(() => null)) as { items?: ImportRow[]; projectId?: string } | null;
+  if (!body?.projectId) return NextResponse.json({ error: "Pick a project to import into first." }, { status: 400 });
   if (!body?.items || !Array.isArray(body.items) || body.items.length === 0) {
     return NextResponse.json({ error: "No rows to import." }, { status: 400 });
   }
@@ -119,8 +133,23 @@ export async function POST(req: NextRequest) {
     if (!canManageConstruction(session.email, session.role, groupId)) {
       return NextResponse.json({ error: "Only Seni can import or change the budget on this property." }, { status: 403 });
     }
+    // Confirm the project actually belongs to this property before writing
+    // into it — a stray/stale id from the client shouldn't silently import
+    // into (or, via the delete-then-reinsert inside replace..., wipe) the
+    // wrong project.
+    const projects = await listConstructionBudgetProjects(session.organizationId, groupId);
+    if (!projects.some((p) => p.id === body.projectId)) {
+      return NextResponse.json({ error: "Unknown project — refresh and try again." }, { status: 400 });
+    }
     const user = await getUserByEmail(session.email).catch(() => null);
-    const count = await replaceConstructionBudgetItems(session.organizationId, groupId, body.items, session.email, user?.name ?? null);
+    const count = await replaceConstructionBudgetItems(
+      session.organizationId,
+      groupId,
+      body.projectId,
+      body.items,
+      session.email,
+      user?.name ?? null
+    );
     return NextResponse.json({ ok: true, count });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";

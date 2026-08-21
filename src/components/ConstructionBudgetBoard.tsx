@@ -43,6 +43,16 @@ type Item = {
   noteCount: number;
 };
 
+// Projects (2026-08-21, Seni's ask: "we need to be able to toggle between
+// different projects within that property... House 17 Construction...
+// Pool Construction... upload the spreadsheet and do the same thing for
+// this project"). A property can hold more than one independent budget —
+// line items, notes, and item-level log entries are all project-scoped.
+// The exchange rate and Construction Funds (deposits/remaining balance)
+// stay shared across every project on the property (Seni, asked directly:
+// "shared pot... spent down by whichever project's actuals draw on it").
+type Project = { id: string; name: string; sortOrder: number; createdAt: string };
+
 type BudgetNote = {
   id: string;
   body: string;
@@ -374,9 +384,36 @@ function groupByCategory(items: Item[]): { category: string; items: Item[] }[] {
   return order.map((category) => ({ category, items: buckets.get(category)! }));
 }
 
+// Reads the property-group cookie directly (same cookie
+// PROPERTY_GROUP_COOKIE in lib/propertyGroups.ts resolves server-side) so
+// the last-viewed project can be remembered PER PROPERTY in localStorage —
+// switching from Legacy Colombia to another property and back shouldn't
+// lose which project was open on each.
+function currentPropertyGroupCookie(): string {
+  if (typeof document === "undefined") return "legacy-colombia";
+  const m = document.cookie.match(/(?:^|; )lc_property_group=([^;]*)/);
+  return m ? decodeURIComponent(m[1]) : "legacy-colombia";
+}
+
+function projectStorageKey(): string {
+  return `construction_budget_project:${currentPropertyGroupCookie()}`;
+}
+
 export function ConstructionBudgetBoard() {
   const [items, setItems] = useState<Item[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Project switcher (2026-08-21, Seni's ask). `projects` is null while
+  // loading, an empty array on a property with no projects yet. Kept in a
+  // ref too so load()'s querystring always reads the CURRENT selection
+  // without needing to depend on (and re-create itself over) the state
+  // value — load() is called from several background-refresh call sites
+  // that shouldn't each need to know the current project.
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const projectIdRef = useRef<string | null>(null);
+  const [showAddProject, setShowAddProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -492,11 +529,25 @@ export function ConstructionBudgetBoard() {
 
   const load = useCallback(async (fresh = false) => {
     try {
-      const res = await fetch(`/api/construction-budget${fresh ? "?fresh=1" : ""}`);
+      const params = new URLSearchParams();
+      if (fresh) params.set("fresh", "1");
+      if (projectIdRef.current) params.set("projectId", projectIdRef.current);
+      const qs = params.toString();
+      const res = await fetch(`/api/construction-budget${qs ? `?${qs}` : ""}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setItems(json.items ?? []);
       setLog(json.log ?? []);
+      setProjects(json.projects ?? []);
+      const resolvedProjectId: string | null = json.projectId ?? null;
+      setProjectId(resolvedProjectId);
+      projectIdRef.current = resolvedProjectId;
+      try {
+        if (resolvedProjectId) window.localStorage.setItem(projectStorageKey(), resolvedProjectId);
+        else window.localStorage.removeItem(projectStorageKey());
+      } catch {
+        /* non-fatal — just skips remembering the selection across reloads */
+      }
       setCanManage(Boolean(json.canManage));
       setCanWrite(Boolean(json.canWrite));
       if (typeof json.fxRate === "number") setFxRate(json.fxRate);
@@ -507,6 +558,47 @@ export function ConstructionBudgetBoard() {
       if (!hasDataRef.current) setError(err instanceof Error ? err.message : "Failed to load.");
     }
   }, []);
+
+  /** Switches the active project — clears per-project UI state (open notes,
+   * any in-progress import paste/preview) so nothing from the previous
+   * project bleeds into the new one, then reloads. */
+  function selectProject(id: string) {
+    if (id === projectIdRef.current) return;
+    projectIdRef.current = id;
+    setProjectId(id);
+    setOpenNotesId(null);
+    setNotesByItem({});
+    setShowImport(false);
+    setPreview(null);
+    setPasteText("");
+    void load(true);
+  }
+
+  async function addProject() {
+    const name = newProjectName.trim();
+    if (!name || creatingProject) return;
+    setCreatingProject(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction-budget/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setNewProjectName("");
+      setShowAddProject(false);
+      projectIdRef.current = json.project.id;
+      setProjectId(json.project.id);
+      setNotice(`Created "${json.project.name}". Import its budget below.`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create the project.");
+    } finally {
+      setCreatingProject(false);
+    }
+  }
 
   const loadFunds = useCallback(async () => {
     try {
@@ -531,6 +623,12 @@ export function ConstructionBudgetBoard() {
   }, []);
 
   useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(projectStorageKey());
+      if (saved) projectIdRef.current = saved;
+    } catch {
+      /* non-fatal */
+    }
     void load();
     void loadFunds();
   }, [load, loadFunds]);
@@ -643,14 +741,14 @@ export function ConstructionBudgetBoard() {
   }
 
   async function confirmImport() {
-    if (!preview || importing) return;
+    if (!preview || importing || !projectId) return;
     setImporting(true);
     setError(null);
     try {
       const res = await fetch("/api/construction-budget", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: preview }),
+        body: JSON.stringify({ items: preview, projectId }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -812,6 +910,89 @@ export function ConstructionBudgetBoard() {
 
   return (
     <div className="space-y-4">
+      {/* Project switcher (2026-08-21, Seni's ask: "we need to be able to
+          toggle between different projects within that property... House 17
+          Construction... Pool Construction... upload the spreadsheet and do
+          the same thing for this project"). Everything below this bar —
+          summary cards, import, line items, and the item-level activity
+          log — is scoped to whichever project is selected. Construction
+          Funds (deposits/remaining balance) is the one exception: it's
+          shared across every project on the property (Seni's call: "shared
+          pot"), so it isn't affected by this switch. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2.5 text-sm">
+        <span className="text-black/50 dark:text-white/50">Project:</span>
+        {!projects ? (
+          <span className="text-black/40 dark:text-white/40">…</span>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {projects.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => selectProject(p.id)}
+                className={`rounded-md px-2.5 py-1 text-xs ${
+                  p.id === projectId
+                    ? "bg-[var(--accent)] text-white"
+                    : "border border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5"
+                }`}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+        )}
+        {canManage &&
+          (showAddProject ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                className="w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                placeholder="e.g. Pool Construction"
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void addProject();
+                }}
+                autoFocus
+              />
+              <button
+                onClick={() => void addProject()}
+                disabled={creatingProject || !newProjectName.trim()}
+                className="rounded-md bg-[var(--accent)] px-2.5 py-1 text-xs text-white disabled:opacity-40"
+              >
+                {creatingProject ? "Adding…" : "Add"}
+              </button>
+              <button
+                onClick={() => {
+                  setShowAddProject(false);
+                  setNewProjectName("");
+                }}
+                disabled={creatingProject}
+                className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAddProject(true)}
+              className="rounded-md border border-black/15 dark:border-white/15 px-2.5 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              + New project
+            </button>
+          ))}
+      </div>
+
+      {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+      {projects && projects.length === 0 ? (
+        <p className="text-sm text-black/50 dark:text-white/50">
+          {canManage
+            ? 'Create a project above to get started — e.g. "House 17 Construction".'
+            : "No projects yet — ask Seni to create one."}
+        </p>
+      ) : (
+      <>
       {/* Exchange rate — Seni-only to edit (2026-08-20, Seni's ask: "add a
           box somewhere where I can modify that rate which will then modify
           the USD budget"). Everyone else sees the current rate read-only.
@@ -1129,9 +1310,6 @@ export function ConstructionBudgetBoard() {
         )}
       </section>
 
-      {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
-
       {/* Import panel — Seni only (2026-08-20, Seni's ask). Everyone else
           (other CEO logins, the CONSTRUCTION login) can view the budget and
           enter Actual (USD) below, but can't import or restructure it. */}
@@ -1341,6 +1519,8 @@ export function ConstructionBudgetBoard() {
             </ul>
           ))}
       </section>
+      </>
+      )}
     </div>
   );
 }
