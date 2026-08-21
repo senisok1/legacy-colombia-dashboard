@@ -523,6 +523,109 @@ export async function translateReviewComments(
   return result;
 }
 
+// AI-drafted review responses (2026-08-21, Seni: "the ai drafted responses
+// are in spanish. I need them to be in english so I can understand them") —
+// reputationManager.ts's draftReviewResponse() deliberately writes the reply
+// in the SAME language as the review (a Spanish review gets a Spanish reply)
+// since that's what actually gets copied into OwnerRez for the guest to read
+// — this translation is read-only, for Seni's understanding, and never
+// replaces the real draft text he edits/approves. Cache key includes a short
+// content fingerprint (not just the response id) so an edited-then-redrafted
+// response doesn't serve a stale translation of the old wording.
+function responseTranslationKey(orgId: string, responseId: string, text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  return `responseTranslation:${orgId}:${responseId}:${text.length}:${hash}`;
+}
+
+async function cacheResponseTranslation(
+  responseId: string,
+  text: string,
+  translation: MessageTranslation,
+  orgId: string
+): Promise<void> {
+  if (!isRedisConfigured()) return;
+  redisSet(responseTranslationKey(orgId, responseId, text), JSON.stringify(translation), {
+    exSeconds: TRANSLATION_CACHE_TTL_SECONDS,
+  }).catch(() => {});
+}
+
+/** Same batch-then-fallback translation as translateReviewComments(), applied
+ * to AI-drafted review response text. Safe to call with an empty list. */
+export async function translateDraftResponses(
+  drafts: { id: string; text: string }[],
+  organizationId?: string
+): Promise<Record<string, MessageTranslation>> {
+  const result: Record<string, MessageTranslation> = {};
+  const withBody = drafts.filter((d) => d.text.trim());
+  if (withBody.length === 0) return result;
+
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const uncached: { id: string; text: string }[] = [];
+
+  if (isRedisConfigured()) {
+    try {
+      const keys = withBody.map((d) => responseTranslationKey(orgId, d.id, d.text));
+      const cached = await redisMGet(keys);
+      for (let i = 0; i < withBody.length; i++) {
+        const raw = cached[i];
+        if (!raw) {
+          uncached.push(withBody[i]);
+          continue;
+        }
+        try {
+          result[withBody[i].id] = JSON.parse(raw) as MessageTranslation;
+        } catch {
+          uncached.push(withBody[i]);
+        }
+      }
+    } catch {
+      uncached.push(...withBody);
+    }
+  } else {
+    uncached.push(...withBody);
+  }
+
+  const apiKey = await resolveAnthropicApiKey(orgId);
+  if (uncached.length === 0 || !apiKey) return result;
+
+  const stillNeeded = new Map(uncached.map((d) => [d.id, d]));
+
+  try {
+    const numbered = uncached.map((d, i) => `[${i}]\n${d.text}`).join("\n\n---\n\n");
+    const raw = await callClaude(
+      'For each numbered drafted review-response text below, detect whether it is already written in English. Respond with ONLY a JSON array (no markdown fences, no other text), one object per item in the same order, each with exactly these keys: {"isEnglish": boolean, "language": "human-readable language name if not English, omit or empty if English", "english": "a natural English translation if not English, omit or empty if already English"}.',
+      numbered,
+      8000,
+      apiKey
+    );
+    if (raw) {
+      const parsed = JSON.parse(extractJsonArray(raw)) as { isEnglish?: boolean; language?: string; english?: string }[];
+      for (let i = 0; i < uncached.length; i++) {
+        const d = uncached[i];
+        const p = parsed[i];
+        if (!p) continue;
+        const translation: MessageTranslation = p.isEnglish
+          ? { isEnglish: true }
+          : { isEnglish: false, language: p.language || "Unknown", english: p.english || d.text };
+        result[d.id] = translation;
+        stillNeeded.delete(d.id);
+        void cacheResponseTranslation(d.id, d.text, translation, orgId);
+      }
+    }
+  } catch {
+    // Whole batch failed to parse — fallback pass below picks up everything.
+  }
+
+  for (const d of stillNeeded.values()) {
+    const translation = await translateSingleToEnglish(d.text, apiKey);
+    result[d.id] = translation;
+    void cacheResponseTranslation(d.id, d.text, translation, orgId);
+  }
+
+  return result;
+}
+
 /**
  * Detects what language a piece of inbound text is written in AND returns an
  * English translation of it, in ONE Claude call.

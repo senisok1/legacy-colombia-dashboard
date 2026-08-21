@@ -741,6 +741,15 @@ async function fetchReviews(organizationId?: string, propertyGroupId?: string): 
     // Colombia or Nukak #19, with no risk of false-positives from other
     // properties in the wider 8-property account.
     const ourBookingIds = new Set(bookings.map((b) => b.id));
+    // Guest-name backfill (2026-08-21, Seni: "'awaiting your decision' and
+    // 'all reviews' don't show the guest name"): OwnerRez's /reviews payload
+    // doesn't actually carry display_name/guest_name/reviewer_name — those
+    // were guessed field names, same class of bug as the source/rating fix
+    // above, and silently left guestName undefined for nearly every review.
+    // bookings (already fetched above) has the real guest name per booking
+    // via normalizeBooking()'s guest_first_name/guest_last_name/guest_name
+    // fields, so backfill from there via each review's booking_id.
+    const guestNameByBookingId = new Map(bookings.map((b) => [b.id, b.guestName]));
 
     // BUG FIX (2026-08-07): No documented property filter on /reviews
     // (unlike /bookings), and this account manages 8 properties total. The
@@ -768,11 +777,18 @@ async function fetchReviews(organizationId?: string, propertyGroupId?: string): 
     // OwnerRez's own review sync from Airbnb lagging/incomplete rather
     // than anything fixable in this filter — see reviews-count-bug memory.
     const items = await orFetchAllPages<Record<string, unknown>>("/reviews", {}, creds);
-    return items.map(normalizeReview).filter((r) => {
-      if (r.propertyId) return propertyIds.has(r.propertyId);
-      if (r.bookingId) return ourBookingIds.has(r.bookingId);
-      return false;
-    });
+    return items
+      .map(normalizeReview)
+      .map((r) =>
+        !r.guestName && r.bookingId && guestNameByBookingId.get(r.bookingId)
+          ? { ...r, guestName: guestNameByBookingId.get(r.bookingId) }
+          : r
+      )
+      .filter((r) => {
+        if (r.propertyId) return propertyIds.has(r.propertyId);
+        if (r.bookingId) return ourBookingIds.has(r.bookingId);
+        return false;
+      });
   } catch {
     // Reviews endpoint access can vary by account/plan; degrade gracefully.
     return [];
@@ -784,7 +800,10 @@ async function fetchReviews(organizationId?: string, propertyGroupId?: string): 
 // NOTE: unstable_cache keys on the actual arguments, so adding
 // propertyGroupId as a real parameter above is what keeps Alva's and
 // Colombia's review sets in separate cache entries.
-export const getReviews = unstable_cache(fetchReviews, ["ownerrez-reviews-v2"], { revalidate: 300 });
+// v3 (2026-08-21): cache-key bump so the guestName backfill fix above takes
+// effect immediately on deploy instead of waiting out the old v2 cache's
+// 5-minute revalidate window.
+export const getReviews = unstable_cache(fetchReviews, ["ownerrez-reviews-v3"], { revalidate: 300 });
 
 /**
  * Sends a real message into an OwnerRez conversation thread (e.g. an Airbnb

@@ -8,24 +8,28 @@ import { formatRelativeTime } from "@/lib/format";
 // client component and shouldn't import server-only lib/translate.ts code).
 type ReviewTranslation = { isEnglish: boolean; language?: string; english?: string };
 
-/** Fetches English translations for every review with comment text, in one
- * batched call — same convention as ThreadInbox's guest-message translation:
- * fetched automatically (no button), cached forever server-side since a
- * posted review's text never changes. */
-async function fetchReviewTranslations(
-  reviews: { id: number; comment: string }[]
-): Promise<Record<number, ReviewTranslation>> {
-  if (reviews.length === 0) return {};
+/** Fetches English translations for review comments AND AI-drafted response
+ * text, in one batched call — same convention as ThreadInbox's guest-message
+ * translation: fetched automatically (no button), cached forever server-side
+ * since neither a posted review nor a decided draft's text changes again. */
+async function fetchTranslations(
+  reviews: { id: number; comment: string }[],
+  responses: { id: string; text: string }[]
+): Promise<{ translations: Record<number, ReviewTranslation>; responseTranslations: Record<string, ReviewTranslation> }> {
+  if (reviews.length === 0 && responses.length === 0) return { translations: {}, responseTranslations: {} };
   try {
     const res = await fetch("/api/reputation/translate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reviews }),
+      body: JSON.stringify({ reviews, responses }),
     });
-    const data = (await res.json()) as { translations?: Record<number, ReviewTranslation> };
-    return data.translations ?? {};
+    const data = (await res.json()) as {
+      translations?: Record<number, ReviewTranslation>;
+      responseTranslations?: Record<string, ReviewTranslation>;
+    };
+    return { translations: data.translations ?? {}, responseTranslations: data.responseTranslations ?? {} };
   } catch {
-    return {};
+    return { translations: {}, responseTranslations: {} };
   }
 }
 
@@ -94,17 +98,23 @@ export function ReputationExplorer({ initialEntries }: { initialEntries: Reputat
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [filter, setFilter] = useState<"needs_response" | "pending_review" | "all">("needs_response");
   const [translations, setTranslations] = useState<Record<number, ReviewTranslation>>({});
+  const [responseTranslations, setResponseTranslations] = useState<Record<string, ReviewTranslation>>({});
 
-  // Auto-translate every review's comment to English on load (and again if
-  // new reviews arrive via a scan) — no button, matches ThreadInbox's guest
-  // message translation UX. Only asks for reviews not already translated.
+  // Auto-translate every review's comment AND drafted response to English on
+  // load (and again if new reviews/drafts arrive via a scan) — no button,
+  // matches ThreadInbox's guest message translation UX. Only asks for
+  // entries not already translated.
   useEffect(() => {
-    const untranslated = entries
+    const untranslatedReviews = entries
       .filter((e) => e.review.comment && !(e.review.id in translations))
       .map((e) => ({ id: e.review.id, comment: e.review.comment as string }));
-    if (untranslated.length === 0) return;
-    fetchReviewTranslations(untranslated).then((result) => {
-      if (Object.keys(result).length > 0) setTranslations((prev) => ({ ...prev, ...result }));
+    const untranslatedResponses = entries
+      .filter((e) => e.response?.draftText && !(e.response.id in responseTranslations))
+      .map((e) => ({ id: e.response!.id, text: e.response!.draftText }));
+    if (untranslatedReviews.length === 0 && untranslatedResponses.length === 0) return;
+    fetchTranslations(untranslatedReviews, untranslatedResponses).then(({ translations: t, responseTranslations: rt }) => {
+      if (Object.keys(t).length > 0) setTranslations((prev) => ({ ...prev, ...t }));
+      if (Object.keys(rt).length > 0) setResponseTranslations((prev) => ({ ...prev, ...rt }));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries]);
@@ -204,6 +214,7 @@ export function ReputationExplorer({ initialEntries }: { initialEntries: Reputat
               entry={entry}
               onDecided={updateEntry}
               translation={translations[entry.review.id]}
+              responseTranslation={entry.response ? responseTranslations[entry.response.id] : undefined}
             />
           ))}
         </div>
@@ -216,10 +227,12 @@ function ReviewCard({
   entry,
   onDecided,
   translation,
+  responseTranslation,
 }: {
   entry: ReputationEntry;
   onDecided: (reviewId: number, response: ReputationResponse) => void;
   translation?: ReviewTranslation;
+  responseTranslation?: ReviewTranslation;
 }) {
   const { review, response } = entry;
   const [draftText, setDraftText] = useState(response?.draftText ?? "");
@@ -305,6 +318,17 @@ function ReviewCard({
           <div className="text-xs font-medium opacity-80">
             AI-drafted response {response.status !== "pending_review" ? `· ${response.status.replace("_", " ")}` : ""}
           </div>
+          {/* Read-only English translation of the draft (2026-08-21, Seni:
+              "the ai drafted responses are in spanish. I need them to be in
+              english so I can understand them") — the draft itself stays in
+              the review's own language below, since that's the text that
+              actually gets edited/approved and copied to OwnerRez for the
+              guest to read; this is just for Seni's understanding. */}
+          {responseTranslation && !responseTranslation.isEnglish && responseTranslation.english && (
+            <p className="text-xs text-black/50 dark:text-white/50 whitespace-pre-wrap rounded-md bg-black/5 dark:bg-white/5 px-2 py-1.5">
+              English ({responseTranslation.language}): {responseTranslation.english}
+            </p>
+          )}
           {response.status === "pending_review" ? (
             <textarea
               value={draftText}
