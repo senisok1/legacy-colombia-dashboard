@@ -1,6 +1,6 @@
 import { parseISO } from "date-fns";
 import { getBookings, getGuests } from "@/lib/ownerrez";
-import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
+import { buildGuestsById, resolveGuestName, selfHealGuestsById } from "@/lib/guestName";
 import { UpcomingArrivals } from "@/components/UpcomingArrivals";
 import { summaryStats, revenueBySource, isRevenueCounting } from "@/lib/finance";
 import { getServerSession } from "@/lib/session";
@@ -47,9 +47,19 @@ export default async function DashboardPage() {
         // Seni's ask: names were showing as "—" under Upcoming arrivals).
         getGuests(session?.organizationId, groupId).catch(() => []),
       ]);
+      // Self-heal (2026-08-21, Seni: "the new booking that just came in is
+      // just showing 'guest' and not name. Please fix once and for all!") —
+      // a brand-new booking's guest record can still be unresolvable within
+      // getGuests()'s own 60s cache cycle; do one bounded direct lookup for
+      // just the bookings still missing a name before this snapshot gets
+      // written, so the fix lands as soon as this snapshot rebuilds instead
+      // of waiting on a wider guest-list cache cycle too.
+      const healedGuestsById = await selfHealGuestsById(bookings, buildGuestsById(guests), session?.organizationId);
+      const guestIds = new Set(guests.map((g) => g.id));
+      const healedGuests = [...guests, ...[...healedGuestsById.values()].filter((g) => !guestIds.has(g.id))];
       return {
         bookings: bookings.map((b) => ({ ...b, raw: undefined })),
-        guests: guests.map((g) => ({ ...g, raw: undefined })),
+        guests: healedGuests.map((g) => ({ ...g, raw: undefined })),
       };
     }
   );

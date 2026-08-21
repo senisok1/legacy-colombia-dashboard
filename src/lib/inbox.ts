@@ -1,6 +1,6 @@
 import { unstable_cache } from "next/cache";
 import { getBookings, getGuests, getThreadMessages } from "./ownerrez";
-import { resolveGuestName, buildGuestsById } from "./guestName";
+import { resolveGuestName, buildGuestsById, selfHealGuestsById } from "./guestName";
 import { redisGet, redisSet } from "./redis";
 import { isRedisConfigured } from "./config";
 import { DEFAULT_PROPERTY_GROUP_ID } from "./propertyGroups";
@@ -280,14 +280,17 @@ async function fetchAllThreadSummaries(organizationId?: string, limit: number = 
     getBookings(organizationId, propertyGroupId),
     getGuests(organizationId, propertyGroupId),
   ]);
-  const guestsById = buildGuestsById(guests);
-
   // Cancelled bookings excluded 2026-08-16 (same fix as the Management
   // board): a guest who rebooks leaves a cancelled original behind, which
   // shows up as a duplicate conversation for the same person + dates.
   const candidates = bookings.filter(
     (b) => !b.isBlock && b.status !== "Cancelled" && b.threadIds.length > 0 && isRecentEnough(b)
   );
+  // Self-heal (2026-08-21, Seni: "the new booking that just came in is just
+  // showing 'guest' and not name. Please fix once and for all!") — only for
+  // the threads actually being built below, not every booking on the
+  // property, since this is a live per-request lookup.
+  const guestsById = await selfHealGuestsById(candidates, buildGuestsById(guests), organizationId);
 
   const base = candidates.map((booking) => ({
     threadId: booking.threadIds[0],

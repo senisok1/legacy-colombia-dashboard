@@ -8,7 +8,7 @@ import {
   getSnapshotThreadSummaries,
 } from "@/lib/inbox";
 import { getCachedTranslations } from "@/lib/translate";
-import { resolveGuestName, buildGuestsById } from "@/lib/guestName";
+import { resolveGuestName, buildGuestsById, selfHealGuestsById } from "@/lib/guestName";
 import { getPendingDraftByThreadId } from "@/lib/pendingDrafts";
 import { isMessagingConfigured } from "@/lib/config";
 import { getSessionFromRequest } from "@/lib/session";
@@ -119,6 +119,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ thre
     ]);
     booking = bookings.find((b) => b.threadIds.includes(threadId)) ?? null;
     guestName = booking ? resolveGuestName(booking, buildGuestsById(guests)) : "Guest";
+  }
+  // Self-heal (2026-08-21, Seni: "the new booking that just came in is just
+  // showing 'guest' and not name. Please fix once and for all!") — covers
+  // both the warm/snapshot path (which can carry a stale "Guest" from before
+  // the guest record resolved) and the cold path above; a single booking, so
+  // this is always a cheap 0-or-1-request lookup.
+  if (guestName === "Guest" && booking) {
+    const healed = await selfHealGuestsById([booking], new Map(), orgId);
+    guestName = resolveGuestName(booking, healed);
   }
 
   const translations = await getCachedTranslations(

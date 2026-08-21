@@ -3,7 +3,7 @@ import { getBookings, getGuests, getThreadMessages } from "@/lib/ownerrez";
 import { translateThreadMessages, type MessageTranslation } from "@/lib/translate";
 import { draftGuestReply } from "@/lib/aiReply";
 import { getGlobalHostStyleExamples, getCachedThreadMessages, getSnapshotThreadMessages } from "@/lib/inbox";
-import { resolveGuestName, resolveGuestPhone, buildGuestsById } from "@/lib/guestName";
+import { resolveGuestName, resolveGuestPhone, buildGuestsById, selfHealGuestsById } from "@/lib/guestName";
 import { createPendingDraft, getPendingDraftByThreadId } from "@/lib/pendingDrafts";
 import { isAiReplyConfigured, isMessagingConfigured } from "@/lib/config";
 import { trailingGuestMessages, combineGuestMessageBodies } from "@/lib/guestMessageGroup";
@@ -112,6 +112,12 @@ async function buildEnrichedThread(req: NextRequest, threadId: number) {
     booking = bookings.find((b) => b.threadIds.includes(threadId));
     guestsById = buildGuestsById(guests);
     guestName = booking ? resolveGuestName(booking, guestsById) : "Guest";
+    // Self-heal (2026-08-21, Seni: "the new booking that just came in is
+    // just showing 'guest' and not name. Please fix once and for all!").
+    if (guestName === "Guest" && booking) {
+      guestsById = await selfHealGuestsById([booking], guestsById, session?.organizationId);
+      guestName = resolveGuestName(booking, guestsById);
+    }
   } catch {
     // booking stays undefined, guestName stays "Guest" — translation below
     // is unaffected.

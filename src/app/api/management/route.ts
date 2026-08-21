@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { getBookings, getGuests } from "@/lib/ownerrez";
-import { buildGuestsById, resolveGuestName } from "@/lib/guestName";
+import { buildGuestsById, resolveGuestName, selfHealGuestsById } from "@/lib/guestName";
 import { getAllPendingDrafts } from "@/lib/pendingDrafts";
 import { listBookingOps, listTeamActivities } from "@/lib/teamActivities";
 import { getSessionFromRequest } from "@/lib/session";
@@ -65,7 +65,11 @@ async function buildBoard(orgId: string, groupId: string) {
     // what actually closes that — the column alone does nothing.
     listTeamActivities(orgId, 200, groupId).catch(() => []),
   ]);
-  const guestsById = buildGuestsById(guests);
+  // Self-heal (2026-08-21, Seni: "the new booking that just came in is just
+  // showing 'guest' and not name. Please fix once and for all!") — see
+  // guestName.ts's selfHealGuestsById for why the batch join alone can miss
+  // a genuinely brand-new booking within its own cache cycle.
+  const guestsById = await selfHealGuestsById(bookings, buildGuestsById(guests), orgId);
   const opsByBookingId = await listBookingOps(orgId).catch(() => new Map<number, never>());
 
   const todayMs = Date.now() - 24 * 60 * 60 * 1000;
