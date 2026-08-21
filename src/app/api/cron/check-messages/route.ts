@@ -780,6 +780,19 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
           : "";
         const approvalText = `New message from ${guestName} (${booking.propertyName ?? "Legacy Colombia"}):${serviceRequestNote}\n"${alertGuestMessage}"\n\nSuggested reply${languageNote}:\n"${alertReply}"\n\nReply YES to send it, NO to discard${customReplyNote}.`;
 
+        // Parallel email channel (2026-08-21, Seni's ask) — sent before the
+        // WhatsApp attempt so a total WhatsApp failure still lands the
+        // alert somewhere. Keyed by draft id (same identity the wamid guard
+        // dedupes WhatsApp on), shared with the webhook path's email.
+        {
+          const { sendAlertEmailOnce } = await import("@/lib/alertEmail");
+          await sendAlertEmailOnce(
+            `guest-msg-alert:${orgId}:${draft.id}:email`,
+            `💬 New message from ${guestName} (${booking.propertyName ?? "Legacy Colombia"})`,
+            `${approvalText}\n\n(Reply from your WhatsApp — YES/NO there still works. This email is a backup copy.)`
+          ).catch(() => {});
+        }
+
         // DURABLE FIX (2026-08-07): try the real Meta-approved template
         // first — it reaches Seni whether or not his 24h session window is
         // open, unlike the free-text fallback below (see

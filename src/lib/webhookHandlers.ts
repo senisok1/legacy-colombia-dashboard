@@ -432,6 +432,20 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       : `No suggested reply could be drafted — reply "EDIT: <your text>" to send an answer, or NO to skip.`;
     const approvalText = `New message from ${guestName} (thread #${threadId}):\n\n"${alertGuestMessage}"\n\n${draftLine}`;
 
+    // Parallel email channel (2026-08-21, Seni's ask) — keyed by the draft
+    // id, same identity the cron path's email uses, so whichever path
+    // creates/reuses the draft, exactly one email goes out.
+    {
+      const { sendAlertEmailOnce } = await import("@/lib/alertEmail");
+      const { getDefaultOrganizationId: getOrgForEmail } = await import("@/lib/organizations");
+      const emailOrgId = await getOrgForEmail().catch(() => "default");
+      await sendAlertEmailOnce(
+        `guest-msg-alert:${emailOrgId}:${pending.id}:email`,
+        `💬 New message from ${guestName}`,
+        `${approvalText}\n\n(Reply from your WhatsApp — YES/NO there still works. This email is a backup copy.)`
+      ).catch(() => {});
+    }
+
     // Template first (delivers regardless of the 24h session window — the
     // exact silent-failure class that plagued this feature), free text as
     // the fallback if the template errors for any reason.
@@ -560,6 +574,19 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
     // resubscribe (see api/admin/webhook-status ?resubscribe=1).
     const guestName = str(inq.guestName ?? inq.guest_name ?? inq.name) ?? "Guest";
     const question = str(inq.message ?? inq.question ?? inq.body) ?? "(no message provided)";
+
+    // Parallel email channel (2026-08-21, Seni's ask) — same inquiry-id
+    // once-guard key family as the polling path (lib/inquiryAlerts.ts), so
+    // exactly one email goes out per inquiry no matter which path fires.
+    if (dedupeOrgId && inquiryId !== undefined) {
+      const { sendAlertEmailOnce } = await import("@/lib/alertEmail");
+      const { inquirySeenKey } = await import("@/lib/inquiryAlerts");
+      await sendAlertEmailOnce(
+        `${inquirySeenKey(dedupeOrgId, inquiryId)}:email`,
+        `❓ New inquiry — ${guestName}`,
+        `New inquiry from ${guestName}\n\n"${question.slice(0, 1000)}"\n\nCheck OwnerRez to respond.`
+      ).catch(() => {});
+    }
 
     // Subject-line fix (2026-08-18): try the real "New Inquiry" template
     // first — it reaches Seni whether or not his 24h session window is open,

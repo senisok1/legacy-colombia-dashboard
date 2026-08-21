@@ -112,6 +112,14 @@ export async function checkNewBookingAlerts(
       const statsLine =
         `${dates} · ${booking.source || "Unknown"}` +
         (typeof booking.totalAmount === "number" ? ` · ${formatMoney(booking.totalAmount)}` : "");
+
+      // Parallel email channel (2026-08-21, Seni's ask) — sent BEFORE the
+      // WhatsApp ladder so a total WhatsApp failure still lands the alert
+      // somewhere. Own once-guard (":email" on the same booking seen-key),
+      // so the WhatsApp retry-next-run path never duplicates it.
+      const { sendAlertEmailOnce } = await import("@/lib/alertEmail");
+      await sendAlertEmailOnce(`${key}:email`, `📅 ${headline}`, text).catch(() => {});
+
       try {
         await sendBookingNotificationTemplate({
           guestName: guestName ?? "Guest",

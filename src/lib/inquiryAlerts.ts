@@ -87,6 +87,18 @@ export async function pollInquiryAlerts(orgId: string): Promise<{
       if (!guestName) guestName = "Guest";
       const question = inq.message ?? "(no message provided)";
 
+      // Parallel email channel (2026-08-21, Seni's ask) — fully independent
+      // of the WhatsApp ladder below, with its own once-guard so WhatsApp
+      // retries never duplicate it. Shares the inquiry-id key family with
+      // the webhook path (webhookHandlers), so only ONE email ever goes out
+      // per inquiry regardless of which path saw it first.
+      const { sendAlertEmailOnce } = await import("@/lib/alertEmail");
+      await sendAlertEmailOnce(
+        `${inquirySeenKey(orgId, inq.id)}:email`,
+        `❓ New inquiry — ${guestName}`,
+        `New inquiry from ${guestName}\nReceived: ${inq.createdUtc ?? "just now"}\n\n"${question.slice(0, 1000)}"\n\nCheck OwnerRez to respond.`
+      ).catch(() => {});
+
       // Same template-first/free-text-fallback ladder as the webhook path.
       let sent = false;
       let sendError: string | undefined;
