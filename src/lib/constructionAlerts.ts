@@ -1,18 +1,29 @@
-// Construction overdue-item WhatsApp alerts (2026-08-20, Seni's ask: "when
-// the est. completion date is due turn the 'est. completion:' red and send
-// out whatsapp messages to me and all users that have access to").
+// Construction overdue-item alerts — WhatsApp + email (2026-08-20, Seni's
+// ask: "when the est. completion date is due turn the 'est. completion:'
+// red and send out whatsapp messages to me and all users that have access
+// to"; extended 2026-08-21, Seni's ask: "send an email and a whatsapp
+// message to each user that has access to view or edit that tab... add the
+// name of the specific property in the subject of the email or whatsapp so
+// the user can identify it immediately").
 //
-// Runs from api/cron/construction-overdue once a day, Legacy-Colombia-only
-// (DEFAULT_PROPERTY_GROUP_ID — construction is scoped there, unlike
-// balance-due which runs across all properties). Fires once per
-// item+estimated-completion-date pair, to EVERY recipient with tab access
-// (CEO or CONSTRUCTION role + a WhatsApp number on file) — unlike
-// balanceDueAlerts.ts's single Geo recipient, "all users that have access
-// to" means fan out to the whole list. Seen-key is only written after every
-// recipient's send has been attempted, so a partial failure (one number
-// bounces) doesn't block the item alerting again tomorrow — see errors[].
+// Runs from api/cron/construction-overdue once a day, across EVERY property
+// group (widened 2026-08-21 alongside Construction Management's nav
+// becoming visible on every property — see
+// [[project_construction_management_tab]]; used to be Legacy-Colombia-only).
+// Fires once per item+estimated-completion-date pair, to EVERY recipient
+// with access to THAT property's tab (CEO role, or CONSTRUCTION role on
+// Legacy Colombia only — the CONSTRUCTION login is proxy-locked there
+// regardless of nav, see src/proxy.ts) — unlike balanceDueAlerts.ts's single
+// Geo recipient, "all users that have access to" means fan out to the whole
+// list. Each channel is independently best-effort per recipient: a failed
+// email never blocks that recipient's WhatsApp send or any other
+// recipient's alert, and vice versa. Seen-key is only written after at
+// least one send (either channel, to any recipient) succeeds, so a total
+// failure doesn't block the item alerting again tomorrow — see errors[].
 import { redisGet, redisSet } from "@/lib/redis";
 import { sendTeamTaskRequestTemplate, sendWhatsAppTextTo } from "@/lib/whatsapp";
+import { sendEmail } from "@/lib/email";
+import { isEmailSendConfigured } from "@/lib/config";
 import { logAiActivity } from "@/lib/aiActivity";
 import type { ConstructionItem } from "@/lib/construction";
 
@@ -39,10 +50,14 @@ function formatDate(iso: string): string {
   });
 }
 
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export async function checkConstructionOverdueAlerts(
   items: ConstructionItem[],
   orgId: string,
-  recipients: { phone: string; name: string }[],
+  recipients: { phone: string | null; email: string | null; name: string }[],
   propertyLabel: string
 ): Promise<{
   alerted: { itemId: string; title: string; dueDate: string }[];
@@ -65,41 +80,74 @@ export async function checkConstructionOverdueAlerts(
     if (await redisGet(key)) continue;
 
     const dueDisplay = formatDate(dueDate);
+    // Property name leads every surface (2026-08-21, Seni's ask: "add the
+    // name of the specific property in the subject... so the user can
+    // identify it immediately") — the WhatsApp template's title param is
+    // the first thing a recipient sees, the free-text fallback's first
+    // line, and the email subject all lead with it, not just the
+    // description body further down.
+    const titleWithProperty = `${propertyLabel}: ${item.title}`;
     const description = `${propertyLabel}${item.category ? ` — ${item.category}` : ""} — estimated completion has passed. Check Construction Management.`;
+    const emailSubject = `Overdue construction item — ${propertyLabel}: "${item.title}"`;
+    const emailBody =
+      `${propertyLabel} — an item in Construction Management is overdue:\n\n` +
+      `"${item.title}"${item.category ? ` (${item.category})` : ""}\n` +
+      `Was due: ${dueDisplay}\n\n` +
+      `Open the Construction Management tab to check on it.`;
 
     let anySent = false;
     for (const recipient of recipients) {
-      try {
+      const recipientErrors: string[] = [];
+
+      if (recipient.phone) {
         try {
-          await sendTeamTaskRequestTemplate(
-            {
-              to: recipient.phone,
-              requesterName: "Construction Management",
-              title: item.title,
-              neededBy: dueDisplay,
-              description,
-            },
-            orgId
-          );
-        } catch {
-          // Carrier template not approved yet (or transient failure) — best
-          // effort free text, deliverable only if that recipient's 24h
-          // session window is open. If this also throws, the outer catch
-          // just skips this one recipient; others still get a chance.
-          await sendWhatsAppTextTo(
-            recipient.phone,
-            `⚠️ Overdue — "${item.title}"${item.category ? ` (${item.category})` : ""}\n` +
-              `${propertyLabel} — was due ${dueDisplay}\n\n` +
-              `Check Construction Management.`,
-            orgId
-          );
+          try {
+            await sendTeamTaskRequestTemplate(
+              {
+                to: recipient.phone,
+                requesterName: "Construction Management",
+                title: titleWithProperty.slice(0, 100),
+                neededBy: dueDisplay,
+                description,
+              },
+              orgId
+            );
+          } catch {
+            // Carrier template not approved yet (or transient failure) —
+            // best effort free text, deliverable only if that recipient's
+            // 24h session window is open.
+            await sendWhatsAppTextTo(
+              recipient.phone,
+              `⚠️ ${propertyLabel} — Overdue: "${item.title}"${item.category ? ` (${item.category})` : ""}\n` +
+                `Was due ${dueDisplay}\n\n` +
+                `Check Construction Management.`,
+              orgId
+            );
+          }
+          anySent = true;
+        } catch (err) {
+          recipientErrors.push(`whatsapp: ${err instanceof Error ? err.message : "Unknown error."}`);
         }
-        anySent = true;
-      } catch (err) {
-        errors.push({
-          itemId: item.id,
-          error: `${recipient.name}: ${err instanceof Error ? err.message : "Unknown error."}`,
-        });
+      }
+
+      // Email is a parallel, independently best-effort channel (same
+      // philosophy as lib/alertEmail.ts) — a failed email never blocks this
+      // recipient's WhatsApp send, and vice versa.
+      if (recipient.email && isEmailSendConfigured()) {
+        try {
+          const html = `<div style="font-family:-apple-system,sans-serif;font-size:15px;line-height:1.6;color:#1c1917;">${emailBody
+            .split("\n")
+            .map((line) => `<p style="margin:0 0 10px;">${esc(line) || "&nbsp;"}</p>`)
+            .join("")}</div>`;
+          await sendEmail({ to: recipient.email, subject: emailSubject, html, text: emailBody });
+          anySent = true;
+        } catch (err) {
+          recipientErrors.push(`email: ${err instanceof Error ? err.message : "Unknown error."}`);
+        }
+      }
+
+      if (recipientErrors.length > 0) {
+        errors.push({ itemId: item.id, error: `${recipient.name}: ${recipientErrors.join("; ")}` });
       }
     }
 
@@ -115,11 +163,11 @@ export async function checkConstructionOverdueAlerts(
           trigger: `"${item.title}" was due ${dueDisplay} and is still open`,
           dataReviewed: { itemId: item.id, title: item.title, category: item.category, dueDate },
           communicationSent: {
-            channel: "whatsapp",
+            channel: "whatsapp+email",
             to: recipients.map((r) => r.name).join(", "),
-            text: `Overdue: "${item.title}" — due ${dueDisplay}`,
+            text: `Overdue: "${item.title}" — ${propertyLabel} — due ${dueDisplay}`,
           },
-          actionTaken: `Sent overdue WhatsApp alert to ${recipients.length} recipient(s)`,
+          actionTaken: `Sent overdue alert (WhatsApp + email) to ${recipients.length} recipient(s)`,
           result: "sent",
         },
         orgId
