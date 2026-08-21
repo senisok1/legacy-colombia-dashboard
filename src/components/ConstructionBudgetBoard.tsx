@@ -27,6 +27,10 @@ type Item = {
   unitPriceCop: number | null;
   totalCop: number | null;
   budgetedUsd: number | null;
+  /** Real spend, entered in COP (2026-08-21 — COP is the source of truth
+   * for everything on this tab now). */
+  actualCop: number | null;
+  /** Derived server-side: actualCop / fx rate. Display only. */
   actualUsd: number | null;
   notes: string | null;
   sortOrder: number;
@@ -78,21 +82,41 @@ type LogEntry = {
 // per-line real-spend field.
 type Deposit = {
   id: string;
-  amountUsd: number;
+  /** Entered in COP (2026-08-21, Seni: "I will enter the amounts deposited
+   * in COP as well"). */
+  amountCop: number;
   note: string | null;
   depositedAt: string;
   createdAt: string;
   createdBy: string;
 };
 
-type CategorySpend = { category: string; spentUsd: number };
+type CategorySpend = { category: string; spentCop: number };
+
+/** COP drawn from the deposited funds against a Construction Management
+ * open item (2026-08-21, Seni: "allocate deposited construction funds in
+ * COP to those open item expenses as well so every dollar is accounted
+ * for"). Entered on the Construction Management tab; shown here so the
+ * Funds box accounts for it. */
+type Allocation = {
+  id: string;
+  itemId: string;
+  itemTitle: string;
+  amountCop: number;
+  note: string | null;
+  createdAt: string;
+  createdBy: string;
+};
 
 type Funds = {
   deposits: Deposit[];
-  totalDeposited: number;
-  totalSpent: number;
-  remaining: number;
+  totalDepositedCop: number;
+  budgetSpentCop: number;
+  allocatedCop: number;
+  totalSpentCop: number;
+  remainingCop: number;
   spendByCategory: CategorySpend[];
+  allocations: Allocation[];
 };
 
 function fmtUsd(n: number | null): string {
@@ -411,6 +435,39 @@ export function ConstructionBudgetBoard() {
   // API call, and nothing for a spreadsheet re-import to need to carry,
   // since Actual (USD) was never part of the import in the first place.
   const [expandedSpendCategory, setExpandedSpendCategory] = useState<string | null>(null);
+  // COP/USD display toggle (2026-08-21, Seni's ask: "make everything COP on
+  // the budget section... If I want to see USD make the COP USD toggle work
+  // for this tab too"). COP is the default and the entry currency for
+  // everything on this tab; toggling to USD converts DISPLAY figures at the
+  // tab's own editable FX rate above (not the live market rate the global
+  // nav toggle uses — this keeps every figure here reconciled with the
+  // budget's Budgeted math). Persisted per browser.
+  const [showUsd, setShowUsd] = useState(false);
+  useEffect(() => {
+    try {
+      setShowUsd(window.localStorage.getItem("construction_budget_view_usd") === "1");
+    } catch {
+      /* default COP */
+    }
+  }, []);
+  const setShowUsdPersist = (v: boolean) => {
+    setShowUsd(v);
+    try {
+      window.localStorage.setItem("construction_budget_view_usd", v ? "1" : "0");
+    } catch {
+      /* non-fatal */
+    }
+  };
+  // Every money figure on this tab is COP at heart; this renders it in the
+  // currently toggled display currency.
+  const money = useCallback(
+    (cop: number | null): string => {
+      if (cop === null) return "—";
+      if (showUsd && fxRate && fxRate > 0) return fmtUsd(cop / fxRate);
+      return fmtCop(cop);
+    },
+    [showUsd, fxRate]
+  );
   const hasDataRef = useRef(false);
 
   const load = useCallback(async (fresh = false) => {
@@ -436,10 +493,13 @@ export function ConstructionBudgetBoard() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setFunds({
         deposits: json.deposits ?? [],
-        totalDeposited: json.totalDeposited ?? 0,
-        totalSpent: json.totalSpent ?? 0,
-        remaining: json.remaining ?? 0,
+        totalDepositedCop: json.totalDepositedCop ?? 0,
+        budgetSpentCop: json.budgetSpentCop ?? 0,
+        allocatedCop: json.allocatedCop ?? 0,
+        totalSpentCop: json.totalSpentCop ?? 0,
+        remainingCop: json.remainingCop ?? 0,
         spendByCategory: json.spendByCategory ?? [],
+        allocations: json.allocations ?? [],
       });
     } catch {
       // Silent — the Construction Funds box just stays in its loading state
@@ -589,14 +649,14 @@ export function ConstructionBudgetBoard() {
     }
   }
 
-  async function saveActual(item: Item, actualUsd: number | null) {
+  async function saveActual(item: Item, actualCop: number | null) {
     setSavingId(item.id);
     setError(null);
     try {
       const res = await fetch("/api/construction-budget", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: item.id, actualUsd }),
+        body: JSON.stringify({ id: item.id, actualCop }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -644,14 +704,14 @@ export function ConstructionBudgetBoard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          amountUsd: amount,
+          amountCop: amount,
           note: depositNoteDraft.trim() || undefined,
           depositedAt: depositDateDraft || undefined,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      setNotice(`Logged a ${fmtUsd(amount)} deposit.`);
+      setNotice(`Logged a ${fmtCop(amount)} COP deposit.`);
       setDepositAmountDraft("");
       setDepositNoteDraft("");
       setDepositDateDraft("");
@@ -666,7 +726,7 @@ export function ConstructionBudgetBoard() {
   }
 
   async function removeDeposit(deposit: Deposit) {
-    if (removingDepositId || !window.confirm(`Remove the ${fmtUsd(deposit.amountUsd)} deposit from ${deposit.depositedAt}?`)) return;
+    if (removingDepositId || !window.confirm(`Remove the ${fmtCop(deposit.amountCop)} COP deposit from ${deposit.depositedAt}?`)) return;
     setRemovingDepositId(deposit.id);
     setError(null);
     try {
@@ -694,19 +754,34 @@ export function ConstructionBudgetBoard() {
   const spendDetailByCategory = useMemo(() => {
     const map = new Map<string, Item[]>();
     for (const item of items ?? []) {
-      if (!item.actualUsd) continue;
+      if (!item.actualCop) continue;
       if (!map.has(item.category)) map.set(item.category, []);
       map.get(item.category)!.push(item);
     }
-    for (const list of map.values()) list.sort((a, b) => (b.actualUsd ?? 0) - (a.actualUsd ?? 0));
+    for (const list of map.values()) list.sort((a, b) => (b.actualCop ?? 0) - (a.actualCop ?? 0));
     return map;
   }, [items]);
 
+  // Fund allocations grouped per open item — the Construction Management
+  // half of "where the balance is spent" (2026-08-21).
+  const allocationsByItem = useMemo(() => {
+    const map = new Map<string, { itemTitle: string; totalCop: number; entries: Allocation[] }>();
+    for (const a of funds?.allocations ?? []) {
+      const g = map.get(a.itemId) ?? { itemTitle: a.itemTitle, totalCop: 0, entries: [] };
+      g.totalCop += a.amountCop;
+      g.entries.push(a);
+      map.set(a.itemId, g);
+    }
+    return [...map.values()].sort((a, b) => b.totalCop - a.totalCop);
+  }, [funds]);
+
+  // ALL COP (2026-08-21, Seni's ask) — budgeted comes straight from the
+  // sheet's Total (COP), actual from the COP entries.
   const totals = useMemo(() => {
     const list = items ?? [];
-    const budgeted = list.reduce((s, i) => s + (i.budgetedUsd ?? 0), 0);
-    const actual = list.reduce((s, i) => s + (i.actualUsd ?? 0), 0);
-    const trackedCount = list.filter((i) => i.actualUsd !== null).length;
+    const budgeted = list.reduce((s, i) => s + (i.totalCop ?? 0), 0);
+    const actual = list.reduce((s, i) => s + (i.actualCop ?? 0), 0);
+    const trackedCount = list.filter((i) => i.actualCop !== null).length;
     return { budgeted, actual, remaining: budgeted - actual, trackedCount, total: list.length };
   }, [items]);
 
@@ -767,24 +842,50 @@ export function ConstructionBudgetBoard() {
           </>
         )}
         <span className="text-xs text-black/40 dark:text-white/40">
-          Changing this recalculates every Budgeted (USD) figure below from each line&apos;s Total (COP).
+          Used for the COP ⇄ USD view toggle and any USD figures.
         </span>
+        {/* COP/USD display toggle (2026-08-21, Seni's ask). COP is the
+            default and always the entry currency; USD is a converted view
+            at the rate on the left. */}
+        <div className="ml-auto flex items-center gap-1 text-xs">
+          <span className="text-black/40 dark:text-white/40">View:</span>
+          <button
+            onClick={() => setShowUsdPersist(false)}
+            className={`rounded-md px-2 py-1 ${
+              !showUsd
+                ? "bg-[var(--accent)] text-white"
+                : "border border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5"
+            }`}
+          >
+            COP
+          </button>
+          <button
+            onClick={() => setShowUsdPersist(true)}
+            className={`rounded-md px-2 py-1 ${
+              showUsd
+                ? "bg-[var(--accent)] text-white"
+                : "border border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5"
+            }`}
+          >
+            USD
+          </button>
+        </div>
       </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
           <div className="text-xs text-black/50 dark:text-white/50">Total budgeted</div>
-          <div className="text-lg font-semibold">{fmtUsd(totals.budgeted)}</div>
+          <div className="text-lg font-semibold">{money(totals.budgeted)}</div>
         </div>
         <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
           <div className="text-xs text-black/50 dark:text-white/50">Actual spend recorded</div>
-          <div className="text-lg font-semibold">{fmtUsd(totals.actual)}</div>
+          <div className="text-lg font-semibold">{money(totals.actual)}</div>
         </div>
         <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
           <div className="text-xs text-black/50 dark:text-white/50">Remaining</div>
           <div className={`text-lg font-semibold ${totals.remaining < 0 ? "text-red-500" : ""}`}>
-            {fmtUsd(totals.remaining)}
+            {money(totals.remaining)}
           </div>
         </div>
         <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4">
@@ -817,16 +918,21 @@ export function ConstructionBudgetBoard() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3">
             <div className="text-xs text-black/50 dark:text-white/50">Total deposited</div>
-            <div className="text-lg font-semibold">{funds ? fmtUsd(funds.totalDeposited) : "…"}</div>
+            <div className="text-lg font-semibold">{funds ? money(funds.totalDepositedCop) : "…"}</div>
           </div>
           <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3">
             <div className="text-xs text-black/50 dark:text-white/50">Spent from deposits</div>
-            <div className="text-lg font-semibold">{funds ? fmtUsd(funds.totalSpent) : "…"}</div>
+            <div className="text-lg font-semibold">{funds ? money(funds.totalSpentCop) : "…"}</div>
+            {funds && funds.allocatedCop > 0 && (
+              <div className="text-xs text-black/40 dark:text-white/40">
+                {money(funds.budgetSpentCop)} budget lines + {money(funds.allocatedCop)} open items
+              </div>
+            )}
           </div>
           <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3">
             <div className="text-xs text-black/50 dark:text-white/50">Remaining balance</div>
-            <div className={`text-lg font-semibold ${funds && funds.remaining < 0 ? "text-red-500" : ""}`}>
-              {funds ? fmtUsd(funds.remaining) : "…"}
+            <div className={`text-lg font-semibold ${funds && funds.remainingCop < 0 ? "text-red-500" : ""}`}>
+              {funds ? money(funds.remainingCop) : "…"}
             </div>
           </div>
         </div>
@@ -834,14 +940,14 @@ export function ConstructionBudgetBoard() {
         {showAddDeposit && canManage && (
           <div className="flex flex-wrap items-end gap-2 rounded-md border border-black/10 dark:border-white/10 p-3">
             <label className="flex flex-col gap-1 text-xs text-black/50 dark:text-white/50">
-              Amount (USD)
+              Amount (COP)
               <input
                 type="text"
                 inputMode="decimal"
-                className="w-32 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
+                className="w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
                 value={depositAmountDraft}
                 onChange={(e) => setDepositAmountDraft(e.target.value)}
-                placeholder="5000"
+                placeholder="20.000.000"
                 autoFocus
               />
             </label>
@@ -877,12 +983,12 @@ export function ConstructionBudgetBoard() {
           </div>
         )}
 
-        {funds && funds.spendByCategory.length > 0 && (
+        {funds && (funds.spendByCategory.length > 0 || allocationsByItem.length > 0) && (
           <div>
             <div className="mb-1 text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
               Where the balance is spent
             </div>
-            <p className="mb-1 text-xs text-black/40 dark:text-white/40">Click a category to see the exact line items.</p>
+            <p className="mb-1 text-xs text-black/40 dark:text-white/40">Click a category or item to see the detail.</p>
             <ul className="space-y-1 text-sm">
               {funds.spendByCategory.map((c) => {
                 const detail = spendDetailByCategory.get(c.category) ?? [];
@@ -896,7 +1002,7 @@ export function ConstructionBudgetBoard() {
                       <span>
                         {isOpen ? "▾" : "▸"} {c.category}
                       </span>
-                      <span className="font-medium">{fmtUsd(c.spentUsd)}</span>
+                      <span className="font-medium">{money(c.spentCop)}</span>
                     </button>
                     {isOpen && (
                       <ul className="ml-4 mt-1 space-y-0.5 border-l border-black/10 pl-3 dark:border-white/10">
@@ -909,7 +1015,40 @@ export function ConstructionBudgetBoard() {
                               {item.code ? `${item.code} — ` : ""}
                               {item.description}
                             </span>
-                            <span className="shrink-0 font-medium">{fmtUsd(item.actualUsd)}</span>
+                            <span className="shrink-0 font-medium">{money(item.actualCop)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
+              {/* Open-item allocations (2026-08-21) — funds allocated on the
+                  Construction Management tab, so the two tabs' spend always
+                  reconciles against the same deposited balance. */}
+              {allocationsByItem.map((g) => {
+                const key = `alloc:${g.itemTitle}`;
+                const isOpen = expandedSpendCategory === key;
+                return (
+                  <li key={key}>
+                    <button
+                      onClick={() => setExpandedSpendCategory(isOpen ? null : key)}
+                      className="flex w-full items-center justify-between gap-2 text-left text-black/70 hover:text-black dark:text-white/70 dark:hover:text-white"
+                    >
+                      <span>
+                        {isOpen ? "▾" : "▸"} <span className="text-red-600 dark:text-red-400">Open item:</span> {g.itemTitle}
+                      </span>
+                      <span className="font-medium">{money(g.totalCop)}</span>
+                    </button>
+                    {isOpen && (
+                      <ul className="ml-4 mt-1 space-y-0.5 border-l border-black/10 pl-3 dark:border-white/10">
+                        {g.entries.map((a) => (
+                          <li key={a.id} className="flex items-center justify-between gap-2 text-xs text-black/60 dark:text-white/60">
+                            <span>
+                              {fmtWhen(a.createdAt)} — {a.createdBy}
+                              {a.note ? ` — ${a.note}` : ""}
+                            </span>
+                            <span className="shrink-0 font-medium">{money(a.amountCop)}</span>
                           </li>
                         ))}
                       </ul>
@@ -934,7 +1073,7 @@ export function ConstructionBudgetBoard() {
                 {funds.deposits.map((d) => (
                   <li key={d.id} className="flex items-start justify-between gap-2 text-sm text-black/70 dark:text-white/70">
                     <div>
-                      <span className="font-medium">{fmtUsd(d.amountUsd)}</span>{" "}
+                      <span className="font-medium">{money(d.amountCop)}</span>{" "}
                       <span className="text-xs text-black/40 dark:text-white/40">
                         {d.depositedAt} — logged by {d.createdBy}
                       </span>
@@ -1053,31 +1192,30 @@ export function ConstructionBudgetBoard() {
                 <th className="px-3 py-2 font-medium">Unit</th>
                 <th className="px-3 py-2 font-medium text-right">Qty</th>
                 <th className="px-3 py-2 font-medium text-right">Unit price (COP)</th>
-                <th className="px-3 py-2 font-medium text-right">Total (COP)</th>
-                <th className="px-3 py-2 font-medium text-right">Budgeted (USD)</th>
-                <th className="px-3 py-2 font-medium text-right">Actual (USD)</th>
+                <th className="px-3 py-2 font-medium text-right">Budgeted ({showUsd ? "USD" : "COP"})</th>
+                <th className="px-3 py-2 font-medium text-right">Actual (COP)</th>
                 <th className="px-3 py-2 font-medium text-right">Variance</th>
                 <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
               {groups.map((g) => {
-                const subBudgeted = g.items.reduce((s, i) => s + (i.budgetedUsd ?? 0), 0);
-                const subActual = g.items.reduce((s, i) => s + (i.actualUsd ?? 0), 0);
+                const subBudgeted = g.items.reduce((s, i) => s + (i.totalCop ?? 0), 0);
+                const subActual = g.items.reduce((s, i) => s + (i.actualCop ?? 0), 0);
                 return (
                   <Fragment key={g.category}>
                     <tr className="bg-black/5 dark:bg-white/10">
-                      <td colSpan={6} className="px-3 py-1.5 text-xs font-semibold">
+                      <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold">
                         {g.category}
                       </td>
-                      <td className="px-3 py-1.5 text-right text-xs font-semibold">{fmtUsd(subBudgeted)}</td>
-                      <td className="px-3 py-1.5 text-right text-xs font-semibold">{fmtUsd(subActual)}</td>
+                      <td className="px-3 py-1.5 text-right text-xs font-semibold">{money(subBudgeted)}</td>
+                      <td className="px-3 py-1.5 text-right text-xs font-semibold">{money(subActual)}</td>
                       <td
                         className={`px-3 py-1.5 text-right text-xs font-semibold ${
                           subBudgeted - subActual < 0 ? "text-red-500" : ""
                         }`}
                       >
-                        {fmtUsd(subBudgeted - subActual)}
+                        {money(subBudgeted - subActual)}
                       </td>
                       <td />
                     </tr>
@@ -1087,6 +1225,7 @@ export function ConstructionBudgetBoard() {
                         item={item}
                         saving={savingId === item.id}
                         canManage={canManage}
+                        money={money}
                         onSaveActual={(v) => void saveActual(item, v)}
                         onRemove={() => void removeItem(item)}
                         notesOpen={openNotesId === item.id}
@@ -1105,13 +1244,13 @@ export function ConstructionBudgetBoard() {
             </tbody>
             <tfoot>
               <tr className="border-t-2 border-black/15 dark:border-white/15 font-semibold">
-                <td colSpan={6} className="px-3 py-2 text-right text-xs">
+                <td colSpan={5} className="px-3 py-2 text-right text-xs">
                   Grand total
                 </td>
-                <td className="px-3 py-2 text-right text-xs">{fmtUsd(totals.budgeted)}</td>
-                <td className="px-3 py-2 text-right text-xs">{fmtUsd(totals.actual)}</td>
+                <td className="px-3 py-2 text-right text-xs">{money(totals.budgeted)}</td>
+                <td className="px-3 py-2 text-right text-xs">{money(totals.actual)}</td>
                 <td className={`px-3 py-2 text-right text-xs ${totals.remaining < 0 ? "text-red-500" : ""}`}>
-                  {fmtUsd(totals.remaining)}
+                  {money(totals.remaining)}
                 </td>
                 <td />
               </tr>
@@ -1173,6 +1312,7 @@ function ItemRow({
   item,
   saving,
   canManage,
+  money,
   onSaveActual,
   onRemove,
   notesOpen,
@@ -1187,6 +1327,8 @@ function ItemRow({
   item: Item;
   saving: boolean;
   canManage: boolean;
+  /** Renders a COP amount in the tab's current display currency. */
+  money: (cop: number | null) => string;
   onSaveActual: (v: number | null) => void;
   onRemove: () => void;
   notesOpen: boolean;
@@ -1198,8 +1340,10 @@ function ItemRow({
   onNoteDraftChange: (value: string) => void;
   onPostNote: () => void;
 }) {
-  const [draft, setDraft] = useState(item.actualUsd !== null ? String(item.actualUsd) : "");
-  const variance = item.actualUsd !== null && item.budgetedUsd !== null ? item.budgetedUsd - item.actualUsd : null;
+  // Entry is ALWAYS in COP (2026-08-21) — the display toggle only changes
+  // the read-only figures around it, never the entry currency.
+  const [draft, setDraft] = useState(item.actualCop !== null ? String(item.actualCop) : "");
+  const variance = item.actualCop !== null && item.totalCop !== null ? item.totalCop - item.actualCop : null;
 
   return (
     <>
@@ -1229,26 +1373,25 @@ function ItemRow({
         <td className="px-3 py-1.5 whitespace-nowrap">{item.unit}</td>
         <td className="px-3 py-1.5 text-right whitespace-nowrap">{item.quantity ?? ""}</td>
         <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtCop(item.unitPriceCop)}</td>
-        <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtCop(item.totalCop)}</td>
-        <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtUsd(item.budgetedUsd)}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">{money(item.totalCop)}</td>
         <td className="px-3 py-1.5 text-right whitespace-nowrap">
           <input
             type="number"
             min={0}
-            step="0.01"
-            className="w-24 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-right text-xs"
-            placeholder="—"
+            step="1"
+            className="w-32 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-right text-xs"
+            placeholder="COP"
             value={draft}
             disabled={saving}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => {
               const v = draft.trim() === "" ? null : Number(draft);
-              if (v !== item.actualUsd) onSaveActual(Number.isFinite(v as number) ? v : null);
+              if (v !== item.actualCop) onSaveActual(Number.isFinite(v as number) ? v : null);
             }}
           />
         </td>
         <td className={`px-3 py-1.5 text-right whitespace-nowrap ${variance !== null && variance < 0 ? "text-red-500" : ""}`}>
-          {variance !== null ? fmtUsd(variance) : "—"}
+          {variance !== null ? money(variance) : "—"}
         </td>
         <td className="px-3 py-1.5">
           {canManage && (
@@ -1261,7 +1404,7 @@ function ItemRow({
       {notesOpen && (
         <tr className="border-b border-black/5 dark:border-white/5">
           <td />
-          <td colSpan={9} className="px-3 py-2">
+          <td colSpan={8} className="px-3 py-2">
             <div className="ml-1 space-y-2 border-l-2 border-black/10 dark:border-white/10 pl-3">
               {loadingNotes && !notes ? (
                 <p className="text-xs text-black/50 dark:text-white/50">Loading…</p>

@@ -2,10 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
-import { isConstructionOwner } from "@/lib/construction";
+import {
+  getTotalConstructionFundAllocationsCop,
+  isConstructionOwner,
+  listConstructionFundAllocations,
+} from "@/lib/construction";
 import {
   addConstructionFundsDeposit,
   deleteConstructionFundsDeposit,
+  getConstructionBudgetFxRate,
   getConstructionFundsSpendByCategory,
   listConstructionBudgetItems,
   listConstructionFundsDeposits,
@@ -52,21 +57,32 @@ export async function GET(req: NextRequest) {
   if (error) return error;
   try {
     const groupId = await resolveGroupId(req, session.email);
-    const [deposits, items, spendByCategory] = await Promise.all([
+    // ALL COP since 2026-08-21 (Seni: "make everything COP... I will enter
+    // the amounts deposited in COP as well"). USD is display-only, derived
+    // client-side from fxRate. "Spent" = budget lines' actual COP + fund
+    // allocations to Construction Management open items ("every dollar is
+    // accounted for").
+    const [deposits, items, spendByCategory, allocations, allocatedCop, fxRate] = await Promise.all([
       listConstructionFundsDeposits(session.organizationId, groupId),
       listConstructionBudgetItems(session.organizationId, groupId),
       getConstructionFundsSpendByCategory(session.organizationId, groupId),
+      listConstructionFundAllocations(session.organizationId, groupId),
+      getTotalConstructionFundAllocationsCop(session.organizationId, groupId),
+      getConstructionBudgetFxRate(session.organizationId, groupId),
     ]);
-    const totalDeposited = deposits.reduce((s, d) => s + d.amountUsd, 0);
-    // Same figure as the "Actual spend recorded" card on the main budget
-    // table — total real spend against deposited cash, not against budget.
-    const totalSpent = items.reduce((s, i) => s + (i.actualUsd ?? 0), 0);
+    const totalDepositedCop = deposits.reduce((s, d) => s + d.amountCop, 0);
+    const budgetSpentCop = items.reduce((s, i) => s + (i.actualCop ?? 0), 0);
+    const totalSpentCop = budgetSpentCop + allocatedCop;
     return NextResponse.json({
       deposits,
-      totalDeposited,
-      totalSpent,
-      remaining: totalDeposited - totalSpent,
+      totalDepositedCop,
+      budgetSpentCop,
+      allocatedCop,
+      totalSpentCop,
+      remainingCop: totalDepositedCop - totalSpentCop,
       spendByCategory,
+      allocations,
+      fxRate,
       canManage: isConstructionOwner(session.email),
     });
   } catch (err) {
@@ -80,9 +96,9 @@ export async function POST(req: NextRequest) {
   const { session, error } = requireManager(req);
   if (error) return error;
 
-  const body = (await req.json().catch(() => null)) as { amountUsd?: number; note?: string; depositedAt?: string } | null;
-  if (typeof body?.amountUsd !== "number" || !Number.isFinite(body.amountUsd) || body.amountUsd <= 0) {
-    return NextResponse.json({ error: "Enter a positive deposit amount." }, { status: 400 });
+  const body = (await req.json().catch(() => null)) as { amountCop?: number; note?: string; depositedAt?: string } | null;
+  if (typeof body?.amountCop !== "number" || !Number.isFinite(body.amountCop) || body.amountCop <= 0) {
+    return NextResponse.json({ error: "Enter a positive deposit amount (COP)." }, { status: 400 });
   }
   if (body.depositedAt && !/^\d{4}-\d{2}-\d{2}$/.test(body.depositedAt)) {
     return NextResponse.json({ error: "Invalid date." }, { status: 400 });
@@ -97,7 +113,7 @@ export async function POST(req: NextRequest) {
     const deposit = await addConstructionFundsDeposit({
       organizationId: session.organizationId,
       propertyGroupId: groupId,
-      amountUsd: body.amountUsd,
+      amountCop: body.amountCop,
       note: body.note?.trim() || null,
       depositedAt: body.depositedAt ?? null,
       actorEmail: session.email,

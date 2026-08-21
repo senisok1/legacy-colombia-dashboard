@@ -40,12 +40,15 @@ export type ConstructionItem = {
    * input"). Editable by anyone with tab access, same as toggling
    * completed — not restricted to Seni. */
   estimatedCompletionDate: string | null;
+  /** Estimated cost in COP (2026-08-21, Seni's ask: "Estimated cost in COP
+   * for the open items"). Same open-edit policy as the completion date. */
+  estimatedCostCop: number | null;
 };
 
 export type ConstructionLogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled" | "edited";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled" | "edited" | "allocated";
   /** Extra context for an action that isn't fully self-describing from
    * action+itemTitle alone — "scheduled" (e.g. "Set estimated completion to
    * Aug 25, 2026" or "Cleared estimated completion") and "edited" (e.g.
@@ -82,6 +85,7 @@ type ItemRow = {
   created_at: string;
   note_count: string;
   estimated_completion_date: string | null;
+  estimated_cost_cop: string | null;
 };
 
 type NoteRow = {
@@ -120,6 +124,7 @@ function itemFromRow(r: ItemRow): ConstructionItem {
     createdAt: r.created_at,
     noteCount: Number(r.note_count) || 0,
     estimatedCompletionDate: r.estimated_completion_date,
+    estimatedCostCop: r.estimated_cost_cop !== null && r.estimated_cost_cop !== undefined ? Number(r.estimated_cost_cop) : null,
   };
 }
 
@@ -154,6 +159,7 @@ export async function listConstructionItems(
     `select ci.id, ci.title, ci.notes, ci.category, ci.completed, ci.completed_by_email, ci.completed_by_name,
             ci.completed_at, ci.created_by_email, ci.created_by_name, ci.created_at,
             ci.estimated_completion_date::text as estimated_completion_date,
+            ci.estimated_cost_cop::text as estimated_cost_cop,
             (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count
      from construction_items ci
      where ci.organization_id = $1 and ci.property_group_id = $2
@@ -282,6 +288,7 @@ export async function createConstructionItem(input: {
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at,
                estimated_completion_date::text as estimated_completion_date,
+               estimated_cost_cop::text as estimated_cost_cop,
                '0' as note_count`,
     [
       input.organizationId,
@@ -327,6 +334,7 @@ export async function setConstructionItemCompleted(input: {
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at,
                estimated_completion_date::text as estimated_completion_date,
+               estimated_cost_cop::text as estimated_cost_cop,
                (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
     [input.id, input.organizationId, input.propertyGroupId, input.completed, input.actorEmail, input.actorName]
   );
@@ -377,6 +385,7 @@ export async function setConstructionItemEstimatedCompletion(input: {
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at,
                estimated_completion_date::text as estimated_completion_date,
+               estimated_cost_cop::text as estimated_cost_cop,
                (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
     [input.id, input.organizationId, input.propertyGroupId, input.estimatedCompletionDate]
   );
@@ -448,6 +457,7 @@ export async function updateConstructionItem(input: {
       `select ci.id, ci.title, ci.notes, ci.category, ci.completed, ci.completed_by_email, ci.completed_by_name,
               ci.completed_at, ci.created_by_email, ci.created_by_name, ci.created_at,
               ci.estimated_completion_date::text as estimated_completion_date,
+            ci.estimated_cost_cop::text as estimated_cost_cop,
               (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count
        from construction_items ci
        where ci.id = $1 and ci.organization_id = $2 and ci.property_group_id = $3`,
@@ -463,6 +473,7 @@ export async function updateConstructionItem(input: {
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at,
                estimated_completion_date::text as estimated_completion_date,
+               estimated_cost_cop::text as estimated_cost_cop,
                (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
     [input.id, input.organizationId, input.propertyGroupId, ...values]
   );
@@ -507,6 +518,185 @@ export async function deleteConstructionItem(input: {
     actorName: input.actorName,
   });
   return true;
+}
+
+/** Sets or clears an item's estimated cost in COP (2026-08-21, Seni's ask:
+ * "Estimated cost in COP for the open items"). Same open-edit policy as the
+ * estimated completion date — anyone with tab access. */
+export async function setConstructionItemEstimatedCost(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  id: string;
+  estimatedCostCop: number | null;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<ConstructionItem | null> {
+  const row = await queryOne<ItemRow>(
+    `update construction_items ci
+       set estimated_cost_cop = $4
+     where id = $1 and organization_id = $2 and property_group_id = $3
+     returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
+               created_by_email, created_by_name, created_at,
+               estimated_completion_date::text as estimated_completion_date,
+               estimated_cost_cop::text as estimated_cost_cop,
+               (select count(*) from construction_item_notes n where n.item_id = ci.id) as note_count`,
+    [input.id, input.organizationId, input.propertyGroupId, input.estimatedCostCop]
+  );
+  if (!row) return null;
+  await logActivity({
+    organizationId: input.organizationId,
+    propertyGroupId: input.propertyGroupId,
+    itemId: row.id,
+    itemTitle: row.title,
+    action: "edited",
+    detail: input.estimatedCostCop !== null
+      ? `Estimated cost set to ${Math.round(input.estimatedCostCop).toLocaleString("en-US")} COP`
+      : "Estimated cost cleared",
+    actorEmail: input.actorEmail,
+    actorName: input.actorName,
+  });
+  return itemFromRow(row);
+}
+
+// --- Fund allocations (2026-08-21, Seni's ask: "allocate deposited
+// construction funds in COP to those open item expenses as well so every
+// dollar is accounted for") --- COP amounts drawn from the deposited
+// construction funds against a specific open item. Append-only ledger
+// entries (like the notes threads); adding is open to anyone with tab
+// access, removing is Seni-only (enforced at the route). The Funds box on
+// the Budget tab counts these alongside the budget lines' actual COP spend.
+
+export type ConstructionFundAllocation = {
+  id: string;
+  itemId: string;
+  itemTitle: string;
+  amountCop: number;
+  note: string | null;
+  createdAt: string;
+  createdBy: string;
+};
+
+type AllocationRow = {
+  id: string;
+  item_id: string;
+  item_title: string;
+  amount_cop: string;
+  note: string | null;
+  created_at: string;
+  created_by_email: string;
+  created_by_name: string | null;
+};
+
+function allocationFromRow(r: AllocationRow): ConstructionFundAllocation {
+  return {
+    id: r.id,
+    itemId: r.item_id,
+    itemTitle: r.item_title,
+    amountCop: Number(r.amount_cop),
+    note: r.note,
+    createdAt: r.created_at,
+    createdBy: r.created_by_name?.trim() || r.created_by_email,
+  };
+}
+
+export async function listConstructionFundAllocations(
+  organizationId: string,
+  propertyGroupId: string
+): Promise<ConstructionFundAllocation[]> {
+  const rows = await query<AllocationRow>(
+    `select a.id, a.item_id, ci.title as item_title, a.amount_cop, a.note, a.created_at,
+            a.created_by_email, a.created_by_name
+     from construction_item_fund_allocations a
+     join construction_items ci on ci.id = a.item_id
+     where a.organization_id = $1 and a.property_group_id = $2
+     order by a.created_at desc`,
+    [organizationId, propertyGroupId]
+  );
+  return rows.map(allocationFromRow);
+}
+
+export async function addConstructionFundAllocation(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  itemId: string;
+  amountCop: number;
+  note: string | null;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<ConstructionFundAllocation | null> {
+  const item = await queryOne<{ id: string; title: string }>(
+    `select id, title from construction_items where id = $1 and organization_id = $2 and property_group_id = $3`,
+    [input.itemId, input.organizationId, input.propertyGroupId]
+  );
+  if (!item) return null;
+
+  const row = await queryOne<AllocationRow>(
+    `insert into construction_item_fund_allocations
+       (organization_id, property_group_id, item_id, amount_cop, note, created_by_email, created_by_name)
+     values ($1, $2, $3, $4, $5, $6, $7)
+     returning id, item_id, '' as item_title, amount_cop, note, created_at, created_by_email, created_by_name`,
+    [input.organizationId, input.propertyGroupId, input.itemId, input.amountCop, input.note, input.actorEmail, input.actorName]
+  );
+  if (!row) throw new Error("Failed to record the allocation.");
+  row.item_title = item.title;
+
+  await logActivity({
+    organizationId: input.organizationId,
+    propertyGroupId: input.propertyGroupId,
+    itemId: item.id,
+    itemTitle: item.title,
+    action: "allocated",
+    detail: `Allocated ${Math.round(input.amountCop).toLocaleString("en-US")} COP from construction funds${input.note ? ` — ${input.note}` : ""}`,
+    actorEmail: input.actorEmail,
+    actorName: input.actorName,
+  });
+
+  return allocationFromRow(row);
+}
+
+/** Seni-only (enforced by the caller) — removing an allocation changes the
+ * funds accounting, same trust tier as removing a deposit. */
+export async function deleteConstructionFundAllocation(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  id: string;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<boolean> {
+  const row = await queryOne<{ id: string; amount_cop: string; item_id: string }>(
+    `delete from construction_item_fund_allocations
+     where id = $1 and organization_id = $2 and property_group_id = $3
+     returning id, amount_cop, item_id`,
+    [input.id, input.organizationId, input.propertyGroupId]
+  );
+  if (!row) return false;
+
+  const item = await queryOne<{ title: string }>(`select title from construction_items where id = $1`, [row.item_id]);
+  await logActivity({
+    organizationId: input.organizationId,
+    propertyGroupId: input.propertyGroupId,
+    itemId: row.item_id,
+    itemTitle: item?.title ?? "(deleted item)",
+    action: "allocated",
+    detail: `Removed a ${Math.round(Number(row.amount_cop)).toLocaleString("en-US")} COP allocation`,
+    actorEmail: input.actorEmail,
+    actorName: input.actorName,
+  });
+  return true;
+}
+
+/** Total COP allocated from construction funds to open items — one number
+ * for the Funds box's "spent" math (see api/construction-budget/funds). */
+export async function getTotalConstructionFundAllocationsCop(
+  organizationId: string,
+  propertyGroupId: string
+): Promise<number> {
+  const row = await queryOne<{ total: string | null }>(
+    `select sum(amount_cop) as total from construction_item_fund_allocations
+     where organization_id = $1 and property_group_id = $2`,
+    [organizationId, propertyGroupId]
+  );
+  return Number(row?.total ?? 0) || 0;
 }
 
 /** Deletes a single activity log entry outright — no replacement record,

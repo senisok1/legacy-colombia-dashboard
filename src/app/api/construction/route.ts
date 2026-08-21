@@ -7,9 +7,11 @@ import {
   deleteConstructionItem,
   isConstructionOwner,
   listConstructionActivityLog,
+  listConstructionFundAllocations,
   listConstructionItems,
   setConstructionItemCompleted,
   setConstructionItemEstimatedCompletion,
+  setConstructionItemEstimatedCost,
   updateConstructionItem,
 } from "@/lib/construction";
 
@@ -37,13 +39,18 @@ export async function GET(req: NextRequest) {
   try {
     const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
-    const [items, log] = await Promise.all([
+    const [items, log, allocations] = await Promise.all([
       listConstructionItems(session.organizationId, groupId),
       listConstructionActivityLog(session.organizationId, groupId),
+      // Fund allocations (2026-08-21) — COP drawn from the deposited
+      // construction funds against specific open items; the board sums
+      // these per item client-side.
+      listConstructionFundAllocations(session.organizationId, groupId),
     ]);
     return NextResponse.json({
       items,
       log,
+      allocations,
       viewerRole: session.role,
       // Drives the delete buttons in ConstructionBoard.tsx — restricted to
       // Seni specifically, not every CEO login (2026-08-20, Seni's ask).
@@ -116,6 +123,7 @@ export async function PATCH(req: NextRequest) {
         id?: string;
         completed?: boolean;
         estimatedCompletionDate?: string | null;
+        estimatedCostCop?: number | null;
         title?: string;
         notes?: string | null;
         category?: string | null;
@@ -148,6 +156,21 @@ export async function PATCH(req: NextRequest) {
         propertyGroupId: groupId,
         id: body.id,
         estimatedCompletionDate: body.estimatedCompletionDate ?? null,
+        actorEmail: session.email,
+        actorName: user?.name ?? null,
+      });
+      return item ? NextResponse.json({ ok: true, item }) : NextResponse.json({ error: "No such item." }, { status: 404 });
+    }
+
+    if ("estimatedCostCop" in body) {
+      if (body.estimatedCostCop !== null && (typeof body.estimatedCostCop !== "number" || body.estimatedCostCop < 0)) {
+        return NextResponse.json({ error: "Estimated cost must be a positive number (COP) or null." }, { status: 400 });
+      }
+      const item = await setConstructionItemEstimatedCost({
+        organizationId: session.organizationId,
+        propertyGroupId: groupId,
+        id: body.id,
+        estimatedCostCop: body.estimatedCostCop ?? null,
         actorEmail: session.email,
         actorName: user?.name ?? null,
       });

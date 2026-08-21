@@ -127,12 +127,14 @@ export async function PATCH(req: NextRequest) {
   const { session, error } = requireViewer(req);
   if (error) return error;
 
+  // COP is the entry currency since 2026-08-21 (Seni: "make everything COP
+  // on the budget section"). actualCop replaces the old actualUsd field.
   const body = (await req.json().catch(() => null)) as
-    | { id?: string; actualUsd?: number | null; notes?: string | null }
+    | { id?: string; actualCop?: number | null; notes?: string | null }
     | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
-  if (body.actualUsd !== undefined && body.actualUsd !== null && (typeof body.actualUsd !== "number" || body.actualUsd < 0)) {
-    return NextResponse.json({ error: "Actual spend must be a positive number." }, { status: 400 });
+  if (body.actualCop !== undefined && body.actualCop !== null && (typeof body.actualCop !== "number" || body.actualCop < 0)) {
+    return NextResponse.json({ error: "Actual spend must be a positive number (COP)." }, { status: 400 });
   }
 
   try {
@@ -142,7 +144,7 @@ export async function PATCH(req: NextRequest) {
       organizationId: session.organizationId,
       propertyGroupId: groupId,
       id: body.id,
-      actualUsd: body.actualUsd,
+      actualCop: body.actualCop,
       notes: body.notes !== undefined ? body.notes?.trim() || null : undefined,
       actorEmail: session.email,
       actorName: user?.name ?? null,

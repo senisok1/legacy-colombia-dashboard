@@ -41,16 +41,38 @@ type Item = {
    * date of completion for each open item for the construction team to
    * input"). */
   estimatedCompletionDate: string | null;
+  /** Estimated cost in COP (2026-08-21, Seni's ask: "Estimated cost in COP
+   * for the open items"). */
+  estimatedCostCop: number | null;
 };
 
 type LogEntry = {
   id: string;
   itemTitle: string;
-  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled" | "edited";
+  action: "created" | "completed" | "reopened" | "deleted" | "noted" | "scheduled" | "edited" | "allocated";
   detail: string | null;
   actor: string;
   at: string;
 };
+
+/** COP drawn from the deposited construction funds against this item
+ * (2026-08-21, Seni's ask: "allocate deposited construction funds in COP to
+ * those open item expenses as well so every dollar is accounted for").
+ * The Budget tab's Funds box counts these against the deposited balance. */
+type Allocation = {
+  id: string;
+  itemId: string;
+  itemTitle: string;
+  amountCop: number;
+  note: string | null;
+  createdAt: string;
+  createdBy: string;
+};
+
+function fmtCop(n: number | null): string {
+  if (n === null) return "—";
+  return "$" + Math.round(n).toLocaleString("es-CO");
+}
 
 type Note = {
   id: string;
@@ -113,9 +135,23 @@ type ItemRowProps = {
   editingId: string | null;
   editDraft: EditDraft;
   savingEditId: string | null;
+  savingCostId: string | null;
+  /** Fund allocations for this group, keyed by item id (2026-08-21). */
+  allocationsByItem: Map<string, Allocation[]>;
+  allocOpenId: string | null;
+  allocAmountDraft: string;
+  allocNoteDraft: string;
+  addingAllocId: string | null;
+  removingAllocId: string | null;
   onToggle: (item: Item) => void;
   onRemove: (item: Item) => void;
   onUpdateEstimatedDate: (item: Item, dateStr: string) => void;
+  onUpdateEstimatedCost: (item: Item, costCop: number | null) => void;
+  onToggleAlloc: (item: Item) => void;
+  onAllocAmountChange: (value: string) => void;
+  onAllocNoteChange: (value: string) => void;
+  onAddAllocation: (item: Item) => void;
+  onRemoveAllocation: (allocation: Allocation) => void;
   onToggleNotes: (item: Item) => void;
   onNoteDraftChange: (itemId: string, value: string) => void;
   onPostNote: (item: Item) => void;
@@ -141,9 +177,22 @@ function ItemRow({
   editingId,
   editDraft,
   savingEditId,
+  savingCostId,
+  allocationsByItem,
+  allocOpenId,
+  allocAmountDraft,
+  allocNoteDraft,
+  addingAllocId,
+  removingAllocId,
   onToggle,
   onRemove,
   onUpdateEstimatedDate,
+  onUpdateEstimatedCost,
+  onToggleAlloc,
+  onAllocAmountChange,
+  onAllocNoteChange,
+  onAddAllocation,
+  onRemoveAllocation,
   onToggleNotes,
   onNoteDraftChange,
   onPostNote,
@@ -155,6 +204,12 @@ function ItemRow({
   const notesOpen = openNotesId === item.id;
   const notes = notesByItem[item.id];
   const editing = editingId === item.id;
+  // Local draft for the Est. cost (COP) input — saved on blur, same pattern
+  // as the Budget tab's Actual (COP) entry.
+  const [costDraft, setCostDraft] = useState(item.estimatedCostCop !== null ? String(item.estimatedCostCop) : "");
+  const allocations = allocationsByItem.get(item.id) ?? [];
+  const allocatedCop = allocations.reduce((s, a) => s + a.amountCop, 0);
+  const allocOpen = allocOpenId === item.id;
   // Overdue = has an estimated date, that date is today or in the past, and
   // the item isn't done yet (2026-08-21, Seni's ask: "when the est.
   // completion date is due turn the 'est. completion:' red"). Plain string
@@ -180,18 +235,105 @@ function ItemRow({
               ? `${item.completedBy}, ${item.completedAt ? fmtWhen(item.completedAt) : ""}`
               : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
           </div>
-          <div className="mt-1 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50">
-            <span className={overdue ? "font-semibold text-red-500" : ""}>{t("construction.estCompletion")}</span>
-            <input
-              type="date"
-              value={item.estimatedCompletionDate ?? ""}
-              disabled={savingDateId === item.id}
-              onChange={(e) => onUpdateEstimatedDate(item, e.target.value)}
-              className={`rounded border bg-transparent px-1 py-0.5 text-xs disabled:opacity-40 ${
-                overdue ? "border-red-500 text-red-500" : "border-black/15 dark:border-white/15"
-              }`}
-            />
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-black/50 dark:text-white/50">
+            <span className="flex items-center gap-1.5">
+              <span className={overdue ? "font-semibold text-red-500" : ""}>{t("construction.estCompletion")}</span>
+              <input
+                type="date"
+                value={item.estimatedCompletionDate ?? ""}
+                disabled={savingDateId === item.id}
+                onChange={(e) => onUpdateEstimatedDate(item, e.target.value)}
+                className={`rounded border bg-transparent px-1 py-0.5 text-xs disabled:opacity-40 ${
+                  overdue ? "border-red-500 text-red-500" : "border-black/15 dark:border-white/15"
+                }`}
+              />
+            </span>
+            {/* Estimated cost in COP (2026-08-21, Seni's ask) — saved on
+                blur, open to anyone with tab access. */}
+            <span className="flex items-center gap-1.5">
+              <span>Est. cost (COP):</span>
+              <input
+                type="number"
+                min={0}
+                step="1"
+                placeholder="—"
+                value={costDraft}
+                disabled={savingCostId === item.id}
+                onChange={(e) => setCostDraft(e.target.value)}
+                onBlur={() => {
+                  const v = costDraft.trim() === "" ? null : Number(costDraft);
+                  if (v !== item.estimatedCostCop) onUpdateEstimatedCost(item, Number.isFinite(v as number) ? v : null);
+                }}
+                className="w-28 rounded border border-black/15 dark:border-white/15 bg-transparent px-1 py-0.5 text-right text-xs disabled:opacity-40"
+              />
+            </span>
+            {/* Fund allocations (2026-08-21, Seni's ask: "allocate deposited
+                construction funds in COP to those open item expenses"). */}
+            <button
+              onClick={() => onToggleAlloc(item)}
+              className={`flex items-center gap-1 ${
+                allocatedCop > 0 ? "text-[var(--accent)]" : "text-black/40 dark:text-white/40"
+              } hover:underline`}
+            >
+              Funds used: {allocatedCop > 0 ? fmtCop(allocatedCop) : "—"} {allocOpen ? "▾" : "▸"}
+            </button>
           </div>
+          {allocOpen && (
+            <div className="mt-1.5 ml-1 space-y-1.5 border-l-2 border-black/10 dark:border-white/10 pl-3">
+              {allocations.length > 0 && (
+                <ul className="space-y-1">
+                  {allocations.map((a) => (
+                    <li key={a.id} className="flex items-center justify-between gap-2 text-xs text-black/60 dark:text-white/60">
+                      <span>
+                        <span className="font-medium">{fmtCop(a.amountCop)}</span> — {a.createdBy}, {fmtWhen(a.createdAt)}
+                        {a.note ? ` — ${a.note}` : ""}
+                      </span>
+                      {canDelete && (
+                        <button
+                          onClick={() => onRemoveAllocation(a)}
+                          disabled={removingAllocId === a.id}
+                          className="shrink-0 rounded px-1 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                        >
+                          {removingAllocId === a.id ? "…" : "✕"}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <input
+                  type="number"
+                  min={0}
+                  step="1"
+                  placeholder="Amount (COP)"
+                  value={allocAmountDraft}
+                  onChange={(e) => onAllocAmountChange(e.target.value)}
+                  className="w-32 rounded border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-xs"
+                />
+                <input
+                  type="text"
+                  placeholder="Note (optional)"
+                  value={allocNoteDraft}
+                  onChange={(e) => onAllocNoteChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onAddAllocation(item);
+                  }}
+                  className="min-w-[8rem] flex-1 rounded border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-xs"
+                />
+                <button
+                  onClick={() => onAddAllocation(item)}
+                  disabled={addingAllocId === item.id || !allocAmountDraft.trim()}
+                  className="shrink-0 rounded-md bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-40"
+                >
+                  {addingAllocId === item.id ? "Saving…" : "Allocate funds"}
+                </button>
+              </div>
+              <p className="text-[11px] text-black/40 dark:text-white/40">
+                Counted against the deposited construction funds on the Construction Budget tab.
+              </p>
+            </div>
+          )}
         </div>
         <button
           onClick={() => onToggleNotes(item)}
@@ -381,6 +523,16 @@ export function ConstructionBoard() {
     notes: "",
   });
   const [savingEditId, setSavingEditId] = useState<string | null>(null);
+  // Estimated cost (COP) per item (2026-08-21, Seni's ask).
+  const [savingCostId, setSavingCostId] = useState<string | null>(null);
+  // Fund allocations (2026-08-21, Seni's ask) — COP drawn from the deposited
+  // construction funds against an open item. One inline panel open at a time.
+  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [allocOpenId, setAllocOpenId] = useState<string | null>(null);
+  const [allocAmountDraft, setAllocAmountDraft] = useState("");
+  const [allocNoteDraft, setAllocNoteDraft] = useState("");
+  const [addingAllocId, setAddingAllocId] = useState<string | null>(null);
+  const [removingAllocId, setRemovingAllocId] = useState<string | null>(null);
   // Same guard as TeamActivityLog: a failed background refresh must never
   // blank out a list that's already on screen.
   const hasDataRef = useRef(false);
@@ -392,6 +544,7 @@ export function ConstructionBoard() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setItems(json.items ?? []);
       setLog(json.log ?? []);
+      setAllocations(json.allocations ?? []);
       setCanDelete(Boolean(json.canDelete));
       hasDataRef.current = true;
       setError(null);
@@ -525,6 +678,80 @@ export function ConstructionBoard() {
     }
   }
 
+  async function updateEstimatedCost(item: Item, costCop: number | null) {
+    if (savingCostId) return;
+    if (costCop === item.estimatedCostCop) return;
+    setSavingCostId(item.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: item.id, estimatedCostCop: costCop }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update the estimated cost.");
+    } finally {
+      setSavingCostId(null);
+    }
+  }
+
+  function toggleAlloc(item: Item) {
+    if (allocOpenId === item.id) {
+      setAllocOpenId(null);
+      return;
+    }
+    setAllocOpenId(item.id);
+    setAllocAmountDraft("");
+    setAllocNoteDraft("");
+  }
+
+  async function addAllocation(item: Item) {
+    const amount = Number(allocAmountDraft);
+    if (!Number.isFinite(amount) || amount <= 0 || addingAllocId) return;
+    setAddingAllocId(item.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction/allocations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: undefined, itemId: item.id, amountCop: amount, note: allocNoteDraft.trim() || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setAllocAmountDraft("");
+      setAllocNoteDraft("");
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to allocate funds.");
+    } finally {
+      setAddingAllocId(null);
+    }
+  }
+
+  async function removeAllocation(allocation: Allocation) {
+    if (removingAllocId || !window.confirm(`Remove the ${fmtCop(allocation.amountCop)} COP allocation?`)) return;
+    setRemovingAllocId(allocation.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction/allocations", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: allocation.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove the allocation.");
+    } finally {
+      setRemovingAllocId(null);
+    }
+  }
+
   async function toggleNotes(item: Item) {
     if (openNotesId === item.id) {
       setOpenNotesId(null);
@@ -612,6 +839,9 @@ export function ConstructionBoard() {
   const completedGroups = groupByCategory(completed);
 
   function actionLabel(action: LogEntry["action"]): string {
+    // "allocated" (2026-08-21) postdates the i18n key set — plain English,
+    // consistent with the other untranslated additions on this tab.
+    if (action === "allocated") return "allocated funds on";
     return t(`construction.action${action.charAt(0).toUpperCase()}${action.slice(1)}`);
   }
 
@@ -622,6 +852,15 @@ export function ConstructionBoard() {
   function onEditFieldChange(field: keyof EditDraft, value: string) {
     setEditDraft((d) => ({ ...d, [field]: value }));
   }
+
+  const allocationsByItem = useMemo(() => {
+    const map = new Map<string, Allocation[]>();
+    for (const a of allocations) {
+      if (!map.has(a.itemId)) map.set(a.itemId, []);
+      map.get(a.itemId)!.push(a);
+    }
+    return map;
+  }, [allocations]);
 
   const itemRowProps = {
     t,
@@ -637,9 +876,22 @@ export function ConstructionBoard() {
     editingId,
     editDraft,
     savingEditId,
+    savingCostId,
+    allocationsByItem,
+    allocOpenId,
+    allocAmountDraft,
+    allocNoteDraft,
+    addingAllocId,
+    removingAllocId,
     onToggle: (item: Item) => void toggle(item),
     onRemove: (item: Item) => void remove(item),
     onUpdateEstimatedDate: (item: Item, dateStr: string) => void updateEstimatedDate(item, dateStr),
+    onUpdateEstimatedCost: (item: Item, costCop: number | null) => void updateEstimatedCost(item, costCop),
+    onToggleAlloc: toggleAlloc,
+    onAllocAmountChange: setAllocAmountDraft,
+    onAllocNoteChange: setAllocNoteDraft,
+    onAddAllocation: (item: Item) => void addAllocation(item),
+    onRemoveAllocation: (allocation: Allocation) => void removeAllocation(allocation),
     onToggleNotes: (item: Item) => void toggleNotes(item),
     onNoteDraftChange,
     onPostNote: (item: Item) => void postNote(item),

@@ -17,6 +17,12 @@ export type ConstructionBudgetItem = {
   unitPriceCop: number | null;
   totalCop: number | null;
   budgetedUsd: number | null;
+  /** Real spend, entered in COP — the source of truth since 2026-08-21
+   * (Seni: "make everything COP on the budget section"). */
+  actualCop: number | null;
+  /** DERIVED: actualCop / fx rate, filled in by applyFxRate() — never
+   * stored. Kept on the type so USD-side consumers (funds math, toggle
+   * display) don't each re-divide. */
   actualUsd: number | null;
   notes: string | null;
   sortOrder: number;
@@ -42,7 +48,7 @@ type Row = {
   unit_price_cop: string | null;
   total_cop: string | null;
   budgeted_usd: string | null;
-  actual_usd: string | null;
+  actual_cop: string | null;
   notes: string | null;
   sort_order: number;
   updated_at: string;
@@ -53,7 +59,7 @@ type Row = {
 
 const COLUMNS =
   "cbi.id, cbi.code, cbi.category, cbi.category_original, cbi.description, cbi.description_original, cbi.unit, " +
-  "cbi.quantity, cbi.unit_price_cop, cbi.total_cop, cbi.budgeted_usd, cbi.actual_usd, cbi.notes, cbi.sort_order, " +
+  "cbi.quantity, cbi.unit_price_cop, cbi.total_cop, cbi.budgeted_usd, cbi.actual_cop, cbi.notes, cbi.sort_order, " +
   "cbi.updated_at, cbi.updated_by_email, cbi.updated_by_name, " +
   "(select count(*) from construction_budget_item_notes n where n.item_id = cbi.id) as note_count";
 
@@ -80,7 +86,8 @@ function fromRow(r: Row): ConstructionBudgetItem {
     unitPriceCop: num(r.unit_price_cop),
     totalCop: num(r.total_cop),
     budgetedUsd: num(r.budgeted_usd),
-    actualUsd: num(r.actual_usd),
+    actualCop: num(r.actual_cop),
+    actualUsd: null, // derived — see applyFxRate()
     notes: r.notes,
     sortOrder: r.sort_order,
     updatedAt: r.updated_at,
@@ -312,12 +319,19 @@ export async function setConstructionBudgetFxRate(input: {
   return input.rate;
 }
 
-/** Recomputes Budgeted (USD) from each row's total_cop at the given rate —
- * pure function, no DB access, so the same logic can be reused wherever
- * items are read (list, single-row fetches) without duplicating it. */
+/** Recomputes the derived USD figures from each row's COP values at the
+ * given rate — pure function, no DB access, so the same logic can be reused
+ * wherever items are read (list, single-row fetches) without duplicating
+ * it. Since 2026-08-21 this derives BOTH budgetedUsd (from total_cop, as
+ * before) and actualUsd (from actual_cop — COP is the source of truth for
+ * real spend now; actualUsd is display-only). */
 export function applyFxRate(items: ConstructionBudgetItem[], rateCopPerUsd: number): ConstructionBudgetItem[] {
   if (!Number.isFinite(rateCopPerUsd) || rateCopPerUsd <= 0) return items;
-  return items.map((item) => (item.totalCop !== null ? { ...item, budgetedUsd: item.totalCop / rateCopPerUsd } : item));
+  return items.map((item) => ({
+    ...item,
+    budgetedUsd: item.totalCop !== null ? item.totalCop / rateCopPerUsd : item.budgetedUsd,
+    actualUsd: item.actualCop !== null ? item.actualCop / rateCopPerUsd : null,
+  }));
 }
 
 export type ImportRow = {
@@ -402,16 +416,17 @@ export async function updateConstructionBudgetItem(input: {
   organizationId: string;
   propertyGroupId: string;
   id: string;
-  actualUsd?: number | null;
+  /** Real spend in COP (2026-08-21 — COP is the entry currency now). */
+  actualCop?: number | null;
   notes?: string | null;
   actorEmail: string;
   actorName: string | null;
 }): Promise<ConstructionBudgetItem | null> {
   const sets: string[] = ["updated_at = now()", "updated_by_email = $4", "updated_by_name = $5"];
   const values: unknown[] = [input.id, input.organizationId, input.propertyGroupId, input.actorEmail, input.actorName];
-  if (input.actualUsd !== undefined) {
-    values.push(input.actualUsd);
-    sets.push(`actual_usd = $${values.length}`);
+  if (input.actualCop !== undefined) {
+    values.push(input.actualCop);
+    sets.push(`actual_cop = $${values.length}`);
   }
   if (input.notes !== undefined) {
     values.push(input.notes);
@@ -428,8 +443,12 @@ export async function updateConstructionBudgetItem(input: {
   // Human-readable summary of what changed — the log line itself stays
   // short; the full note text is already visible on the row.
   const parts: string[] = [];
-  if (input.actualUsd !== undefined) {
-    parts.push(input.actualUsd === null ? "Actual cleared" : `Actual set to $${Math.round(input.actualUsd).toLocaleString("en-US")}`);
+  if (input.actualCop !== undefined) {
+    parts.push(
+      input.actualCop === null
+        ? "Actual cleared"
+        : `Actual set to ${Math.round(input.actualCop).toLocaleString("en-US")} COP`
+    );
   }
   if (input.notes !== undefined) parts.push("Notes updated");
   if (parts.length > 0) {
@@ -456,7 +475,9 @@ export async function updateConstructionBudgetItem(input: {
 // already the existing per-line "real spend" field on this tab.
 export type ConstructionFundsDeposit = {
   id: string;
-  amountUsd: number;
+  /** Entered in COP since 2026-08-21 ("I will enter the amounts deposited
+   * in COP as well") — the source of truth. */
+  amountCop: number;
   note: string | null;
   depositedAt: string;
   createdAt: string;
@@ -465,7 +486,8 @@ export type ConstructionFundsDeposit = {
 
 type DepositRow = {
   id: string;
-  amount_usd: string;
+  amount_cop: string | null;
+  amount_usd: string | null;
   note: string | null;
   deposited_at: string;
   created_at: string;
@@ -476,7 +498,9 @@ type DepositRow = {
 function depositFromRow(r: DepositRow): ConstructionFundsDeposit {
   return {
     id: r.id,
-    amountUsd: Number(r.amount_usd),
+    // amount_usd fallback covers any legacy row from before the 2026-08-21
+    // COP conversion (none existed at migration time — belt and braces).
+    amountCop: Number(r.amount_cop ?? 0) || Number(r.amount_usd ?? 0) * DEFAULT_FX_RATE_COP_PER_USD,
     note: r.note,
     depositedAt: r.deposited_at,
     createdAt: r.created_at,
@@ -489,7 +513,7 @@ export async function listConstructionFundsDeposits(
   propertyGroupId: string
 ): Promise<ConstructionFundsDeposit[]> {
   const rows = await query<DepositRow>(
-    `select id, amount_usd, note, deposited_at, created_at, created_by_email, created_by_name
+    `select id, amount_cop, amount_usd, note, deposited_at, created_at, created_by_email, created_by_name
      from construction_funds_deposits
      where organization_id = $1 and property_group_id = $2
      order by deposited_at desc, created_at desc`,
@@ -504,7 +528,7 @@ export async function listConstructionFundsDeposits(
 export async function addConstructionFundsDeposit(input: {
   organizationId: string;
   propertyGroupId: string;
-  amountUsd: number;
+  amountCop: number;
   note: string | null;
   depositedAt: string | null;
   actorEmail: string;
@@ -512,10 +536,10 @@ export async function addConstructionFundsDeposit(input: {
 }): Promise<ConstructionFundsDeposit> {
   const row = await queryOne<DepositRow>(
     `insert into construction_funds_deposits
-       (organization_id, property_group_id, amount_usd, note, deposited_at, created_by_email, created_by_name)
+       (organization_id, property_group_id, amount_cop, note, deposited_at, created_by_email, created_by_name)
      values ($1, $2, $3, $4, coalesce($5::date, current_date), $6, $7)
-     returning id, amount_usd, note, deposited_at, created_at, created_by_email, created_by_name`,
-    [input.organizationId, input.propertyGroupId, input.amountUsd, input.note, input.depositedAt, input.actorEmail, input.actorName]
+     returning id, amount_cop, amount_usd, note, deposited_at, created_at, created_by_email, created_by_name`,
+    [input.organizationId, input.propertyGroupId, input.amountCop, input.note, input.depositedAt, input.actorEmail, input.actorName]
   );
   if (!row) throw new Error("Failed to record the deposit.");
 
@@ -526,7 +550,7 @@ export async function addConstructionFundsDeposit(input: {
     [
       input.organizationId,
       input.propertyGroupId,
-      `$${Math.round(input.amountUsd).toLocaleString("en-US")} deposited${input.note ? ` — ${input.note}` : ""}`,
+      `${Math.round(input.amountCop).toLocaleString("en-US")} COP deposited${input.note ? ` — ${input.note}` : ""}`,
       input.actorEmail,
       input.actorName,
     ]
@@ -543,14 +567,17 @@ export async function deleteConstructionFundsDeposit(input: {
   actorEmail: string;
   actorName: string | null;
 }): Promise<boolean> {
-  const row = await queryOne<{ id: string; amount_usd: string }>(
+  const row = await queryOne<{ id: string; amount_cop: string | null; amount_usd: string | null }>(
     `delete from construction_funds_deposits
      where id = $1 and organization_id = $2 and property_group_id = $3
-     returning id, amount_usd`,
+     returning id, amount_cop, amount_usd`,
     [input.id, input.organizationId, input.propertyGroupId]
   );
   if (!row) return false;
 
+  const amountText = row.amount_cop
+    ? `${Math.round(Number(row.amount_cop)).toLocaleString("en-US")} COP`
+    : `$${Math.round(Number(row.amount_usd ?? 0)).toLocaleString("en-US")}`;
   await query(
     `insert into construction_budget_activity_log
        (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
@@ -558,7 +585,7 @@ export async function deleteConstructionFundsDeposit(input: {
     [
       input.organizationId,
       input.propertyGroupId,
-      `Removed a $${Math.round(Number(row.amount_usd)).toLocaleString("en-US")} deposit`,
+      `Removed a ${amountText} deposit`,
       input.actorEmail,
       input.actorName,
     ]
@@ -566,24 +593,24 @@ export async function deleteConstructionFundsDeposit(input: {
   return true;
 }
 
-/** Category breakdown of Actual (USD) spend — "a column that shows where
- * the balance is spent" (2026-08-20, Seni's ask). Only categories with real
- * spend recorded appear, biggest draw on the deposited balance first. */
-export type ConstructionFundsCategorySpend = { category: string; spentUsd: number };
+/** Category breakdown of actual COP spend — "a column that shows where
+ * the balance is spent" (2026-08-20, Seni's ask; COP since 2026-08-21).
+ * Only categories with real spend recorded appear, biggest draw first. */
+export type ConstructionFundsCategorySpend = { category: string; spentCop: number };
 
 export async function getConstructionFundsSpendByCategory(
   organizationId: string,
   propertyGroupId: string
 ): Promise<ConstructionFundsCategorySpend[]> {
   const rows = await query<{ category: string; spent: string }>(
-    `select category, sum(actual_usd) as spent
+    `select category, sum(actual_cop) as spent
      from construction_budget_items
-     where organization_id = $1 and property_group_id = $2 and actual_usd is not null and actual_usd <> 0
+     where organization_id = $1 and property_group_id = $2 and actual_cop is not null and actual_cop <> 0
      group by category
-     order by sum(actual_usd) desc`,
+     order by sum(actual_cop) desc`,
     [organizationId, propertyGroupId]
   );
-  return rows.map((r) => ({ category: r.category, spentUsd: Number(r.spent) }));
+  return rows.map((r) => ({ category: r.category, spentCop: Number(r.spent) }));
 }
 
 export async function deleteConstructionBudgetItem(input: {
