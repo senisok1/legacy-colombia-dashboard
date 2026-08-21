@@ -6,7 +6,7 @@ import type { Booking, BookingStatus, Guest, Property, Review, ThreadMessage } f
 import { getDefaultOrganizationId } from "./organizations";
 import { getOwnerRezCredentials, type OwnerRezCredentials } from "./credentials";
 import type { PmsProvider } from "./pms/types";
-import { redisGet, redisSet } from "./redis";
+import { redisGet, redisMGet, redisSet } from "./redis";
 import { markCrmSentReply } from "./adminReplyMarkers";
 import { ownerRezQueue } from "./ownerrez-queue";
 
@@ -311,10 +311,19 @@ function normalizeReview(raw: Record<string, unknown>): Review {
   // reviews to Legacy Colombia specifically — this account manages 8
   // properties, same issue getGuests()/getBookings() already solved for —
   // and tell "host already replied" apart from "needs a response").
+  // guest_id (2026-08-21 follow-up): the real /reviews payload carries no
+  // display name at all (confirmed live: {..., "guest":{"id":623493716},
+  // "guest_id":623493716, ...} — no display_name/guest_name/reviewer_name
+  // field exists), so fetchReviews() below resolves this to a name via a
+  // guest lookup when the booking-id join (also below) doesn't find one —
+  // e.g. this review's booking wasn't present in our bookings list at all.
+  const guestObj = raw["guest"] as { id?: unknown } | undefined;
+  const guestId = (pick(raw, "guest_id") as number | undefined) ?? (typeof guestObj?.id === "number" ? guestObj.id : undefined);
   return {
     id: Number(pick(raw, "id", "review_id")),
     bookingId: pick(raw, "booking_id") as number | undefined,
     propertyId: pick(raw, "property_id") as number | undefined,
+    guestId,
     guestName: (pick(raw, "display_name", "guest_name", "reviewer_name") as string | undefined) ?? undefined,
     source: String(pick(raw, "listing_site", "source", "site") ?? "Unknown"),
     rating: pick(raw, "stars", "rating", "score") as number | undefined,
@@ -723,6 +732,54 @@ export async function getGuestById(id: number, organizationId?: string): Promise
   }
 }
 
+// Second-pass guest-name backfill (2026-08-21 follow-up): the booking_id
+// join above only helps when the review's booking is present in our
+// getBookings() list — live testing found a real review whose booking
+// (18729141, on "Nukak - Casa #19") wasn't there at all, yet the review's
+// own raw payload carried a resolvable guest_id (623493716). Falls back to
+// resolving those directly via a guest lookup, capped to only the reviews
+// we're actually keeping (post property-scope filter, not the ~1246
+// orphaned account-wide reviews), and Redis-cached per guest id for 30 days
+// (a name essentially never changes) so this doesn't re-hit OwnerRez on
+// every getReviews() cache revalidation.
+const REVIEW_GUEST_NAME_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30;
+function reviewGuestNameCacheKey(orgId: string, guestId: number): string {
+  return `reviewGuestName:${orgId}:${guestId}`;
+}
+async function resolveGuestNamesForReviews(guestIds: number[], organizationId?: string): Promise<Map<number, string>> {
+  const result = new Map<number, string>();
+  if (guestIds.length === 0) return result;
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const uncached: number[] = [];
+  if (isRedisConfigured()) {
+    try {
+      const keys = guestIds.map((id) => reviewGuestNameCacheKey(orgId, id));
+      const cached = await redisMGet(keys);
+      for (let i = 0; i < guestIds.length; i++) {
+        const raw = cached[i];
+        if (raw) result.set(guestIds[i], raw);
+        else uncached.push(guestIds[i]);
+      }
+    } catch {
+      uncached.push(...guestIds);
+    }
+  } else {
+    uncached.push(...guestIds);
+  }
+  if (uncached.length === 0) return result;
+  const guests = await fetchGuestsByIds(uncached, organizationId);
+  for (const g of guests) {
+    if (!g.fullName || g.fullName === "Unknown guest") continue;
+    result.set(g.id, g.fullName);
+    if (isRedisConfigured()) {
+      void redisSet(reviewGuestNameCacheKey(orgId, g.id), g.fullName, {
+        exSeconds: REVIEW_GUEST_NAME_CACHE_TTL_SECONDS,
+      }).catch(() => {});
+    }
+  }
+  return result;
+}
+
 async function fetchReviews(organizationId?: string, propertyGroupId?: string): Promise<Review[]> {
   const creds = await resolveOwnerRezCredentials(organizationId);
   if (!isLive(creds)) return demoReviews;
@@ -777,7 +834,7 @@ async function fetchReviews(organizationId?: string, propertyGroupId?: string): 
     // OwnerRez's own review sync from Airbnb lagging/incomplete rather
     // than anything fixable in this filter — see reviews-count-bug memory.
     const items = await orFetchAllPages<Record<string, unknown>>("/reviews", {}, creds);
-    return items
+    const scoped = items
       .map(normalizeReview)
       .map((r) =>
         !r.guestName && r.bookingId && guestNameByBookingId.get(r.bookingId)
@@ -789,6 +846,18 @@ async function fetchReviews(organizationId?: string, propertyGroupId?: string): 
         if (r.bookingId) return ourBookingIds.has(r.bookingId);
         return false;
       });
+
+    const stillMissing = scoped.filter((r) => !r.guestName && r.guestId);
+    if (stillMissing.length === 0) return scoped;
+    const nameByGuestId = await resolveGuestNamesForReviews(
+      Array.from(new Set(stillMissing.map((r) => r.guestId!))),
+      organizationId
+    );
+    return scoped.map((r) =>
+      !r.guestName && r.guestId && nameByGuestId.get(r.guestId)
+        ? { ...r, guestName: nameByGuestId.get(r.guestId) }
+        : r
+    );
   } catch {
     // Reviews endpoint access can vary by account/plan; degrade gracefully.
     return [];
@@ -800,10 +869,10 @@ async function fetchReviews(organizationId?: string, propertyGroupId?: string): 
 // NOTE: unstable_cache keys on the actual arguments, so adding
 // propertyGroupId as a real parameter above is what keeps Alva's and
 // Colombia's review sets in separate cache entries.
-// v3 (2026-08-21): cache-key bump so the guestName backfill fix above takes
-// effect immediately on deploy instead of waiting out the old v2 cache's
-// 5-minute revalidate window.
-export const getReviews = unstable_cache(fetchReviews, ["ownerrez-reviews-v3"], { revalidate: 300 });
+// v4 (2026-08-21): cache-key bump so the guest_id-based second-pass backfill
+// above takes effect immediately on deploy instead of waiting out the old
+// cache's 5-minute revalidate window.
+export const getReviews = unstable_cache(fetchReviews, ["ownerrez-reviews-v4"], { revalidate: 300 });
 
 /**
  * Sends a real message into an OwnerRez conversation thread (e.g. an Airbnb

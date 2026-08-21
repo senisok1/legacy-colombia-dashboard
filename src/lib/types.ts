@@ -97,6 +97,7 @@ export type Review = {
   id: number;
   bookingId?: number;
   propertyId?: number;
+  guestId?: number; // OwnerRez's guest_id — used to backfill guestName when the review's booking isn't in our bookings list
   guestName?: string;
   source: string;
   rating?: number;
