@@ -25,7 +25,7 @@
 // free-text fallback), so a Meta hiccup retries next minute instead of
 // silently losing the alert — same rule as balanceDueAlerts.ts.
 import { redisGet, redisSet } from "@/lib/redis";
-import { getRecentInquiries, type OwnerRezInquiry } from "@/lib/ownerrez";
+import { getGuestById, getRecentInquiries, type OwnerRezInquiry } from "@/lib/ownerrez";
 import { sendNewInquiryTemplate, sendWhatsAppText } from "@/lib/whatsapp";
 import { logAiActivity } from "@/lib/aiActivity";
 
@@ -72,7 +72,19 @@ export async function pollInquiryAlerts(orgId: string): Promise<{
     try {
       if (await wasInquiryAlerted(orgId, inq.id)) continue;
 
-      const guestName = inq.guestName ?? "Guest";
+      // OwnerRez inquiry records carry only a guest_id, no name (confirmed
+      // live 2026-08-21 — rawKeys had guest_id but no name fields, so the
+      // first alerts said just "Guest"). One extra lookup per NEW inquiry
+      // (rare) puts the real name in the alert; failure degrades to "Guest".
+      let guestName = inq.guestName ?? "";
+      if (!guestName) {
+        const guestId = Number((inq.raw as { guest_id?: unknown }).guest_id);
+        if (guestId) {
+          const guest = await getGuestById(guestId, orgId).catch(() => undefined);
+          guestName = guest?.fullName?.trim() || "";
+        }
+      }
+      if (!guestName) guestName = "Guest";
       const question = inq.message ?? "(no message provided)";
 
       // Same template-first/free-text-fallback ladder as the webhook path.
@@ -96,7 +108,7 @@ export async function pollInquiryAlerts(orgId: string): Promise<{
 
       if (sent) {
         await markInquiryAlerted(orgId, inq.id);
-        alerted.push({ id: inq.id, guestName: inq.guestName });
+        alerted.push({ id: inq.id, guestName });
       } else {
         errors.push({ id: inq.id, error: sendError ?? "Unknown send error." });
       }
