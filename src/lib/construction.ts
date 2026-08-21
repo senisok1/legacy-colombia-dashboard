@@ -325,9 +325,10 @@ export async function createConstructionItem(input: {
    * must have one so the overdue-alert cron (see constructionAlerts.ts) has
    * something to check against; existing items created before this change
    * keep whatever date (or lack of one) they already had, nothing here
-   * backfills those. Enforced again at the API layer (api/construction/
+   * backfills those. Made optional for Seni specifically the same day
+   * (nullable to allow it) — enforced at the API layer (api/construction/
    * route.ts) since this function has no other caller. */
-  estimatedCompletionDate: string;
+  estimatedCompletionDate: string | null;
   authorEmail: string;
   authorName: string | null;
 }): Promise<ConstructionItem> {

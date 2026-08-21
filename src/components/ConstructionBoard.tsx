@@ -521,6 +521,12 @@ export function ConstructionBoard() {
   // (2026-08-21, Seni's ask). Defaults false (fail closed) until the API
   // response comes back.
   const [canWrite, setCanWrite] = useState(false);
+  // Estimated completion date is optional FOR SENI ONLY (2026-08-21, Seni's
+  // follow-up: "for me only, make entering the estimated completion date...
+  // optional. for everyone else make it mandatory"). Deliberately its own
+  // flag (not canDelete/canManage, which also covers Ahmed/Geo on
+  // non-Colombia properties) — see api/construction/route.ts's `isOwner`.
+  const [isOwner, setIsOwner] = useState(false);
   // USD-only gate (2026-08-21, Seni's ask: "for all properties except Legacy
   // Colombia... USD ONLY for all tabs and sections"). Set from the API
   // response's `currencyMode` — see api/construction/route.ts. No conversion
@@ -593,6 +599,7 @@ export function ConstructionBoard() {
       setAllocations(json.allocations ?? []);
       setCanDelete(Boolean(json.canDelete));
       setCanWrite(Boolean(json.canWrite));
+      setIsOwner(Boolean(json.isOwner));
       if (json.currencyMode === "usd" || json.currencyMode === "cop") setCurrencyMode(json.currencyMode);
       hasDataRef.current = true;
       setError(null);
@@ -616,7 +623,7 @@ export function ConstructionBoard() {
 
   async function addItem(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim() || !newDueDate || adding) return;
+    if (!title.trim() || (!newDueDate && !isOwner) || adding) return;
     setAdding(true);
     setError(null);
     try {
@@ -627,7 +634,7 @@ export function ConstructionBoard() {
           title: title.trim(),
           notes: notes.trim() || undefined,
           category: category.trim() || undefined,
-          estimatedCompletionDate: newDueDate,
+          estimatedCompletionDate: newDueDate || undefined,
         }),
       });
       const json = await res.json();
@@ -988,17 +995,23 @@ export function ConstructionBoard() {
                 native date input can't show a placeholder; the red border
                 only ever means overdue elsewhere in this file, so it's not
                 reused here for "empty required field" to avoid mixed
-                meanings. */}
+                meanings. Optional FOR SENI ONLY (2026-08-21 follow-up,
+                Seni: "for me only, make entering the estimated completion
+                date... optional. for everyone else make it mandatory") —
+                `isOwner` (isConstructionOwner) drives the placeholder text
+                and the Add button's disabled check below; everyone else
+                still can't submit without one. */}
             <input
               type="date"
               value={newDueDate}
               onChange={(e) => setNewDueDate(e.target.value)}
               className="rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
               aria-label={t("construction.estCompletion")}
+              title={isOwner ? "Estimated completion date (optional for you)" : "Estimated completion date (required)"}
             />
             <button
               type="submit"
-              disabled={adding || !title.trim() || !newDueDate}
+              disabled={adding || !title.trim() || (!newDueDate && !isOwner)}
               className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1.5 text-sm text-white dark:text-black disabled:opacity-40"
             >
               {t("construction.add")}

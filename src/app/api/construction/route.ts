@@ -5,6 +5,7 @@ import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, isColombiaGroup } from
 import {
   canManageConstruction,
   canWriteConstruction,
+  isConstructionOwner,
   createConstructionItem,
   deleteConstructionItem,
   listConstructionActivityLog,
@@ -72,6 +73,13 @@ export async function GET(req: NextRequest) {
       // as canDelete, plus the CONSTRUCTION login (Colombia-only in
       // practice).
       canWrite: canWriteConstruction(session.email, session.role, groupId),
+      // Drives whether the estimated completion date is required on the
+      // add-item form (2026-08-21, Seni: "for me only, make entering the
+      // estimated completion date... optional. for everyone else make it
+      // mandatory") — deliberately isConstructionOwner (Seni's literal
+      // account), NOT canManageConstruction, since that grant also covers
+      // Ahmed/Geo on non-Colombia properties and Seni's ask was "for me only".
+      isOwner: isConstructionOwner(session.email),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -99,11 +107,18 @@ export async function POST(req: NextRequest) {
   // Mandatory as of 2026-08-21 (Seni's ask: "Let's make the estimated
   // completion date mandatory to fill in moving forward") — applies to
   // every NEW item, on every property; existing items are untouched. See
-  // createConstructionItem's header comment.
-  const estimatedCompletionDate = body?.estimatedCompletionDate?.trim();
-  if (!estimatedCompletionDate || !DATE_RE.test(estimatedCompletionDate)) {
+  // createConstructionItem's header comment. Made optional FOR SENI ONLY the
+  // same day (Seni's follow-up: "for me only, make entering the estimated
+  // completion date... optional. for everyone else make it mandatory") —
+  // every other CEO login and the CONSTRUCTION login still must supply one.
+  const rawEstimatedCompletionDate = body?.estimatedCompletionDate?.trim();
+  if (rawEstimatedCompletionDate && !DATE_RE.test(rawEstimatedCompletionDate)) {
+    return NextResponse.json({ error: "estimatedCompletionDate must be YYYY-MM-DD." }, { status: 400 });
+  }
+  if (!rawEstimatedCompletionDate && !isConstructionOwner(session.email)) {
     return NextResponse.json({ error: "Give the item an estimated completion date." }, { status: 400 });
   }
+  const estimatedCompletionDate = rawEstimatedCompletionDate || null;
 
   try {
     const groupId = await resolveGroupId(req, session);
