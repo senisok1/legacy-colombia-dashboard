@@ -580,7 +580,12 @@ export function NavBar({
               </div>
             );
           })}
-          <CurrencyToggle />
+          {/* Hidden for the CONSTRUCTION login (2026-08-21, Seni's ask:
+              "for the construction team users there is no need to have two
+              USD / COP toggles" — the Construction Budget tab already has
+              its own scoped COP/USD view toggle, so this global one next to
+              Log out is redundant for that role specifically). */}
+          {role !== "CONSTRUCTION" && <CurrencyToggle />}
           <button
             onClick={logout}
             className="px-3 py-1.5 rounded-md text-sm text-black/50 hover:bg-black/5 dark:text-white/50 dark:hover:bg-white/10 shrink-0 whitespace-nowrap"
