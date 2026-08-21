@@ -626,7 +626,15 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
       ? Date.now() - new Date(newestGuestMessage.sentAt).getTime()
       : null;
 
-    const guestName = resolveGuestName(booking, guestsById);
+    let guestName = resolveGuestName(booking, guestsById);
+    // Direct guest lookup when the property-scoped directory doesn't have
+    // this guest yet — same OwnerRez sync-lag gap as bookingAlerts.ts
+    // (2026-08-21, Seni: "I need all names for all whatsapp messages").
+    if (guestName === "Guest" && booking.guestId != null) {
+      const { getGuestById } = await import("@/lib/ownerrez");
+      const g = await getGuestById(booking.guestId, orgId).catch(() => undefined);
+      if (g?.fullName?.trim()) guestName = g.fullName.trim();
+    }
 
     try {
       // The dashboard's Inbox tab can also generate a draft on demand for

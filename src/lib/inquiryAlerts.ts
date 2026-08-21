@@ -25,7 +25,7 @@
 // free-text fallback), so a Meta hiccup retries next minute instead of
 // silently losing the alert — same rule as balanceDueAlerts.ts.
 import { redisGet, redisSet } from "@/lib/redis";
-import { getGuestById, getRecentInquiries, type OwnerRezInquiry } from "@/lib/ownerrez";
+import { getGuestById, getRecentInquiries, getTargetProperties, type OwnerRezInquiry } from "@/lib/ownerrez";
 import { sendNewInquiryTemplate, sendWhatsAppText } from "@/lib/whatsapp";
 import { logAiActivity } from "@/lib/aiActivity";
 
@@ -60,17 +60,42 @@ export async function pollInquiryAlerts(orgId: string): Promise<{
   fetched: number;
   alerted: { id: number; guestName: string | null }[];
   errors: { id: number; error: string }[];
+  skippedOutOfScope: number;
 }> {
   const sinceUtc = new Date(Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
   const inquiries: OwnerRezInquiry[] = await getRecentInquiries(sinceUtc, orgId);
 
+  // LEGACY COLOMBIA ONLY (2026-08-21, Seni's ask: "only whatsapp messages
+  // from Legacy Colombia for now" — pulls back the 2026-08-19 all-properties
+  // widening after the first poll cycle pinged him about a Beach House
+  // wedding inquiry). getTargetProperties() is already scoped to exactly the
+  // Legacy Colombia listings (LC 413494 + Nukak 492014). An inquiry with NO
+  // property_id still alerts — can't verify, and a stray ping beats a missed
+  // Colombia inquiry. Out-of-scope inquiries are marked seen with no alert
+  // (WhatsApp OR email), so re-widening scope later can't replay them.
+  let allowedIds: Set<number> | null = null;
+  try {
+    const props = await getTargetProperties(orgId);
+    const ids = props.map((p) => p.id).filter((n): n is number => Number.isFinite(n));
+    allowedIds = ids.length > 0 ? new Set(ids) : null;
+  } catch {
+    // Can't verify scope this run — alert on everything rather than nothing.
+  }
+
   const alerted: { id: number; guestName: string | null }[] = [];
   const errors: { id: number; error: string }[] = [];
+  let skippedOutOfScope = 0;
 
   for (const inq of inquiries) {
     if (!inq.id) continue; // no stable id — can't dedupe safely, skip rather than risk a re-alert loop
     try {
       if (await wasInquiryAlerted(orgId, inq.id)) continue;
+
+      if (allowedIds && inq.propertyId !== null && !allowedIds.has(inq.propertyId)) {
+        await markInquiryAlerted(orgId, inq.id); // silence is permanent for this one — see scope comment above
+        skippedOutOfScope++;
+        continue;
+      }
 
       // OwnerRez inquiry records carry only a guest_id, no name (confirmed
       // live 2026-08-21 — rawKeys had guest_id but no name fields, so the
@@ -144,5 +169,5 @@ export async function pollInquiryAlerts(orgId: string): Promise<{
     }
   }
 
-  return { fetched: inquiries.length, alerted, errors };
+  return { fetched: inquiries.length, alerted, errors, skippedOutOfScope };
 }

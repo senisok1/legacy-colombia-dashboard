@@ -83,7 +83,18 @@ export async function checkNewBookingAlerts(
     }
 
     try {
-      const guestName = resolveGuestName(booking, guestsById);
+      let guestName = resolveGuestName(booking, guestsById);
+      // resolveGuestName falls back to "Guest" when the guests directory
+      // doesn't have this booking's guest yet (brand-new bookings often sync
+      // before their guest record shows up in the property-scoped list —
+      // that's how "New booking 18908561 (Guest, Airbnb)" happened). One
+      // direct lookup fixes it (2026-08-21, Seni: "I need all names for all
+      // whatsapp messages").
+      if (guestName === "Guest" && booking.guestId != null) {
+        const { getGuestById } = await import("@/lib/ownerrez");
+        const guest = await getGuestById(booking.guestId, orgId).catch(() => undefined);
+        if (guest?.fullName?.trim()) guestName = guest.fullName.trim();
+      }
       const nights = booking.nights ?? null;
       const dates = `${formatDate(booking.arrival)} → ${formatDate(booking.departure)}${nights ? ` (${nights} night${nights === 1 ? "" : "s"})` : ""}`;
       const text =

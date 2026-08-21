@@ -12,7 +12,7 @@ import { wasCrmSentReply, alreadyNotifiedAdminReply, clearAdminReplyNotified } f
 import { getGlobalHostStyleExamples } from "@/lib/inbox";
 import { createPendingDraft, getPendingDraftByThreadId, linkWhatsAppMessageId } from "@/lib/pendingDrafts";
 import { logAiActivity } from "@/lib/aiActivity";
-import { getBookings, getTargetProperties } from "@/lib/ownerrez";
+import { getBookings, getGuestById, getTargetProperties } from "@/lib/ownerrez";
 import type { Booking } from "@/lib/types";
 
 // Handlers for the public /api/webhook endpoint (OwnerRez-style events).
@@ -171,46 +171,24 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
     const isHostMessage = ["admin", "owner", "host", "co_host", "cohost"].includes(fromRole);
 
     if (outOfScope) {
-      // Other-property GUEST message → notify-only ping (no draft, no
-      // YES/NO protocol — Seni answers in OwnerRez himself). Host/system
-      // messages out of scope stay silent: pinging Seni for Geo's own
-      // Miami replies would be pure noise. Rides the approved New Inquiry
-      // template so it delivers regardless of the 24h window.
+      // DISABLED 2026-08-21 (Seni's ask: "only whatsapp messages from
+      // Legacy Colombia for now") — this used to send a notify-only ping
+      // for other-property guest messages (the 2026-08-19 widening). Now a
+      // silent skip with an activity-log breadcrumb, so re-enabling later
+      // is just restoring the send below. Property managers on those
+      // properties handle their own OwnerRez inboxes.
       if (!isGuestMessage) return;
-      console.log(`[webhookHandlers] Guest message on out-of-scope thread ${threadId} — notify-only alert`);
-      let sent = false;
-      let sendError: string | undefined;
-      try {
-        await sendNewInquiryTemplate({
-          guestName,
-          question: `(guest message — reply in OwnerRez, thread #${threadId}) ${body.slice(0, 300)}`,
-        });
-        sent = true;
-      } catch (tmplErr) {
-        sendError = tmplErr instanceof Error ? tmplErr.message : String(tmplErr);
-        try {
-          await sendWhatsAppText(
-            `💬 New guest message from ${guestName} (thread #${threadId}, another property):\n"${body.slice(0, 300)}"\n\nReply in OwnerRez.`
-          );
-          sent = true;
-        } catch (textErr) {
-          sendError = textErr instanceof Error ? textErr.message : String(textErr);
-        }
-      }
+      console.log(`[webhookHandlers] Guest message on out-of-scope thread ${threadId} — skipped (Colombia-only, 2026-08-21)`);
       await logAiActivity({
         agentKey: "guest_experience",
         agentDisplayName: "AI Guest Experience Manager",
-        task: "Notify guest message (other property)",
+        task: "Skip guest message (other property)",
         trigger: `Guest message on out-of-scope thread #${threadId}: "${body.slice(0, 200)}"`,
-        actionTaken: sent
-          ? "Sent notify-only WhatsApp to Seni (no AI draft — drafting stays Legacy Colombia-only)"
-          : "FAILED to deliver the notify-only WhatsApp",
-        result: sent ? "notified" : "failed",
-        error: sent ? undefined : sendError,
+        actionTaken: "No alert sent — WhatsApp alerts are Legacy Colombia-only (2026-08-21, Seni's ask)",
+        result: "skipped",
       }).catch(() => {});
       return;
     }
-
     if (isHostMessage && !isGuestMessage) {
       // Another admin (or automation) replied to the guest in OwnerRez —
       // surface it on Seni's WhatsApp (2026-08-18, Seni's ask: other admins
@@ -348,6 +326,14 @@ export async function handleOwnerRezMessageEvent(event: OwnerRezWebhookEvent) {
       // the WhatsApp alert reads "New message from María…" not "from Guest"
       // (2026-08-18, Seni's report — his alert literally said "Guest").
       if (booking.guestName?.trim()) guestName = booking.guestName.trim();
+      // Bookings often carry only guest_id, no name (same OwnerRez quirk as
+      // resolveGuestName's whole reason to exist) — one direct guest lookup
+      // covers that case too (2026-08-21, Seni: "I need all names for all
+      // whatsapp messages").
+      if (guestName === "Guest" && booking.guestId != null) {
+        const guest = await getGuestById(booking.guestId).catch(() => undefined);
+        if (guest?.fullName?.trim()) guestName = guest.fullName.trim();
+      }
 
       // Same account-wide host-voice corpus the cron/Inbox use (600s cache
       // in lib/inbox.ts, so this is usually a warm read). Failure just means
@@ -503,7 +489,18 @@ export async function handleOwnerRezBookingEvent(event: OwnerRezWebhookEvent) {
       console.log(`[webhookHandlers] Booking for property ${bookingPropId} — outside this dashboard's scope, skipping`);
       return;
     }
-    const guestName = str(b.guestName ?? b.guest_name ?? b.fullName ?? b.full_name) ?? "Guest";
+    let guestName = str(b.guestName ?? b.guest_name ?? b.fullName ?? b.full_name) ?? "";
+    if (!guestName) {
+      // Booking payloads usually carry only guest_id — one lookup puts the
+      // real name in the alert (2026-08-21, Seni: "I need all names for all
+      // whatsapp messages"); degrades to "Guest" on any failure.
+      const guestId = num(b.guest_id ?? b.guestId);
+      if (guestId) {
+        const guest = await getGuestById(guestId).catch(() => undefined);
+        guestName = guest?.fullName?.trim() || "";
+      }
+    }
+    if (!guestName) guestName = "Guest";
     const arrival = str(b.arrival ?? b.checkIn ?? b.check_in ?? b.arrival_date);
     const departure = str(b.departure ?? b.checkOut ?? b.check_out ?? b.departure_date);
     const nights = num(b.nights);
@@ -572,7 +569,34 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
     // this handler was previously unreachable anyway: no `inquiry`-type
     // webhook subscription existed on OwnerRez until the 2026-08-19
     // resubscribe (see api/admin/webhook-status ?resubscribe=1).
-    const guestName = str(inq.guestName ?? inq.guest_name ?? inq.name) ?? "Guest";
+    // LEGACY COLOMBIA ONLY (2026-08-21, Seni's ask — pulls back the
+    // 2026-08-19 all-properties widening; mirrors pollInquiryAlerts). An
+    // inquiry with no readable property_id still alerts (can't verify);
+    // known out-of-scope ones are marked seen so the poll stays silent too.
+    const inqPropId = num(inq.property_id ?? inq.propertyId);
+    if (inqPropId !== undefined) {
+      const allowed = await allowedPropertyIds();
+      if (allowed && !allowed.has(inqPropId)) {
+        console.log(`[webhookHandlers] Inquiry ${inquiryId ?? "?"} is for out-of-scope property ${inqPropId} — skipping`);
+        if (dedupeOrgId && inquiryId !== undefined) {
+          await markInquiryAlerted(dedupeOrgId, inquiryId).catch(() => {});
+        }
+        return;
+      }
+    }
+
+    // Name enrichment (2026-08-21, Seni: Juan Botero's alert "just said
+    // Guest") — inquiry payloads carry only a guest_id; one lookup puts the
+    // real name in the alert, degrading to "Guest" on any failure.
+    let guestName = str(inq.guestName ?? inq.guest_name ?? inq.name) ?? "";
+    if (!guestName) {
+      const guestId = num(inq.guest_id ?? inq.guestId);
+      if (guestId) {
+        const guest = await getGuestById(guestId).catch(() => undefined);
+        guestName = guest?.fullName?.trim() || "";
+      }
+    }
+    if (!guestName) guestName = "Guest";
     const question = str(inq.message ?? inq.question ?? inq.body) ?? "(no message provided)";
 
     // Parallel email channel (2026-08-21, Seni's ask) — same inquiry-id
