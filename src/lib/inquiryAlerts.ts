@@ -110,7 +110,21 @@ export async function pollInquiryAlerts(orgId: string): Promise<{
         }
       }
       if (!guestName) guestName = "Guest";
-      const question = inq.message ?? "(no message provided)";
+
+      // ENGLISH GUARANTEE (2026-08-21, Seni: "Juan Botero Inquiry was only
+      // in spanish. we made a rule to translate it to English for me") —
+      // same rule as every guest-message alert (check-messages'
+      // detectLanguageAndTranslateToEnglish pass), which the inquiry path
+      // never had. Seni reads the English; the original is appended so
+      // nothing is lost. Degrades to the original text on any failure.
+      let question = inq.message ?? "(no message provided)";
+      if (inq.message) {
+        const { detectLanguageAndTranslateToEnglish } = await import("@/lib/translate");
+        const det = await detectLanguageAndTranslateToEnglish(inq.message, orgId).catch(() => null);
+        if (det && det.language !== "English" && det.english.trim()) {
+          question = `${det.english.trim()} [translated from ${det.language}] — original: "${inq.message.slice(0, 200)}"`;
+        }
+      }
 
       // Parallel email channel (2026-08-21, Seni's ask) — fully independent
       // of the WhatsApp ladder below, with its own once-guard so WhatsApp

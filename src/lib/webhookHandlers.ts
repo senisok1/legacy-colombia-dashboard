@@ -597,7 +597,18 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
       }
     }
     if (!guestName) guestName = "Guest";
-    const question = str(inq.message ?? inq.question ?? inq.body) ?? "(no message provided)";
+
+    // ENGLISH GUARANTEE (2026-08-21, Seni's ask — mirrors pollInquiryAlerts
+    // and the long-standing guest-message rule): Seni reads the English,
+    // original appended. Degrades to the original text on any failure.
+    const rawQuestion = str(inq.message ?? inq.question ?? inq.body);
+    let question = rawQuestion ?? "(no message provided)";
+    if (rawQuestion) {
+      const det = await detectLanguageAndTranslateToEnglish(rawQuestion).catch(() => null);
+      if (det && det.language !== "English" && det.english.trim()) {
+        question = `${det.english.trim()} [translated from ${det.language}] — original: "${rawQuestion.slice(0, 200)}"`;
+      }
+    }
 
     // Parallel email channel (2026-08-21, Seni's ask) — same inquiry-id
     // once-guard key family as the polling path (lib/inquiryAlerts.ts), so
