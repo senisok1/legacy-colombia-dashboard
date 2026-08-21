@@ -175,11 +175,29 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
     newBookingResults = perGroup;
   }
 
+  // Inquiry-alert POLLING backstop (2026-08-21, Juan Botero's missed
+  // inquiry — see lib/inquiryAlerts.ts for the full story). Runs every
+  // minute regardless of webhook health: inquiries have no booking/thread so
+  // the thread-polling loop below never sees them, and the `inquiry` webhook
+  // has silently died three times. One OwnerRez request per run — trivially
+  // inside the rate budget. Own try/catch so an OwnerRez hiccup here never
+  // blocks guest-message drafting, and vice versa.
+  let inquiryPollResult: Record<string, unknown> = { skipped: "WhatsApp not configured yet." };
+  if (isWhatsAppConfigured()) {
+    try {
+      const { pollInquiryAlerts } = await import("@/lib/inquiryAlerts");
+      inquiryPollResult = await pollInquiryAlerts(orgId);
+    } catch (err) {
+      inquiryPollResult = { error: err instanceof Error ? err.message : "Unknown error." };
+    }
+  }
+
   if (!isMessagingConfigured()) {
     return {
       skipped: "OwnerRez messaging not connected yet.",
       chatFallback: chatFallbackResult,
       newBookings: newBookingResults,
+      inquiryPoll: inquiryPollResult,
     };
   }
   if (!isAiReplyConfigured()) {
@@ -187,6 +205,7 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
       skipped: "ANTHROPIC_API_KEY not set (or has no credits).",
       chatFallback: chatFallbackResult,
       newBookings: newBookingResults,
+      inquiryPoll: inquiryPollResult,
     };
   }
   if (!isWhatsAppConfigured()) {
@@ -194,6 +213,7 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
       skipped: "WhatsApp not configured yet.",
       chatFallback: chatFallbackResult,
       newBookings: newBookingResults,
+      inquiryPoll: inquiryPollResult,
     };
   }
 
@@ -847,6 +867,7 @@ async function runCheckMessagesForOrg(orgId: string): Promise<Record<string, unk
     errors,
     chatFallback: chatFallbackResult,
     newBookings: newBookingResults,
+    inquiryPoll: inquiryPollResult,
   };
 }
 

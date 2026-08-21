@@ -32,7 +32,15 @@ import { logAiActivity } from "@/lib/aiActivity";
 // as lib/adminReplyMarkers.ts.
 export const maxDuration = 120;
 
-const STALE_HOURS = 36;
+// Tightened 36 → 24 (2026-08-21, Juan Botero's missed inquiry): at 36h with
+// a once-daily run, deliveries that died right after a run got a blind
+// window of up to ~2 days. The cron now also runs every 6h (vercel.json)
+// instead of once a day. Worst case on a genuinely quiet day: one
+// unnecessary resubscribe + one FYI ping — acceptable per the philosophy
+// above. Note the inquiry-alert POLL (lib/inquiryAlerts.ts, every minute via
+// check-messages) is now the delivery guarantee; this watchdog just keeps
+// the fast push path alive.
+const STALE_HOURS = 24;
 const WEBHOOK_BASE = "https://legacy-colombia-dashboard.vercel.app/api/webhook";
 const REQUIRED_TYPES = ["message", "booking", "inquiry"] as const;
 

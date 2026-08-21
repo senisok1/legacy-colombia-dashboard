@@ -536,6 +536,21 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
 
     const inq = (event.entity ?? event.inquiry ?? event.data ?? {}) as Record<string, unknown>;
 
+    // Shared dedupe with the polling backstop (2026-08-21 — see
+    // lib/inquiryAlerts.ts): both paths key on the same Redis marker, so
+    // whichever fires first wins and the other stays silent. The webhook
+    // usually wins (it's the fast path); the poll catches anything the
+    // webhook silently drops. Resolved lazily so a missing id (unexpected
+    // payload shape) just skips dedupe rather than skipping the alert.
+    const { wasInquiryAlerted, markInquiryAlerted } = await import("@/lib/inquiryAlerts");
+    const { getDefaultOrganizationId } = await import("@/lib/organizations");
+    const dedupeOrgId = await getDefaultOrganizationId().catch(() => null);
+    const inquiryId = event.entityId ?? event.entity_id ?? (inq.id as number | string | undefined);
+    if (dedupeOrgId && inquiryId !== undefined && (await wasInquiryAlerted(dedupeOrgId, inquiryId).catch(() => false))) {
+      console.log(`[webhookHandlers] Inquiry ${inquiryId} already alerted (poll path won) — skipping`);
+      return;
+    }
+
     // Scope widened 2026-08-19 ("Shlomo's inquiry never arrived"): a new
     // inquiry on ANY property now pings — a missed inquiry is a missed
     // booking, and this is a pure notification (no drafting/automation, so
@@ -573,6 +588,11 @@ export async function handleOwnerRezInquiryEvent(event: OwnerRezWebhookEvent) {
       }
     }
     console.log(`[webhookHandlers] Inquiry notification ${sent ? "sent" : "FAILED"} for ${guestName}`);
+    // Mark AFTER a successful send only — a failed webhook send leaves the
+    // marker unwritten so the polling backstop retries it within a minute.
+    if (sent && dedupeOrgId && inquiryId !== undefined) {
+      await markInquiryAlerted(dedupeOrgId, inquiryId).catch(() => {});
+    }
     await logAiActivity({
       agentKey: "guest_experience",
       agentDisplayName: "AI Guest Experience Manager",

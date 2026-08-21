@@ -1025,6 +1025,48 @@ export async function probeBookingFinancials(
   return { booking, transactions };
 }
 
+/** One inbound guest inquiry from GET /v2/inquiries, normalized defensively
+ * (2026-08-21, Juan Botero's missed inquiry — see lib/inquiryAlerts.ts).
+ * `raw` is kept so the admin diagnostic can show the real field names if the
+ * normalization ever misses something on a future OwnerRez shape change. */
+export type OwnerRezInquiry = {
+  id: number;
+  guestName: string | null;
+  message: string | null;
+  createdUtc: string | null;
+  propertyId: number | null;
+  raw: Record<string, unknown>;
+};
+
+/** Inquiries created since `sinceUtc` (ISO datetime), newest data straight
+ * from OwnerRez — deliberately NOT cached: this feeds the every-minute
+ * inquiry-alert poll (lib/inquiryAlerts.ts), whose entire reason to exist is
+ * that the push path (the `inquiry` webhook) has silently died twice
+ * (Shlomo 2026-08-19, Juan Botero 2026-08-21). One request/minute fits the
+ * OwnerRez budget trivially (see ownerrez-queue.ts). */
+export async function getRecentInquiries(sinceUtc: string, organizationId?: string): Promise<OwnerRezInquiry[]> {
+  const creds = await resolveOwnerRezCredentials(organizationId);
+  if (!isLive(creds)) return [];
+
+  const rows = await orFetchAllPages<Record<string, unknown>>("/inquiries", { since_utc: sinceUtc }, creds);
+  return rows.map((r) => {
+    const guest = (r.guest ?? {}) as Record<string, unknown>;
+    const first = pick(r, "first_name", "firstName") ?? pick(guest, "first_name", "firstName");
+    const last = pick(r, "last_name", "lastName") ?? pick(guest, "last_name", "lastName");
+    const joined = [first, last].filter((x) => typeof x === "string" && x.trim()).join(" ").trim();
+    const name = joined || (pick(r, "guest_name", "guestName", "name") as string | undefined) || null;
+    const idRaw = pick(r, "id", "inquiry_id", "inquiryId");
+    return {
+      id: typeof idRaw === "number" ? idRaw : Number(idRaw) || 0,
+      guestName: typeof name === "string" && name.trim() ? name.trim() : null,
+      message: (pick(r, "message", "comments", "notes", "body", "question") as string | undefined)?.trim() || null,
+      createdUtc: (pick(r, "created_utc", "createdUtc", "inquiry_date", "date_utc") as string | undefined) ?? null,
+      propertyId: (pick(r, "property_id", "propertyId") as number | undefined) ?? null,
+      raw: r,
+    };
+  });
+}
+
 export async function testConnection(organizationId?: string): Promise<{ ok: boolean; message: string }> {
   const creds = await resolveOwnerRezCredentials(organizationId);
   if (!isLive(creds)) {
