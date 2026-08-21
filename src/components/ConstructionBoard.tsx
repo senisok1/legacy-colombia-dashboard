@@ -155,6 +155,13 @@ function ItemRow({
   const notesOpen = openNotesId === item.id;
   const notes = notesByItem[item.id];
   const editing = editingId === item.id;
+  // Overdue = has an estimated date, that date is today or in the past, and
+  // the item isn't done yet (2026-08-21, Seni's ask: "when the est.
+  // completion date is due turn the 'est. completion:' red"). Plain string
+  // comparison is safe here since both sides are "YYYY-MM-DD" — ISO date
+  // strings sort/compare the same as their calendar order.
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = !completedRow && item.estimatedCompletionDate !== null && item.estimatedCompletionDate <= today;
   return (
     <li className="rounded bg-black/5 dark:bg-white/5 px-2 py-1.5 text-sm">
       <div className="flex items-start gap-2">
@@ -174,13 +181,15 @@ function ItemRow({
               : `${item.createdBy}, ${fmtWhen(item.createdAt)}`}
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-xs text-black/50 dark:text-white/50">
-            <span>{t("construction.estCompletion")}</span>
+            <span className={overdue ? "font-semibold text-red-500" : ""}>{t("construction.estCompletion")}</span>
             <input
               type="date"
               value={item.estimatedCompletionDate ?? ""}
               disabled={savingDateId === item.id}
               onChange={(e) => onUpdateEstimatedDate(item, e.target.value)}
-              className="rounded border border-black/15 dark:border-white/15 bg-transparent px-1 py-0.5 text-xs disabled:opacity-40"
+              className={`rounded border bg-transparent px-1 py-0.5 text-xs disabled:opacity-40 ${
+                overdue ? "border-red-500 text-red-500" : "border-black/15 dark:border-white/15"
+              }`}
             />
           </div>
         </div>

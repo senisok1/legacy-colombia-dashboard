@@ -35,6 +35,10 @@
     {
       "path": "/api/cron/webhook-watchdog",
       "schedule": "50 8 * * *"
+    },
+    {
+      "path": "/api/cron/construction-overdue",
+      "schedule": "0 12 * * *"
     }
   ]
 }

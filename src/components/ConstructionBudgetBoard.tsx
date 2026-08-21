@@ -400,6 +400,17 @@ export function ConstructionBudgetBoard() {
   const [savingDeposit, setSavingDeposit] = useState(false);
   const [showDepositsList, setShowDepositsList] = useState(false);
   const [removingDepositId, setRemovingDepositId] = useState<string | null>(null);
+  // Drill-down under "Where the balance is spent" (2026-08-21, Seni's ask:
+  // "what is the best way to see which line items are the funds... being
+  // spent on?"). Deliberately NOT a new column next to Actual (USD) — that
+  // figure already IS "how much of the deposited balance this line spent"
+  // (Spent from deposits above is exactly the sum of every row's Actual
+  // (USD)), so a second column would just duplicate it. Instead, clicking a
+  // category expands the actual line items with spend, computed client-side
+  // from the `items` already loaded for the main table — no new column, no
+  // API call, and nothing for a spreadsheet re-import to need to carry,
+  // since Actual (USD) was never part of the import in the first place.
+  const [expandedSpendCategory, setExpandedSpendCategory] = useState<string | null>(null);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async (fresh = false) => {
@@ -675,6 +686,22 @@ export function ConstructionBudgetBoard() {
     }
   }
 
+  // Line items with real spend, grouped by category and sorted biggest-first
+  // within each group — the data behind the "Where the balance is spent"
+  // drill-down. Pure client-side derivation from `items`, same source the
+  // main table already renders, so it's always in sync with whatever's on
+  // screen (no separate fetch to go stale).
+  const spendDetailByCategory = useMemo(() => {
+    const map = new Map<string, Item[]>();
+    for (const item of items ?? []) {
+      if (!item.actualUsd) continue;
+      if (!map.has(item.category)) map.set(item.category, []);
+      map.get(item.category)!.push(item);
+    }
+    for (const list of map.values()) list.sort((a, b) => (b.actualUsd ?? 0) - (a.actualUsd ?? 0));
+    return map;
+  }, [items]);
+
   const totals = useMemo(() => {
     const list = items ?? [];
     const budgeted = list.reduce((s, i) => s + (i.budgetedUsd ?? 0), 0);
@@ -855,13 +882,41 @@ export function ConstructionBudgetBoard() {
             <div className="mb-1 text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
               Where the balance is spent
             </div>
+            <p className="mb-1 text-xs text-black/40 dark:text-white/40">Click a category to see the exact line items.</p>
             <ul className="space-y-1 text-sm">
-              {funds.spendByCategory.map((c) => (
-                <li key={c.category} className="flex items-center justify-between gap-2 text-black/70 dark:text-white/70">
-                  <span>{c.category}</span>
-                  <span className="font-medium">{fmtUsd(c.spentUsd)}</span>
-                </li>
-              ))}
+              {funds.spendByCategory.map((c) => {
+                const detail = spendDetailByCategory.get(c.category) ?? [];
+                const isOpen = expandedSpendCategory === c.category;
+                return (
+                  <li key={c.category}>
+                    <button
+                      onClick={() => setExpandedSpendCategory(isOpen ? null : c.category)}
+                      className="flex w-full items-center justify-between gap-2 text-left text-black/70 hover:text-black dark:text-white/70 dark:hover:text-white"
+                    >
+                      <span>
+                        {isOpen ? "▾" : "▸"} {c.category}
+                      </span>
+                      <span className="font-medium">{fmtUsd(c.spentUsd)}</span>
+                    </button>
+                    {isOpen && (
+                      <ul className="ml-4 mt-1 space-y-0.5 border-l border-black/10 pl-3 dark:border-white/10">
+                        {detail.map((item) => (
+                          <li
+                            key={item.id}
+                            className="flex items-center justify-between gap-2 text-xs text-black/60 dark:text-white/60"
+                          >
+                            <span>
+                              {item.code ? `${item.code} — ` : ""}
+                              {item.description}
+                            </span>
+                            <span className="shrink-0 font-medium">{fmtUsd(item.actualUsd)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
