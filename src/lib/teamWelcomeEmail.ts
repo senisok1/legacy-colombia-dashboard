@@ -189,23 +189,34 @@ const COPY: Record<string, Copy> = {
       "You can view everything, but you cannot message guests or change bookings — only the owner can. If something needs a reply to a guest, add a note and tell the owner.",
     footer: "Legacy Estate Rentals",
     constructionIntro:
-      "Your login for the Legacy Estate Rentals dashboard is ready. It gives you access to one tab: Construction Management — a shared checklist of open items for the property.",
+      "Your login is ready! You can see 3 tabs: Dashboard, Construction Management, and Construction Budget.",
     constructionTabs: [
       {
+        name: "Dashboard",
+        what: "A quick look at the property — who is staying there now, and who is coming next.",
+        how: "You don't type anything here. It updates by itself.",
+      },
+      {
         name: "Construction Management",
-        what: "An open-items checklist for the property. Anyone on the construction team can add an item and check it off once it's done.",
-        how: "Type what needs doing and press Add. When it's finished, tick the checkbox next to it — your name and the time are saved automatically in the activity log below the list, so everyone can see who did what.",
+        what: "A to-do list for the property. Anyone on the team can add a job and check it off when it's done.",
+        how: "Type the job and press Add. When it's finished, click the checkbox next to it. Your name and the time are saved so everyone can see who did it.",
+      },
+      {
+        name: "Construction Budget",
+        what: "The money plan for the project, and what has really been spent so far.",
+        how: "Find the item you worked on. Type how much it really cost in the box called Actual (USD). You can also click Notes to write more about it.",
       },
     ],
     constructionNotesTitle: "How to use it",
     constructionNotesRules: [
-      "Add an item for anything that needs to happen — a repair, a delivery, an inspection, materials needed.",
-      "Be specific. \"Replace broken tile, 2nd floor bathroom\" is better than \"fix tile\".",
-      "Check an item off once it's actually done — don't check it off in advance.",
-      "The activity log at the bottom shows every item added and completed, with who and when.",
+      "Add a job for anything that needs to happen — a repair, a delivery, materials you need.",
+      "Say exactly what it is. \"Fix the broken tile in the 2nd floor bathroom\" is better than \"fix tile.\"",
+      "Only check a job as done when it is really done — not before.",
+      "In Construction Budget, type the real cost after you spend the money, not before.",
+      "You can always scroll down to see what everyone else has done. That list is called the activity log.",
     ],
     constructionHelpBody:
-      "This login only has access to Construction Management — nothing else on the dashboard is visible to you.",
+      "You can only see these 3 tabs: Dashboard, Construction Management, and Construction Budget. Nothing else on the dashboard is visible to you.",
   },
 
   Spanish: {
@@ -320,23 +331,34 @@ const COPY: Record<string, Copy> = {
       "Puedes ver todo, pero no puedes escribirle a los huéspedes ni cambiar reservas: eso solo lo hace el dueño. Si algo necesita respuesta al huésped, escribe una nota y avísale al dueño.",
     footer: "Legacy Estate Rentals",
     constructionIntro:
-      "Tu acceso al panel de Legacy Estate Rentals ya está listo. Solo te da acceso a una pestaña: Construction Management — una lista compartida de pendientes de la propiedad.",
+      "¡Tu acceso ya está listo! Puedes ver 3 pestañas: Dashboard, Construction Management y Construction Budget.",
     constructionTabs: [
       {
+        name: "Dashboard",
+        what: "Una vista rápida de la propiedad: quién está ahí ahora y quién llega después.",
+        how: "No tienes que escribir nada aquí. Se actualiza solo.",
+      },
+      {
         name: "Construction Management",
-        what: "Una lista de pendientes de la propiedad. Cualquiera del equipo de construcción puede agregar un ítem y marcarlo como hecho.",
-        how: "Escribe qué falta por hacer y presiona Add. Cuando esté terminado, marca la casilla junto al ítem — tu nombre y la hora quedan guardados automáticamente en el registro de actividad debajo de la lista, para que todos vean quién hizo qué.",
+        what: "Una lista de tareas de la propiedad. Cualquiera del equipo puede agregar una tarea y marcarla como hecha.",
+        how: "Escribe la tarea y presiona Add. Cuando esté lista, marca la casilla junto a ella. Tu nombre y la hora quedan guardados para que todos vean quién la hizo.",
+      },
+      {
+        name: "Construction Budget",
+        what: "El plan de gastos del proyecto, y lo que realmente se ha gastado hasta ahora.",
+        how: "Busca el ítem en el que trabajaste. Escribe cuánto costó de verdad en la casilla Actual (USD). También puedes hacer clic en Notes para escribir más detalles.",
       },
     ],
     constructionNotesTitle: "Cómo usarla",
     constructionNotesRules: [
-      "Agrega un ítem por cada cosa pendiente: una reparación, una entrega, una inspección, materiales necesarios.",
-      "Sé específico. \"Cambiar baldosa rota, baño segundo piso\" es mejor que \"arreglar baldosa\".",
-      "Marca un ítem como hecho solo cuando ya esté terminado, no antes.",
-      "El registro de actividad al final muestra cada ítem agregado y completado, con quién y cuándo.",
+      "Agrega una tarea por cada cosa que haga falta: una reparación, una entrega, materiales que necesitas.",
+      "Sé bien específico. \"Cambiar la baldosa rota del baño del segundo piso\" es mejor que \"arreglar baldosa\".",
+      "Marca una tarea como hecha solo cuando ya esté terminada de verdad, no antes.",
+      "En Construction Budget, escribe el costo real después de gastar el dinero, no antes.",
+      "Siempre puedes bajar para ver lo que ha hecho el resto del equipo. Esa lista se llama el registro de actividad.",
     ],
     constructionHelpBody:
-      "Este acceso solo tiene la pestaña Construction Management — nada más del panel es visible para ti.",
+      "Solo puedes ver estas 3 pestañas: Dashboard, Construction Management y Construction Budget. Nada más del panel es visible para ti.",
   },
 
   Portuguese: {
@@ -451,23 +473,34 @@ const COPY: Record<string, Copy> = {
       "Você pode ver tudo, mas não pode enviar mensagens aos hóspedes nem alterar reservas — só o proprietário pode. Se algo precisar de resposta ao hóspede, escreva uma anotação e avise o proprietário.",
     footer: "Legacy Estate Rentals",
     constructionIntro:
-      "Seu acesso ao painel da Legacy Estate Rentals está pronto. Ele dá acesso a apenas uma aba: Construction Management — uma lista compartilhada de pendências da propriedade.",
+      "Seu acesso já está pronto! Você pode ver 3 abas: Dashboard, Construction Management e Construction Budget.",
     constructionTabs: [
       {
+        name: "Dashboard",
+        what: "Uma visão rápida da propriedade: quem está lá agora e quem chega a seguir.",
+        how: "Você não precisa digitar nada aqui. Ele se atualiza sozinho.",
+      },
+      {
         name: "Construction Management",
-        what: "Uma lista de pendências da propriedade. Qualquer pessoa da equipe de construção pode adicionar um item e marcá-lo como concluído.",
-        how: "Escreva o que precisa ser feito e clique em Add. Quando terminar, marque a caixinha ao lado do item — seu nome e o horário são salvos automaticamente no registro de atividade abaixo da lista, para que todos vejam quem fez o quê.",
+        what: "Uma lista de tarefas da propriedade. Qualquer pessoa da equipe pode adicionar uma tarefa e marcá-la como concluída.",
+        how: "Escreva a tarefa e clique em Add. Quando terminar, marque a caixinha ao lado dela. Seu nome e o horário ficam salvos para todos verem quem fez.",
+      },
+      {
+        name: "Construction Budget",
+        what: "O plano de gastos do projeto, e o que já foi realmente gasto até agora.",
+        how: "Encontre o item em que você trabalhou. Digite quanto custou de verdade na caixa Actual (USD). Você também pode clicar em Notes para escrever mais detalhes.",
       },
     ],
     constructionNotesTitle: "Como usar",
     constructionNotesRules: [
-      "Adicione um item para tudo que precisa ser feito: um reparo, uma entrega, uma inspeção, materiais necessários.",
-      "Seja específico. \"Trocar azulejo quebrado, banheiro do 2º andar\" é melhor que \"consertar azulejo\".",
-      "Marque um item como concluído só quando ele realmente estiver pronto.",
-      "O registro de atividade no final mostra cada item adicionado e concluído, com quem e quando.",
+      "Adicione uma tarefa para tudo que precisar ser feito: um reparo, uma entrega, materiais necessários.",
+      "Seja bem específico. \"Trocar o azulejo quebrado do banheiro do 2º andar\" é melhor que \"consertar azulejo\".",
+      "Marque uma tarefa como concluída só quando ela realmente estiver pronta, não antes.",
+      "Em Construction Budget, digite o custo real depois de gastar o dinheiro, não antes.",
+      "Você sempre pode rolar para baixo e ver o que o resto da equipe fez. Essa lista se chama registro de atividade.",
     ],
     constructionHelpBody:
-      "Este acesso só tem a aba Construction Management — nada mais do painel é visível para você.",
+      "Você só pode ver estas 3 abas: Dashboard, Construction Management e Construction Budget. Mais nada do painel é visível para você.",
   },
 };
 
