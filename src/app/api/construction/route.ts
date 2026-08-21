@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
 
   const body = (await req.json().catch(() => null)) as
-    | { title?: string; notes?: string; category?: string }
+    | { title?: string; notes?: string; category?: string; estimatedCompletionDate?: string }
     | null;
   const title = body?.title?.trim();
   if (!title) return NextResponse.json({ error: "Give the item a title." }, { status: 400 });
@@ -95,6 +95,14 @@ export async function POST(req: NextRequest) {
   const category = body?.category?.trim() || null;
   if (category && category.length > 100) {
     return NextResponse.json({ error: "Keep the category under 100 characters." }, { status: 400 });
+  }
+  // Mandatory as of 2026-08-21 (Seni's ask: "Let's make the estimated
+  // completion date mandatory to fill in moving forward") — applies to
+  // every NEW item, on every property; existing items are untouched. See
+  // createConstructionItem's header comment.
+  const estimatedCompletionDate = body?.estimatedCompletionDate?.trim();
+  if (!estimatedCompletionDate || !DATE_RE.test(estimatedCompletionDate)) {
+    return NextResponse.json({ error: "Give the item an estimated completion date." }, { status: 400 });
   }
 
   try {
@@ -109,6 +117,7 @@ export async function POST(req: NextRequest) {
       title,
       notes,
       category,
+      estimatedCompletionDate,
       authorEmail: session.email,
       authorName: user?.name ?? null,
     });

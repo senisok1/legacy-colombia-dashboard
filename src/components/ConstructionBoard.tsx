@@ -532,6 +532,12 @@ export function ConstructionBoard() {
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState("");
+  // Mandatory as of 2026-08-21 (Seni's ask: "Let's make the estimated
+  // completion date mandatory to fill in moving forward") — the Add button
+  // stays disabled until this is filled, same enforcement pattern as the
+  // title field. Cleared after each successful add (unlike category, which
+  // deliberately isn't — a due date is specific to one job, not a batch).
+  const [newDueDate, setNewDueDate] = useState("");
   const [adding, setAdding] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -610,7 +616,7 @@ export function ConstructionBoard() {
 
   async function addItem(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim() || adding) return;
+    if (!title.trim() || !newDueDate || adding) return;
     setAdding(true);
     setError(null);
     try {
@@ -621,12 +627,14 @@ export function ConstructionBoard() {
           title: title.trim(),
           notes: notes.trim() || undefined,
           category: category.trim() || undefined,
+          estimatedCompletionDate: newDueDate,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setTitle("");
       setNotes("");
+      setNewDueDate("");
       // Category deliberately NOT cleared — adding several items to the
       // same category (e.g. a handful of Gym repairs) in a row is the
       // common case.
@@ -975,9 +983,22 @@ export function ConstructionBoard() {
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
+            {/* Mandatory as of 2026-08-21 (Seni's ask) — no visual affordance
+                for "required" beyond the disabled Add button below, since a
+                native date input can't show a placeholder; the red border
+                only ever means overdue elsewhere in this file, so it's not
+                reused here for "empty required field" to avoid mixed
+                meanings. */}
+            <input
+              type="date"
+              value={newDueDate}
+              onChange={(e) => setNewDueDate(e.target.value)}
+              className="rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+              aria-label={t("construction.estCompletion")}
+            />
             <button
               type="submit"
-              disabled={adding || !title.trim()}
+              disabled={adding || !title.trim() || !newDueDate}
               className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1.5 text-sm text-white dark:text-black disabled:opacity-40"
             >
               {t("construction.add")}

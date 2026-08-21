@@ -320,13 +320,22 @@ export async function createConstructionItem(input: {
   title: string;
   notes: string | null;
   category: string | null;
+  /** Mandatory as of 2026-08-21 (Seni's ask: "Let's make the estimated
+   * completion date mandatory to fill in moving forward") — every NEW item
+   * must have one so the overdue-alert cron (see constructionAlerts.ts) has
+   * something to check against; existing items created before this change
+   * keep whatever date (or lack of one) they already had, nothing here
+   * backfills those. Enforced again at the API layer (api/construction/
+   * route.ts) since this function has no other caller. */
+  estimatedCompletionDate: string;
   authorEmail: string;
   authorName: string | null;
 }): Promise<ConstructionItem> {
   const row = await queryOne<ItemRow>(
     `insert into construction_items
-       (organization_id, property_group_id, title, notes, category, created_by_email, created_by_name)
-     values ($1, $2, $3, $4, $5, $6, $7)
+       (organization_id, property_group_id, title, notes, category, estimated_completion_date,
+        created_by_email, created_by_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
      returning id, title, notes, category, completed, completed_by_email, completed_by_name, completed_at,
                created_by_email, created_by_name, created_at,
                estimated_completion_date::text as estimated_completion_date,
@@ -338,6 +347,7 @@ export async function createConstructionItem(input: {
       input.title,
       input.notes,
       input.category,
+      input.estimatedCompletionDate,
       input.authorEmail,
       input.authorName,
     ]

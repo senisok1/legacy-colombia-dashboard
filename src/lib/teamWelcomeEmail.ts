@@ -216,7 +216,7 @@ const COPY: Record<string, Copy> = {
       "You can always scroll down to see what everyone else has done. That list is called the activity log.",
     ],
     constructionHelpBody:
-      "You can only see these 3 tabs: Dashboard, Construction Management, and Construction Budget. Nothing else on the dashboard is visible to you.",
+      "You can only see these 3 tabs: Dashboard, Construction Management, and Construction Budget. Nothing else on the dashboard is visible to you. If you have any questions, contact Seni (senisok1@gmail.com).",
   },
 
   Spanish: {
@@ -358,7 +358,7 @@ const COPY: Record<string, Copy> = {
       "Siempre puedes bajar para ver lo que ha hecho el resto del equipo. Esa lista se llama el registro de actividad.",
     ],
     constructionHelpBody:
-      "Solo puedes ver estas 3 pestañas: Dashboard, Construction Management y Construction Budget. Nada más del panel es visible para ti.",
+      "Solo puedes ver estas 3 pestañas: Dashboard, Construction Management y Construction Budget. Nada más del panel es visible para ti. Si tienes alguna pregunta, contacta a Seni (senisok1@gmail.com).",
   },
 
   Portuguese: {
@@ -500,7 +500,7 @@ const COPY: Record<string, Copy> = {
       "Você sempre pode rolar para baixo e ver o que o resto da equipe fez. Essa lista se chama registro de atividade.",
     ],
     constructionHelpBody:
-      "Você só pode ver estas 3 abas: Dashboard, Construction Management e Construction Budget. Mais nada do painel é visível para você.",
+      "Você só pode ver estas 3 abas: Dashboard, Construction Management e Construction Budget. Mais nada do painel é visível para você. Se tiver alguma dúvida, entre em contato com o Seni (senisok1@gmail.com).",
   },
 };
 
