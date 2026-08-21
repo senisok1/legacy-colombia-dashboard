@@ -1,8 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Review, ReputationEntry, ReputationResponse, ReputationResponseStatus } from "@/lib/types";
 import { formatRelativeTime } from "@/lib/format";
+
+// Mirrors lib/translate.ts's MessageTranslation shape (kept local — this is a
+// client component and shouldn't import server-only lib/translate.ts code).
+type ReviewTranslation = { isEnglish: boolean; language?: string; english?: string };
+
+/** Fetches English translations for every review with comment text, in one
+ * batched call — same convention as ThreadInbox's guest-message translation:
+ * fetched automatically (no button), cached forever server-side since a
+ * posted review's text never changes. */
+async function fetchReviewTranslations(
+  reviews: { id: number; comment: string }[]
+): Promise<Record<number, ReviewTranslation>> {
+  if (reviews.length === 0) return {};
+  try {
+    const res = await fetch("/api/reputation/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reviews }),
+    });
+    const data = (await res.json()) as { translations?: Record<number, ReviewTranslation> };
+    return data.translations ?? {};
+  } catch {
+    return {};
+  }
+}
 
 // OwnerRez's own review-response editor for a specific review — confirmed by
 // following the "Write a response" link from Quality Center > Reviews
@@ -68,6 +93,21 @@ export function ReputationExplorer({ initialEntries }: { initialEntries: Reputat
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [filter, setFilter] = useState<"needs_response" | "pending_review" | "all">("needs_response");
+  const [translations, setTranslations] = useState<Record<number, ReviewTranslation>>({});
+
+  // Auto-translate every review's comment to English on load (and again if
+  // new reviews arrive via a scan) — no button, matches ThreadInbox's guest
+  // message translation UX. Only asks for reviews not already translated.
+  useEffect(() => {
+    const untranslated = entries
+      .filter((e) => e.review.comment && !(e.review.id in translations))
+      .map((e) => ({ id: e.review.id, comment: e.review.comment as string }));
+    if (untranslated.length === 0) return;
+    fetchReviewTranslations(untranslated).then((result) => {
+      if (Object.keys(result).length > 0) setTranslations((prev) => ({ ...prev, ...result }));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries]);
 
   const rated = entries.map((e) => e.review.rating).filter((r): r is number => typeof r === "number");
   const avgRating = rated.length > 0 ? rated.reduce((s, r) => s + r, 0) / rated.length : null;
@@ -159,7 +199,12 @@ export function ReputationExplorer({ initialEntries }: { initialEntries: Reputat
       ) : (
         <div className="space-y-3">
           {visible.map((entry) => (
-            <ReviewCard key={entry.review.id} entry={entry} onDecided={updateEntry} />
+            <ReviewCard
+              key={entry.review.id}
+              entry={entry}
+              onDecided={updateEntry}
+              translation={translations[entry.review.id]}
+            />
           ))}
         </div>
       )}
@@ -170,9 +215,11 @@ export function ReputationExplorer({ initialEntries }: { initialEntries: Reputat
 function ReviewCard({
   entry,
   onDecided,
+  translation,
 }: {
   entry: ReputationEntry;
   onDecided: (reviewId: number, response: ReputationResponse) => void;
+  translation?: ReviewTranslation;
 }) {
   const { review, response } = entry;
   const [draftText, setDraftText] = useState(response?.draftText ?? "");
@@ -232,7 +279,18 @@ function ReviewCard({
         <span className="text-xs text-black/40 dark:text-white/40">{formatRelativeTime(review.createdAt)}</span>
       </div>
 
-      {review.comment && <p className="text-sm whitespace-pre-wrap">{review.comment}</p>}
+      {review.comment && (
+        <div>
+          <p className="text-sm whitespace-pre-wrap">
+            {translation && !translation.isEnglish && translation.english ? translation.english : review.comment}
+          </p>
+          {translation && !translation.isEnglish && translation.english && (
+            <p className="mt-1 pt-1 border-t border-black/5 dark:border-white/10 text-[11px] text-black/40 dark:text-white/40 whitespace-pre-wrap">
+              Original ({translation.language}): {review.comment}
+            </p>
+          )}
+        </div>
+      )}
 
       {review.hostResponse ? (
         <div className="text-xs rounded-md bg-black/5 dark:bg-white/10 px-2 py-1.5">

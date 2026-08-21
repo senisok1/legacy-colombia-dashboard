@@ -424,6 +424,105 @@ export async function translateThreadMessages(
   return result;
 }
 
+// Reputation tab (2026-08-21, Seni: "under messaging tab, under reputation, I
+// need to see all of that in english as well so I can understand it") — guest
+// review text pulled live from OwnerRez is often Spanish/Portuguese since
+// Legacy Colombia's guests are. Mirrors translateThreadMessages() above
+// exactly (batch-then-fallback, Redis-cached forever since a posted review's
+// text never changes) but keyed by review id instead of (threadId, messageId)
+// — there's no thread concept for reviews.
+function reviewTranslationKey(orgId: string, reviewId: number): string {
+  return `reviewTranslation:${orgId}:${reviewId}`;
+}
+
+async function cacheReviewTranslation(
+  reviewId: number,
+  translation: MessageTranslation,
+  orgId: string
+): Promise<void> {
+  if (!isRedisConfigured()) return;
+  redisSet(reviewTranslationKey(orgId, reviewId), JSON.stringify(translation), {
+    exSeconds: TRANSLATION_CACHE_TTL_SECONDS,
+  }).catch(() => {});
+}
+
+/** Same batch-then-fallback translation as translateThreadMessages(), applied
+ * to guest review comments for the Reputation tab. Safe to call with an
+ * empty/all-cached list. */
+export async function translateReviewComments(
+  reviews: { id: number; comment: string }[],
+  organizationId?: string
+): Promise<Record<number, MessageTranslation>> {
+  const result: Record<number, MessageTranslation> = {};
+  const withBody = reviews.filter((r) => r.comment.trim());
+  if (withBody.length === 0) return result;
+
+  const orgId = organizationId ?? (await getDefaultOrganizationId());
+  const uncached: { id: number; comment: string }[] = [];
+
+  if (isRedisConfigured()) {
+    try {
+      const keys = withBody.map((r) => reviewTranslationKey(orgId, r.id));
+      const cached = await redisMGet(keys);
+      for (let i = 0; i < withBody.length; i++) {
+        const raw = cached[i];
+        if (!raw) {
+          uncached.push(withBody[i]);
+          continue;
+        }
+        try {
+          result[withBody[i].id] = JSON.parse(raw) as MessageTranslation;
+        } catch {
+          uncached.push(withBody[i]);
+        }
+      }
+    } catch {
+      uncached.push(...withBody);
+    }
+  } else {
+    uncached.push(...withBody);
+  }
+
+  const apiKey = await resolveAnthropicApiKey(orgId);
+  if (uncached.length === 0 || !apiKey) return result;
+
+  const stillNeeded = new Map(uncached.map((r) => [r.id, r]));
+
+  try {
+    const numbered = uncached.map((r, i) => `[${i}]\n${r.comment}`).join("\n\n---\n\n");
+    const raw = await callClaude(
+      'For each numbered guest review below, detect whether it is already written in English. Respond with ONLY a JSON array (no markdown fences, no other text), one object per review in the same order, each with exactly these keys: {"isEnglish": boolean, "language": "human-readable language name if not English, omit or empty if English", "english": "a natural English translation if not English, omit or empty if already English"}.',
+      numbered,
+      8000,
+      apiKey
+    );
+    if (raw) {
+      const parsed = JSON.parse(extractJsonArray(raw)) as { isEnglish?: boolean; language?: string; english?: string }[];
+      for (let i = 0; i < uncached.length; i++) {
+        const r = uncached[i];
+        const p = parsed[i];
+        if (!p) continue;
+        const translation: MessageTranslation = p.isEnglish
+          ? { isEnglish: true }
+          : { isEnglish: false, language: p.language || "Unknown", english: p.english || r.comment };
+        result[r.id] = translation;
+        stillNeeded.delete(r.id);
+        void cacheReviewTranslation(r.id, translation, orgId);
+      }
+    }
+  } catch {
+    // Whole batch failed to parse — fallback pass below picks up everything.
+  }
+
+  for (const r of stillNeeded.values()) {
+    const translation = await translateSingleToEnglish(r.comment, apiKey);
+    result[r.id] = translation;
+    void cacheReviewTranslation(r.id, translation, orgId);
+  }
+
+  return result;
+}
+
 /**
  * Detects what language a piece of inbound text is written in AND returns an
  * English translation of it, in ONE Claude call.
