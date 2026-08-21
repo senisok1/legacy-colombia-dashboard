@@ -2,19 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import { isConstructionOwner } from "@/lib/construction";
 import { addConstructionBudgetItemNote, listConstructionBudgetItemNotes } from "@/lib/constructionBudget";
 
 export const dynamic = "force-dynamic";
 
 // Per-budget-item notes thread (2026-08-20, Seni's ask: "add a notes button
-// for each item in the budget for any user to add notes"). Same viewer gate
-// as api/construction-budget/route.ts's GET/PATCH — CEO or the CONSTRUCTION
-// login, both of whom can read and add notes. Deliberately NOT restricted to
-// Seni like import/delete/FX-rate — Seni's ask was explicitly "any user" —
-// and there's no delete here at all (append-only progress log, same as
-// Construction Management's Progress Notes), so no owner-only branch needed.
+// for each item in the budget for any user to add notes"). Viewing is CEO or
+// the CONSTRUCTION login. Posting is write access — Seni or the CONSTRUCTION
+// login only, tightened 2026-08-21 (Seni: "Do not allow Ahmed and Geo to
+// have any add edit allocate on the construction tabs. They can have view
+// only") — superseding the original "any user" carve-out. Still no delete
+// here at all (append-only progress log, same as Construction Management's
+// Progress Notes).
 function canView(role: string | undefined): boolean {
   return role === "CEO" || role === "CONSTRUCTION";
+}
+
+function canWrite(session: { role?: string; email: string }): boolean {
+  return isConstructionOwner(session.email) || session.role === "CONSTRUCTION";
 }
 
 export async function GET(req: NextRequest) {
@@ -41,8 +47,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canView(session.role)) {
-    return NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 });
+  if (!canWrite(session)) {
+    return NextResponse.json({ error: "You have view-only access to the Construction Budget." }, { status: 403 });
   }
 
   const body = (await req.json().catch(() => null)) as { itemId?: string; body?: string } | null;

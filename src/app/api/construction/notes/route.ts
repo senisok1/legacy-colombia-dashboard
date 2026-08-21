@@ -2,16 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
-import { addConstructionItemNote, listConstructionItemNotes } from "@/lib/construction";
+import { addConstructionItemNote, isConstructionOwner, listConstructionItemNotes } from "@/lib/construction";
 
 export const dynamic = "force-dynamic";
 
-// Per-item notes thread (2026-08-20, Seni's ask). Same access gate as
-// api/construction/route.ts — CEO or CONSTRUCTION role, both of whom can
-// read and add notes; there's no delete here at all (append-only progress
-// log), so no Seni-only restriction is needed on this route.
+// Per-item notes thread (2026-08-20, Seni's ask). Viewing is CEO or
+// CONSTRUCTION role; posting a note is write access — Seni or the
+// CONSTRUCTION login only (2026-08-21, Seni's ask: "Do not allow Ahmed and
+// Geo to have any add edit allocate on the construction tabs. They can have
+// view only") — there's no delete here at all (append-only progress log).
 function canAccessConstruction(role: string | undefined): boolean {
   return role === "CEO" || role === "CONSTRUCTION";
+}
+
+function canWrite(session: { role?: string; email: string }): boolean {
+  return isConstructionOwner(session.email) || session.role === "CONSTRUCTION";
 }
 
 export async function GET(req: NextRequest) {
@@ -38,8 +43,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canAccessConstruction(session.role)) {
-    return NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 });
+  if (!canWrite(session)) {
+    return NextResponse.json({ error: "You have view-only access to Construction Management." }, { status: 403 });
   }
 
   const body = (await req.json().catch(() => null)) as { itemId?: string; body?: string } | null;

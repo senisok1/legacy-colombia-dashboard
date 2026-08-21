@@ -21,6 +21,14 @@ function canAccess(role: string | undefined): boolean {
   return role === "CEO" || role === "CONSTRUCTION";
 }
 
+// Adding an allocation is write access, narrower than view (2026-08-21,
+// Seni's ask: "Do not allow Ahmed and Geo to have any add edit allocate on
+// the construction tabs. They can have view only") — Seni or the dedicated
+// CONSTRUCTION login only. A plain CEO login that isn't Seni is view-only.
+function canWrite(session: { role?: string; email: string }): boolean {
+  return isConstructionOwner(session.email) || session.role === "CONSTRUCTION";
+}
+
 async function resolveGroupId(req: NextRequest, email: string) {
   const user = await getUserByEmail(email).catch(() => null);
   return effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
@@ -29,8 +37,8 @@ async function resolveGroupId(req: NextRequest, email: string) {
 export async function POST(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canAccess(session.role)) {
-    return NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 });
+  if (!canWrite(session)) {
+    return NextResponse.json({ error: "You have view-only access to Construction." }, { status: 403 });
   }
 
   const body = (await req.json().catch(() => null)) as

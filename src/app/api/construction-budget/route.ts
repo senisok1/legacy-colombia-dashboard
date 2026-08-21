@@ -42,6 +42,21 @@ function requireViewer(req: NextRequest) {
   return { session };
 }
 
+// Entering Actual (COP)/notes is write access, narrower than view
+// (2026-08-21, Seni's ask: "Do not allow Ahmed and Geo to have any add edit
+// allocate on the construction tabs. They can have view only") — Seni or the
+// CONSTRUCTION login only. A plain CEO login that isn't Seni (Ahmed, Geo) is
+// now view-only, same as the old "team member enters actuals" carve-out but
+// scoped to the dedicated CONSTRUCTION role instead of the whole CEO role.
+function requireEditor(req: NextRequest) {
+  const session = getSessionFromRequest(req);
+  if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
+  if (!isConstructionOwner(session.email) && session.role !== "CONSTRUCTION") {
+    return { error: NextResponse.json({ error: "You have view-only access to the Construction Budget." }, { status: 403 }) };
+  }
+  return { session };
+}
+
 function requireManager(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return { error: NextResponse.json({ error: "Not logged in." }, { status: 401 }) };
@@ -79,6 +94,11 @@ export async function GET(req: NextRequest) {
       // FX rate edit box in ConstructionBudgetBoard.tsx — Seni specifically,
       // not every CEO login.
       canManage: isConstructionOwner(session.email),
+      // Drives the Actual (COP)/notes entry fields and the "Funds used"
+      // allocation control in ConstructionBudgetBoard.tsx — Seni or the
+      // CONSTRUCTION login only (2026-08-21, Seni's ask). A CEO login other
+      // than Seni (e.g. Ahmed, Geo) is view-only.
+      canWrite: isConstructionOwner(session.email) || session.role === "CONSTRUCTION",
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -124,7 +144,7 @@ export async function POST(req: NextRequest) {
 // (2026-08-20, Seni's ask: "the construction team member can enter actual
 // amount as well") — this is deliberately NOT gated to Seni like POST/DELETE.
 export async function PATCH(req: NextRequest) {
-  const { session, error } = requireViewer(req);
+  const { session, error } = requireEditor(req);
   if (error) return error;
 
   // COP is the entry currency since 2026-08-21 (Seni: "make everything COP

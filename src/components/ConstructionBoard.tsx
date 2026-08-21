@@ -4,12 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "@/components/LanguageProvider";
 
 // Construction Management tab (2026-08-20, Seni's ask): an open-items
-// checklist for the property — anyone with access to this tab (admin/owner
-// or a CONSTRUCTION-role login, see src/proxy.ts) can add an item and check
-// it off, with a companion activity log so there's always a "who did what"
-// trail. Modeled on TeamActivityLog.tsx's fetch/render pattern (double-load
-// on mount for instant paint), but its own tables/route — this isn't part
-// of the Team Management/READ_ONLY surface at all.
+// checklist for the property. Viewing is open to any CEO login or a
+// CONSTRUCTION-role login (see src/proxy.ts); adding/editing/toggling/
+// allocating is narrower — Seni or the CONSTRUCTION login only (2026-08-21,
+// Seni's ask: "Do not allow Ahmed and Geo to have any add edit allocate on
+// the construction tabs. They can have view only"), driven by the `canWrite`
+// flag from the API. A companion activity log gives a "who did what" trail.
+// Modeled on TeamActivityLog.tsx's fetch/render pattern (double-load on
+// mount for instant paint), but its own tables/route — this isn't part of
+// the Team Management/READ_ONLY surface at all.
 //
 // Categories (2026-08-20, Seni's ask: type "Gym" as a category and list
 // items under it) are free-text, not a separate managed list — typing the
@@ -124,6 +127,11 @@ type ItemRowProps = {
   completedRow: boolean;
   t: (key: string) => string;
   canDelete: boolean;
+  /** Add/edit/allocate/toggle/note — Seni or the CONSTRUCTION login only
+   * (2026-08-21, Seni's ask: "Do not allow Ahmed and Geo to have any add
+   * edit allocate on the construction tabs. They can have view only"). A
+   * CEO login other than Seni sees everything read-only. */
+  canWrite: boolean;
   togglingId: string | null;
   removingId: string | null;
   savingDateId: string | null;
@@ -166,6 +174,7 @@ function ItemRow({
   completedRow,
   t,
   canDelete,
+  canWrite,
   togglingId,
   removingId,
   savingDateId,
@@ -223,9 +232,9 @@ function ItemRow({
         <input
           type="checkbox"
           checked={completedRow}
-          disabled={togglingId === item.id}
+          disabled={!canWrite || togglingId === item.id}
           onChange={() => onToggle(item)}
-          className="mt-0.5"
+          className="mt-0.5 disabled:opacity-60"
         />
         <div className="flex-1">
           <div className={completedRow ? "line-through text-black/50 dark:text-white/50" : ""}>{item.title}</div>
@@ -241,7 +250,7 @@ function ItemRow({
               <input
                 type="date"
                 value={item.estimatedCompletionDate ?? ""}
-                disabled={savingDateId === item.id}
+                disabled={!canWrite || savingDateId === item.id}
                 onChange={(e) => onUpdateEstimatedDate(item, e.target.value)}
                 className={`rounded border bg-transparent px-1 py-0.5 text-xs disabled:opacity-40 ${
                   overdue ? "border-red-500 text-red-500" : "border-black/15 dark:border-white/15"
@@ -258,7 +267,7 @@ function ItemRow({
                 step="1"
                 placeholder="—"
                 value={costDraft}
-                disabled={savingCostId === item.id}
+                disabled={!canWrite || savingCostId === item.id}
                 onChange={(e) => setCostDraft(e.target.value)}
                 onBlur={() => {
                   const v = costDraft.trim() === "" ? null : Number(costDraft);
@@ -301,34 +310,36 @@ function ItemRow({
                   ))}
                 </ul>
               )}
-              <div className="flex flex-wrap items-center gap-1.5">
-                <input
-                  type="number"
-                  min={0}
-                  step="1"
-                  placeholder="Amount (COP)"
-                  value={allocAmountDraft}
-                  onChange={(e) => onAllocAmountChange(e.target.value)}
-                  className="w-32 rounded border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-xs"
-                />
-                <input
-                  type="text"
-                  placeholder="Note (optional)"
-                  value={allocNoteDraft}
-                  onChange={(e) => onAllocNoteChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") onAddAllocation(item);
-                  }}
-                  className="min-w-[8rem] flex-1 rounded border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-xs"
-                />
-                <button
-                  onClick={() => onAddAllocation(item)}
-                  disabled={addingAllocId === item.id || !allocAmountDraft.trim()}
-                  className="shrink-0 rounded-md bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-40"
-                >
-                  {addingAllocId === item.id ? "Saving…" : "Allocate funds"}
-                </button>
-              </div>
+              {canWrite && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={0}
+                    step="1"
+                    placeholder="Amount (COP)"
+                    value={allocAmountDraft}
+                    onChange={(e) => onAllocAmountChange(e.target.value)}
+                    className="w-32 rounded border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-xs"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Note (optional)"
+                    value={allocNoteDraft}
+                    onChange={(e) => onAllocNoteChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") onAddAllocation(item);
+                    }}
+                    className="min-w-[8rem] flex-1 rounded border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-xs"
+                  />
+                  <button
+                    onClick={() => onAddAllocation(item)}
+                    disabled={addingAllocId === item.id || !allocAmountDraft.trim()}
+                    className="shrink-0 rounded-md bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-40"
+                  >
+                    {addingAllocId === item.id ? "Saving…" : "Allocate funds"}
+                  </button>
+                </div>
+              )}
               <p className="text-[11px] text-black/40 dark:text-white/40">
                 Counted against the deposited construction funds on the Construction Budget tab.
               </p>
@@ -346,12 +357,14 @@ function ItemRow({
           {t("construction.notesButton")}
           {item.noteCount > 0 ? ` (${item.noteCount})` : ""}
         </button>
-        <button
-          onClick={() => (editing ? onCancelEdit() : onStartEdit(item))}
-          className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
-        >
-          {t("construction.editButton")}
-        </button>
+        {canWrite && (
+          <button
+            onClick={() => (editing ? onCancelEdit() : onStartEdit(item))}
+            className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-black/70 dark:text-white/40 dark:hover:text-white/70"
+          >
+            {t("construction.editButton")}
+          </button>
+        )}
         {canDelete && (
           <button
             onClick={() => onRemove(item)}
@@ -427,24 +440,26 @@ function ItemRow({
               ))}
             </ul>
           )}
-          <div className="flex gap-1.5">
-            <input
-              className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
-              placeholder={t("construction.notePlaceholder")}
-              value={noteDraft[item.id] ?? ""}
-              onChange={(e) => onNoteDraftChange(item.id, e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onPostNote(item);
-              }}
-            />
-            <button
-              onClick={() => onPostNote(item)}
-              disabled={postingNoteId === item.id || !(noteDraft[item.id] ?? "").trim()}
-              className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
-            >
-              {postingNoteId === item.id ? t("construction.posting") : t("construction.postNote")}
-            </button>
-          </div>
+          {canWrite && (
+            <div className="flex gap-1.5">
+              <input
+                className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                placeholder={t("construction.notePlaceholder")}
+                value={noteDraft[item.id] ?? ""}
+                onChange={(e) => onNoteDraftChange(item.id, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onPostNote(item);
+                }}
+              />
+              <button
+                onClick={() => onPostNote(item)}
+                disabled={postingNoteId === item.id || !(noteDraft[item.id] ?? "").trim()}
+                className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
+              >
+                {postingNoteId === item.id ? t("construction.posting") : t("construction.postNote")}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </li>
@@ -489,6 +504,10 @@ export function ConstructionBoard() {
   const [items, setItems] = useState<Item[] | null>(null);
   const [log, setLog] = useState<LogEntry[] | null>(null);
   const [canDelete, setCanDelete] = useState(false);
+  // Add/edit/toggle/allocate/note — Seni or the CONSTRUCTION login only
+  // (2026-08-21, Seni's ask). Defaults false (fail closed) until the API
+  // response comes back.
+  const [canWrite, setCanWrite] = useState(false);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState("");
@@ -546,6 +565,7 @@ export function ConstructionBoard() {
       setLog(json.log ?? []);
       setAllocations(json.allocations ?? []);
       setCanDelete(Boolean(json.canDelete));
+      setCanWrite(Boolean(json.canWrite));
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
@@ -865,6 +885,7 @@ export function ConstructionBoard() {
   const itemRowProps = {
     t,
     canDelete,
+    canWrite,
     togglingId,
     removingId,
     savingDateId,
@@ -904,39 +925,43 @@ export function ConstructionBoard() {
   return (
     <div className="space-y-4">
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
-        <form className="flex flex-wrap gap-2" onSubmit={addItem}>
-          <input
-            className="min-w-[14rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            placeholder={t("construction.placeholder")}
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-          <input
-            list="construction-categories"
-            className="w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            placeholder={t("construction.categoryPlaceholder")}
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          />
-          <datalist id="construction-categories">
-            {knownCategories.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
-          <input
-            className="min-w-[10rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
-            placeholder={t("construction.notesPlaceholder")}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-          <button
-            type="submit"
-            disabled={adding || !title.trim()}
-            className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1.5 text-sm text-white dark:text-black disabled:opacity-40"
-          >
-            {t("construction.add")}
-          </button>
-        </form>
+        {canWrite ? (
+          <form className="flex flex-wrap gap-2" onSubmit={addItem}>
+            <input
+              className="min-w-[14rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+              placeholder={t("construction.placeholder")}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <input
+              list="construction-categories"
+              className="w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+              placeholder={t("construction.categoryPlaceholder")}
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            />
+            <datalist id="construction-categories">
+              {knownCategories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+            <input
+              className="min-w-[10rem] flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1.5 text-sm"
+              placeholder={t("construction.notesPlaceholder")}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+            <button
+              type="submit"
+              disabled={adding || !title.trim()}
+              className="rounded-md bg-black/80 dark:bg-white/80 px-3 py-1.5 text-sm text-white dark:text-black disabled:opacity-40"
+            >
+              {t("construction.add")}
+            </button>
+          </form>
+        ) : (
+          <p className="text-xs text-black/40 dark:text-white/40">View only — you can see items, notes, and funds allocated, but can&apos;t add or change anything here.</p>
+        )}
 
         {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 

@@ -29,6 +29,15 @@ function canAccessConstruction(role: string | undefined): boolean {
   return role === "CEO" || role === "CONSTRUCTION";
 }
 
+// Write access (add item, toggle complete, set dates/cost, edit
+// title/notes/category) is narrower than view: Seni or the dedicated
+// CONSTRUCTION login only (2026-08-21, Seni's ask: "Do not allow Ahmed and
+// Geo to have any add edit allocate on the construction tabs. They can have
+// view only"). A plain CEO login that isn't Seni is now view-only here.
+function canWriteConstruction(session: { role?: string; email: string }): boolean {
+  return isConstructionOwner(session.email) || session.role === "CONSTRUCTION";
+}
+
 export async function GET(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
@@ -55,6 +64,10 @@ export async function GET(req: NextRequest) {
       // Drives the delete buttons in ConstructionBoard.tsx — restricted to
       // Seni specifically, not every CEO login (2026-08-20, Seni's ask).
       canDelete: isConstructionOwner(session.email),
+      // Drives add/edit/toggle/estimated-cost controls — Seni or the
+      // CONSTRUCTION login only (2026-08-21, Seni's ask). A CEO login other
+      // than Seni (e.g. Ahmed, Geo) is view-only.
+      canWrite: canWriteConstruction(session),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";
@@ -66,8 +79,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canAccessConstruction(session.role)) {
-    return NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 });
+  if (!canWriteConstruction(session)) {
+    return NextResponse.json({ error: "You have view-only access to Construction Management." }, { status: 403 });
   }
 
   const body = (await req.json().catch(() => null)) as
@@ -114,8 +127,8 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
-  if (!canAccessConstruction(session.role)) {
-    return NextResponse.json({ error: "This area is admin/construction-team only." }, { status: 403 });
+  if (!canWriteConstruction(session)) {
+    return NextResponse.json({ error: "You have view-only access to Construction Management." }, { status: 403 });
   }
 
   const body = (await req.json().catch(() => null)) as

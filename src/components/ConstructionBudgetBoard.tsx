@@ -386,9 +386,17 @@ export function ConstructionBudgetBoard() {
   // Import/delete are Seni-only (2026-08-20, Seni's ask: "make sure that I,
   // Seni Sok, is the only one that can import budgets or change budgets") —
   // drives whether the Import panel and per-row/per-log delete buttons even
-  // render. Entering Actual (USD) stays open to any viewer (CEO or the
-  // CONSTRUCTION login), so it's NOT gated by this flag.
+  // render. Entering Actual (COP)/notes used to be open to any CEO login too,
+  // but was narrowed 2026-08-21 (Seni: "Do not allow Ahmed and Geo to have
+  // any add edit allocate on the construction tabs") to Seni or the
+  // CONSTRUCTION login only — see the separate `canWrite` flag below.
   const [canManage, setCanManage] = useState(false);
+  // Entering Actual (COP)/notes — Seni or the CONSTRUCTION login only
+  // (2026-08-21, Seni's ask: "Do not allow Ahmed and Geo to have any add
+  // edit allocate on the construction tabs. They can have view only"),
+  // narrower than canManage-vs-view used to imply. Defaults false (fail
+  // closed) until the API response comes back.
+  const [canWrite, setCanWrite] = useState(false);
   // Activity log, collapsed by default (2026-08-20, Seni's ask: "add an
   // activity log button here too... so we can monitor who entered what").
   const [log, setLog] = useState<LogEntry[] | null>(null);
@@ -478,6 +486,7 @@ export function ConstructionBudgetBoard() {
       setItems(json.items ?? []);
       setLog(json.log ?? []);
       setCanManage(Boolean(json.canManage));
+      setCanWrite(Boolean(json.canWrite));
       if (typeof json.fxRate === "number") setFxRate(json.fxRate);
       hasDataRef.current = true;
       setError(null);
@@ -1225,6 +1234,7 @@ export function ConstructionBudgetBoard() {
                         item={item}
                         saving={savingId === item.id}
                         canManage={canManage}
+                        canWrite={canWrite}
                         money={money}
                         onSaveActual={(v) => void saveActual(item, v)}
                         onRemove={() => void removeItem(item)}
@@ -1312,6 +1322,7 @@ function ItemRow({
   item,
   saving,
   canManage,
+  canWrite,
   money,
   onSaveActual,
   onRemove,
@@ -1327,6 +1338,10 @@ function ItemRow({
   item: Item;
   saving: boolean;
   canManage: boolean;
+  /** Entering Actual (COP)/notes — Seni or the CONSTRUCTION login only
+   * (2026-08-21, Seni's ask). A CEO login other than Seni (Ahmed, Geo) sees
+   * these fields read-only. */
+  canWrite: boolean;
   /** Renders a COP amount in the tab's current display currency. */
   money: (cop: number | null) => string;
   onSaveActual: (v: number | null) => void;
@@ -1382,7 +1397,7 @@ function ItemRow({
             className="w-32 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-right text-xs"
             placeholder="COP"
             value={draft}
-            disabled={saving}
+            disabled={!canWrite || saving}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => {
               const v = draft.trim() === "" ? null : Number(draft);
@@ -1422,24 +1437,26 @@ function ItemRow({
                   ))}
                 </ul>
               )}
-              <div className="flex gap-1.5">
-                <input
-                  className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
-                  placeholder="Add a note…"
-                  value={noteDraft}
-                  onChange={(e) => onNoteDraftChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") onPostNote();
-                  }}
-                />
-                <button
-                  onClick={onPostNote}
-                  disabled={postingNote || !noteDraft.trim()}
-                  className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
-                >
-                  {postingNote ? "Posting…" : "Post note"}
-                </button>
-              </div>
+              {canWrite && (
+                <div className="flex gap-1.5">
+                  <input
+                    className="min-w-0 flex-1 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-xs"
+                    placeholder="Add a note…"
+                    value={noteDraft}
+                    onChange={(e) => onNoteDraftChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") onPostNote();
+                    }}
+                  />
+                  <button
+                    onClick={onPostNote}
+                    disabled={postingNote || !noteDraft.trim()}
+                    className="shrink-0 rounded-md bg-black/80 dark:bg-white/80 px-2 py-1 text-xs text-white dark:text-black disabled:opacity-40"
+                  >
+                    {postingNote ? "Posting…" : "Post note"}
+                  </button>
+                </div>
+              )}
             </div>
           </td>
         </tr>
