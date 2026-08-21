@@ -193,18 +193,18 @@ const COPY: Record<string, Copy> = {
     constructionTabs: [
       {
         name: "Dashboard",
-        what: "A quick look at the property — who is staying there now, and who is coming next.",
+        what: "A quick look at the property — who is staying there now, and who is coming next so you can see when guests will be on the property.",
         how: "You don't type anything here. It updates by itself.",
       },
       {
         name: "Construction Management",
-        what: "A to-do list for the property. Anyone on the team can add a job and check it off when it's done.",
+        what: "A to-do list for the property. Anyone on the team can add a job and check it off when it's done. Please add the estimated time of completion as well as the cost (if it's not covered warranty work) so that everyone can track.",
         how: "Type the job and press Add. When it's finished, click the checkbox next to it. Your name and the time are saved so everyone can see who did it.",
       },
       {
         name: "Construction Budget",
         what: "The money plan for the project, and what has really been spent so far.",
-        how: "Find the item you worked on. Type how much it really cost in the box called Actual (USD). You can also click Notes to write more about it.",
+        how: "Find the item you worked on. Type how much it really cost in the box called Actual (COP). You can also click Notes to write more about it.",
       },
     ],
     constructionNotesTitle: "How to use it",
@@ -335,18 +335,18 @@ const COPY: Record<string, Copy> = {
     constructionTabs: [
       {
         name: "Dashboard",
-        what: "Una vista rápida de la propiedad: quién está ahí ahora y quién llega después.",
+        what: "Una vista rápida de la propiedad: quién está ahí ahora y quién llega después, así puedes ver cuándo habrá huéspedes en la propiedad.",
         how: "No tienes que escribir nada aquí. Se actualiza solo.",
       },
       {
         name: "Construction Management",
-        what: "Una lista de tareas de la propiedad. Cualquiera del equipo puede agregar una tarea y marcarla como hecha.",
+        what: "Una lista de tareas de la propiedad. Cualquiera del equipo puede agregar una tarea y marcarla como hecha. Por favor agrega la fecha estimada de finalización y el costo (si no es un trabajo cubierto por garantía) para que todos puedan hacer seguimiento.",
         how: "Escribe la tarea y presiona Add. Cuando esté lista, marca la casilla junto a ella. Tu nombre y la hora quedan guardados para que todos vean quién la hizo.",
       },
       {
         name: "Construction Budget",
         what: "El plan de gastos del proyecto, y lo que realmente se ha gastado hasta ahora.",
-        how: "Busca el ítem en el que trabajaste. Escribe cuánto costó de verdad en la casilla Actual (USD). También puedes hacer clic en Notes para escribir más detalles.",
+        how: "Busca el ítem en el que trabajaste. Escribe cuánto costó de verdad en la casilla Actual (COP). También puedes hacer clic en Notes para escribir más detalles.",
       },
     ],
     constructionNotesTitle: "Cómo usarla",
@@ -477,18 +477,18 @@ const COPY: Record<string, Copy> = {
     constructionTabs: [
       {
         name: "Dashboard",
-        what: "Uma visão rápida da propriedade: quem está lá agora e quem chega a seguir.",
+        what: "Uma visão rápida da propriedade: quem está lá agora e quem chega a seguir, assim você pode ver quando haverá hóspedes na propriedade.",
         how: "Você não precisa digitar nada aqui. Ele se atualiza sozinho.",
       },
       {
         name: "Construction Management",
-        what: "Uma lista de tarefas da propriedade. Qualquer pessoa da equipe pode adicionar uma tarefa e marcá-la como concluída.",
+        what: "Uma lista de tarefas da propriedade. Qualquer pessoa da equipe pode adicionar uma tarefa e marcá-la como concluída. Por favor, adicione a data estimada de conclusão e o custo (se não for um trabalho coberto por garantia) para que todos possam acompanhar.",
         how: "Escreva a tarefa e clique em Add. Quando terminar, marque a caixinha ao lado dela. Seu nome e o horário ficam salvos para todos verem quem fez.",
       },
       {
         name: "Construction Budget",
         what: "O plano de gastos do projeto, e o que já foi realmente gasto até agora.",
-        how: "Encontre o item em que você trabalhou. Digite quanto custou de verdade na caixa Actual (USD). Você também pode clicar em Notes para escrever mais detalhes.",
+        how: "Encontre o item em que você trabalhou. Digite quanto custou de verdade na caixa Actual (COP). Você também pode clicar em Notes para escrever mais detalhes.",
       },
     ],
     constructionNotesTitle: "Como usar",
