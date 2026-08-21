@@ -77,6 +77,11 @@ function fmtCop(n: number | null): string {
   return "$" + Math.round(n).toLocaleString("es-CO");
 }
 
+function fmtUsd(n: number | null): string {
+  if (n === null) return "—";
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
 type Note = {
   id: string;
   body: string;
@@ -132,6 +137,11 @@ type ItemRowProps = {
    * edit allocate on the construction tabs. They can have view only"). A
    * CEO login other than Seni sees everything read-only. */
   canWrite: boolean;
+  /** False on every property except Legacy Colombia (2026-08-21) — labels
+   * the estimated-cost and fund-allocation fields "(USD)" instead of "(COP)"
+   * on those properties. No conversion happens either way — this tab never
+   * did any. */
+  isColombia: boolean;
   togglingId: string | null;
   removingId: string | null;
   savingDateId: string | null;
@@ -175,6 +185,7 @@ function ItemRow({
   t,
   canDelete,
   canWrite,
+  isColombia,
   togglingId,
   removingId,
   savingDateId,
@@ -213,9 +224,11 @@ function ItemRow({
   const notesOpen = openNotesId === item.id;
   const notes = notesByItem[item.id];
   const editing = editingId === item.id;
-  // Local draft for the Est. cost (COP) input — saved on blur, same pattern
-  // as the Budget tab's Actual (COP) entry.
+  // Local draft for the Est. cost input — saved on blur, same pattern as the
+  // Budget tab's Actual entry. Value is COP on Legacy Colombia, USD
+  // everywhere else (2026-08-21) — no conversion, just the right label.
   const [costDraft, setCostDraft] = useState(item.estimatedCostCop !== null ? String(item.estimatedCostCop) : "");
+  const money = (n: number | null) => (isColombia ? fmtCop(n) : fmtUsd(n));
   const allocations = allocationsByItem.get(item.id) ?? [];
   const allocatedCop = allocations.reduce((s, a) => s + a.amountCop, 0);
   const allocOpen = allocOpenId === item.id;
@@ -260,7 +273,7 @@ function ItemRow({
             {/* Estimated cost in COP (2026-08-21, Seni's ask) — saved on
                 blur, open to anyone with tab access. */}
             <span className="flex items-center gap-1.5">
-              <span>Est. cost (COP):</span>
+              <span>Est. cost ({isColombia ? "COP" : "USD"}):</span>
               <input
                 type="number"
                 min={0}
@@ -284,7 +297,7 @@ function ItemRow({
                 allocatedCop > 0 ? "text-[var(--accent)]" : "text-black/40 dark:text-white/40"
               } hover:underline`}
             >
-              Funds used: {allocatedCop > 0 ? fmtCop(allocatedCop) : "—"} {allocOpen ? "▾" : "▸"}
+              Funds used: {allocatedCop > 0 ? money(allocatedCop) : "—"} {allocOpen ? "▾" : "▸"}
             </button>
           </div>
           {allocOpen && (
@@ -294,7 +307,7 @@ function ItemRow({
                   {allocations.map((a) => (
                     <li key={a.id} className="flex items-center justify-between gap-2 text-xs text-black/60 dark:text-white/60">
                       <span>
-                        <span className="font-medium">{fmtCop(a.amountCop)}</span> — {a.createdBy}, {fmtWhen(a.createdAt)}
+                        <span className="font-medium">{money(a.amountCop)}</span> — {a.createdBy}, {fmtWhen(a.createdAt)}
                         {a.note ? ` — ${a.note}` : ""}
                       </span>
                       {canDelete && (
@@ -316,7 +329,7 @@ function ItemRow({
                     type="number"
                     min={0}
                     step="1"
-                    placeholder="Amount (COP)"
+                    placeholder={isColombia ? "Amount (COP)" : "Amount (USD)"}
                     value={allocAmountDraft}
                     onChange={(e) => onAllocAmountChange(e.target.value)}
                     className="w-32 rounded border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-xs"
@@ -508,6 +521,14 @@ export function ConstructionBoard() {
   // (2026-08-21, Seni's ask). Defaults false (fail closed) until the API
   // response comes back.
   const [canWrite, setCanWrite] = useState(false);
+  // USD-only gate (2026-08-21, Seni's ask: "for all properties except Legacy
+  // Colombia... USD ONLY for all tabs and sections"). Set from the API
+  // response's `currencyMode` — see api/construction/route.ts. No conversion
+  // happens either way on this tab (it never has); this only picks the
+  // right label ("COP" vs "USD") for the estimated-cost and allocation
+  // fields. Defaults to "cop" until the first load resolves.
+  const [currencyMode, setCurrencyMode] = useState<"cop" | "usd">("cop");
+  const isColombia = currencyMode === "cop";
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState("");
@@ -566,6 +587,7 @@ export function ConstructionBoard() {
       setAllocations(json.allocations ?? []);
       setCanDelete(Boolean(json.canDelete));
       setCanWrite(Boolean(json.canWrite));
+      if (json.currencyMode === "usd" || json.currencyMode === "cop") setCurrencyMode(json.currencyMode);
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
@@ -753,7 +775,8 @@ export function ConstructionBoard() {
   }
 
   async function removeAllocation(allocation: Allocation) {
-    if (removingAllocId || !window.confirm(`Remove the ${fmtCop(allocation.amountCop)} COP allocation?`)) return;
+    const amountLabel = isColombia ? `${fmtCop(allocation.amountCop)} COP` : fmtUsd(allocation.amountCop);
+    if (removingAllocId || !window.confirm(`Remove the ${amountLabel} allocation?`)) return;
     setRemovingAllocId(allocation.id);
     setError(null);
     try {
@@ -886,6 +909,7 @@ export function ConstructionBoard() {
     t,
     canDelete,
     canWrite,
+    isColombia,
     togglingId,
     removingId,
     savingDateId,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
-import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, isColombiaGroup } from "@/lib/propertyGroups";
 import { canManageConstruction, canWriteConstruction } from "@/lib/construction";
 import {
   applyFxRate,
@@ -53,10 +53,16 @@ export async function GET(req: NextRequest) {
   if (error) return error;
   try {
     const groupId = await resolveGroupId(req, session.email);
+    const colombia = isColombiaGroup(groupId);
     const [rawItems, log, fxRate] = await Promise.all([
       listConstructionBudgetItems(session.organizationId, groupId),
       listConstructionBudgetActivityLog(session.organizationId, groupId),
-      getConstructionBudgetFxRate(session.organizationId, groupId),
+      // USD-only properties (2026-08-21, Seni's ask: "for all properties
+      // except Legacy Colombia... USD ONLY, remove the toggle and exchange
+      // rate feature") never look up a stored rate — rate 1 makes
+      // applyFxRate() below a pure passthrough, so every entered figure on
+      // those properties IS the USD amount, with no conversion step at all.
+      colombia ? getConstructionBudgetFxRate(session.organizationId, groupId) : Promise.resolve(1),
     ]);
     // Budgeted (USD) is recomputed live from each row's total_cop at the
     // current rate (2026-08-20, Seni's ask) rather than staying pinned to
@@ -66,6 +72,10 @@ export async function GET(req: NextRequest) {
       items,
       log,
       fxRate,
+      // Drives ConstructionBudgetBoard.tsx: Legacy Colombia keeps the
+      // COP/USD view toggle + editable FX-rate box; every other property
+      // shows a single USD-labeled column with neither (2026-08-21).
+      currencyMode: colombia ? "cop" : "usd",
       viewerRole: session.role,
       // Drives the Import panel, the per-row/per-log delete buttons, and the
       // FX rate edit box in ConstructionBudgetBoard.tsx — Seni on Legacy
@@ -133,7 +143,7 @@ export async function PATCH(req: NextRequest) {
     | null;
   if (!body?.id) return NextResponse.json({ error: "id is required." }, { status: 400 });
   if (body.actualCop !== undefined && body.actualCop !== null && (typeof body.actualCop !== "number" || body.actualCop < 0)) {
-    return NextResponse.json({ error: "Actual spend must be a positive number (COP)." }, { status: 400 });
+    return NextResponse.json({ error: "Actual spend must be a positive number." }, { status: 400 });
   }
 
   try {
@@ -152,7 +162,8 @@ export async function PATCH(req: NextRequest) {
       actorName: user?.name ?? null,
     });
     if (!item) return NextResponse.json({ error: "No such row." }, { status: 404 });
-    const fxRate = await getConstructionBudgetFxRate(session.organizationId, groupId);
+    // USD-only properties: rate 1, same passthrough as GET above.
+    const fxRate = isColombiaGroup(groupId) ? await getConstructionBudgetFxRate(session.organizationId, groupId) : 1;
     return NextResponse.json({ ok: true, item: applyFxRate([item], fxRate)[0] });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error.";

@@ -1,5 +1,15 @@
 import { query, queryOne } from "./db";
-import { DEFAULT_PROPERTY_GROUP_ID } from "./propertyGroups";
+import { DEFAULT_PROPERTY_GROUP_ID, isColombiaGroup } from "./propertyGroups";
+
+/** Activity-log detail strings below say "COP" because Legacy Colombia is
+ * the only property that tracks construction spend in COP — every other
+ * property is USD-only (2026-08-21, Seni's ask: "USD ONLY for all tabs and
+ * sections"), and the same `_cop`-named fields hold the USD amount directly
+ * for those properties (no conversion). This picks the right suffix for the
+ * log line without touching the underlying column/field names. */
+function moneySuffix(propertyGroupId: string): string {
+  return isColombiaGroup(propertyGroupId) ? "COP" : "USD";
+}
 
 // Deletion (both items and activity-log entries) is restricted to Seni
 // specifically, not just any CEO login (2026-08-20, Seni's ask: "only allow
@@ -582,7 +592,7 @@ export async function setConstructionItemEstimatedCost(input: {
     itemTitle: row.title,
     action: "edited",
     detail: input.estimatedCostCop !== null
-      ? `Estimated cost set to ${Math.round(input.estimatedCostCop).toLocaleString("en-US")} COP`
+      ? `Estimated cost set to ${Math.round(input.estimatedCostCop).toLocaleString("en-US")} ${moneySuffix(input.propertyGroupId)}`
       : "Estimated cost cleared",
     actorEmail: input.actorEmail,
     actorName: input.actorName,
@@ -678,7 +688,7 @@ export async function addConstructionFundAllocation(input: {
     itemId: item.id,
     itemTitle: item.title,
     action: "allocated",
-    detail: `Allocated ${Math.round(input.amountCop).toLocaleString("en-US")} COP from construction funds${input.note ? ` — ${input.note}` : ""}`,
+    detail: `Allocated ${Math.round(input.amountCop).toLocaleString("en-US")} ${moneySuffix(input.propertyGroupId)} from construction funds${input.note ? ` — ${input.note}` : ""}`,
     actorEmail: input.actorEmail,
     actorName: input.actorName,
   });
@@ -710,7 +720,7 @@ export async function deleteConstructionFundAllocation(input: {
     itemId: row.item_id,
     itemTitle: item?.title ?? "(deleted item)",
     action: "allocated",
-    detail: `Removed a ${Math.round(Number(row.amount_cop)).toLocaleString("en-US")} COP allocation`,
+    detail: `Removed a ${Math.round(Number(row.amount_cop)).toLocaleString("en-US")} ${moneySuffix(input.propertyGroupId)} allocation`,
     actorEmail: input.actorEmail,
     actorName: input.actorName,
   });

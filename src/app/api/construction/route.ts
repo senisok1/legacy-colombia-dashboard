@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
-import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, isColombiaGroup } from "@/lib/propertyGroups";
 import {
   canManageConstruction,
   canWriteConstruction,
@@ -56,6 +56,12 @@ export async function GET(req: NextRequest) {
       items,
       log,
       allocations,
+      // Drives ConstructionBoard.tsx: Legacy Colombia labels estimated
+      // cost/allocations "(COP)"; every other property labels the same
+      // fields "(USD)" (2026-08-21, Seni's ask: "USD ONLY for all tabs and
+      // sections") — no conversion either way, just the correct label for
+      // what's actually being entered on that property.
+      currencyMode: isColombiaGroup(groupId) ? "cop" : "usd",
       viewerRole: session.role,
       // Drives the delete buttons in ConstructionBoard.tsx — Seni always;
       // any other CEO login also gets it on every property EXCEPT Legacy
@@ -175,7 +181,7 @@ export async function PATCH(req: NextRequest) {
 
     if ("estimatedCostCop" in body) {
       if (body.estimatedCostCop !== null && (typeof body.estimatedCostCop !== "number" || body.estimatedCostCop < 0)) {
-        return NextResponse.json({ error: "Estimated cost must be a positive number (COP) or null." }, { status: 400 });
+        return NextResponse.json({ error: "Estimated cost must be a positive number or null." }, { status: 400 });
       }
       const item = await setConstructionItemEstimatedCost({
         organizationId: session.organizationId,

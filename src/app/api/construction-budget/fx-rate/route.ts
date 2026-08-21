@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { canManageConstruction } from "@/lib/construction";
-import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, isColombiaGroup } from "@/lib/propertyGroups";
 import { setConstructionBudgetFxRate } from "@/lib/constructionBudget";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,14 @@ export const dynamic = "force-dynamic";
 // tab, same "changing the budget" policy as import/delete (see
 // api/construction-budget/route.ts) — but any CEO login gets this on every
 // other property (full Seni-level access there).
+//
+// USD-ONLY GATE (2026-08-21, Seni's ask: "for all properties except Legacy
+// Colombia... remove the toggle and exchange rate feature. USD ONLY for all
+// tabs and sections"). Legacy Colombia is the only property that tracks its
+// construction project in COP at all — every other property is hard-blocked
+// from ever setting a rate here, not just hidden from the UI, so a stray
+// client call (or a future UI bug) can't silently start converting a
+// USD-only property's figures.
 export async function PATCH(req: NextRequest) {
   const session = getSessionFromRequest(req);
   if (!session) return NextResponse.json({ error: "Not logged in." }, { status: 401 });
@@ -29,6 +37,12 @@ export async function PATCH(req: NextRequest) {
   try {
     const user = await getUserByEmail(session.email).catch(() => null);
     const groupId = effectivePropertyGroupId(req.cookies.get(PROPERTY_GROUP_COOKIE)?.value, user?.propertyAccess);
+    if (!isColombiaGroup(groupId)) {
+      return NextResponse.json(
+        { error: "This property tracks construction spend in USD only — there's no exchange rate to set." },
+        { status: 400 }
+      );
+    }
     if (!canManageConstruction(session.email, session.role, groupId)) {
       return NextResponse.json({ error: "Only Seni can change the exchange rate on this property." }, { status: 403 });
     }

@@ -103,3 +103,15 @@ export function effectivePropertyGroupId(cookieValue: string | undefined | null,
 export function normalizePropertyGroupId(id: string | undefined | null): string {
   return isValidPropertyGroupId(id) ? id : DEFAULT_PROPERTY_GROUP_ID;
 }
+
+/** True only for Legacy Colombia (2026-08-21, Seni's ask: "for all
+ * properties except Legacy Colombia... USD ONLY for all tabs and
+ * sections"). Legacy Colombia is the only property with a real
+ * COP-denominated construction project (see lib/constructionBudget.ts,
+ * lib/construction.ts) — every other property's construction figures are
+ * entered and shown in USD directly, with no COP/USD toggle and no editable
+ * exchange rate. Shared here so every call site (API routes + components)
+ * uses the exact same check instead of re-deriving it. */
+export function isColombiaGroup(groupId: string | undefined | null): boolean {
+  return (groupId ?? DEFAULT_PROPERTY_GROUP_ID) === DEFAULT_PROPERTY_GROUP_ID;
+}

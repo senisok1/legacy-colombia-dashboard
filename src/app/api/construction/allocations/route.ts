@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
     | null;
   if (!body?.itemId) return NextResponse.json({ error: "itemId is required." }, { status: 400 });
   if (typeof body.amountCop !== "number" || !Number.isFinite(body.amountCop) || body.amountCop <= 0) {
-    return NextResponse.json({ error: "Enter a positive amount (COP)." }, { status: 400 });
+    return NextResponse.json({ error: "Enter a positive amount." }, { status: 400 });
   }
   if (body.note && body.note.length > 500) {
     return NextResponse.json({ error: "Note is too long (500 characters max)." }, { status: 400 });

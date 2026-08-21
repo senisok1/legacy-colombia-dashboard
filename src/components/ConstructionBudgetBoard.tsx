@@ -413,6 +413,14 @@ export function ConstructionBudgetBoard() {
   const [fxRateDraft, setFxRateDraft] = useState("");
   const [editingFxRate, setEditingFxRate] = useState(false);
   const [savingFxRate, setSavingFxRate] = useState(false);
+  // USD-only gate (2026-08-21, Seni's ask: "for all properties except Legacy
+  // Colombia... remove the toggle and exchange rate feature. USD ONLY for
+  // all tabs and sections"). Set from the API response's `currencyMode` —
+  // see api/construction-budget/route.ts's header comment. Defaults to
+  // "cop" (the richer/original behavior) until the first load resolves, so
+  // there's no flash of the wrong UI on Legacy Colombia while this loads.
+  const [currencyMode, setCurrencyMode] = useState<"cop" | "usd">("cop");
+  const isColombia = currencyMode === "cop";
   // Per-item notes thread (2026-08-20, Seni's ask: "add a notes button for
   // each item in the budget for any user to add notes") — same lazy-fetch/
   // cache-per-item pattern as ConstructionBoard.tsx's Progress Notes.
@@ -466,15 +474,19 @@ export function ConstructionBudgetBoard() {
       /* non-fatal */
     }
   };
-  // Every money figure on this tab is COP at heart; this renders it in the
-  // currently toggled display currency.
+  // Every money figure on this tab is COP at heart FOR LEGACY COLOMBIA;
+  // this renders it in the currently toggled display currency there. Every
+  // other property is USD-only (2026-08-21) — the underlying `_cop`-named
+  // fields hold the USD amount directly for those properties (no toggle, no
+  // conversion), so money() just formats the raw number as USD.
   const money = useCallback(
     (cop: number | null): string => {
       if (cop === null) return "—";
+      if (!isColombia) return fmtUsd(cop);
       if (showUsd && fxRate && fxRate > 0) return fmtUsd(cop / fxRate);
       return fmtCop(cop);
     },
-    [showUsd, fxRate]
+    [isColombia, showUsd, fxRate]
   );
   const hasDataRef = useRef(false);
 
@@ -488,6 +500,7 @@ export function ConstructionBudgetBoard() {
       setCanManage(Boolean(json.canManage));
       setCanWrite(Boolean(json.canWrite));
       if (typeof json.fxRate === "number") setFxRate(json.fxRate);
+      if (json.currencyMode === "usd" || json.currencyMode === "cop") setCurrencyMode(json.currencyMode);
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
@@ -720,7 +733,7 @@ export function ConstructionBudgetBoard() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      setNotice(`Logged a ${fmtCop(amount)} COP deposit.`);
+      setNotice(`Logged a ${isColombia ? `${fmtCop(amount)} COP` : fmtUsd(amount)} deposit.`);
       setDepositAmountDraft("");
       setDepositNoteDraft("");
       setDepositDateDraft("");
@@ -735,7 +748,8 @@ export function ConstructionBudgetBoard() {
   }
 
   async function removeDeposit(deposit: Deposit) {
-    if (removingDepositId || !window.confirm(`Remove the ${fmtCop(deposit.amountCop)} COP deposit from ${deposit.depositedAt}?`)) return;
+    const amountLabel = isColombia ? `${fmtCop(deposit.amountCop)} COP` : fmtUsd(deposit.amountCop);
+    if (removingDepositId || !window.confirm(`Remove the ${amountLabel} deposit from ${deposit.depositedAt}?`)) return;
     setRemovingDepositId(deposit.id);
     setError(null);
     try {
@@ -800,7 +814,16 @@ export function ConstructionBudgetBoard() {
     <div className="space-y-4">
       {/* Exchange rate — Seni-only to edit (2026-08-20, Seni's ask: "add a
           box somewhere where I can modify that rate which will then modify
-          the USD budget"). Everyone else sees the current rate read-only. */}
+          the USD budget"). Everyone else sees the current rate read-only.
+          USD-only properties (2026-08-21, Seni's ask: "remove the toggle and
+          exchange rate feature... USD ONLY") skip this box entirely — there's
+          no rate to show or edit, everything below is already in USD. */}
+      {!isColombia && (
+        <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2.5 text-sm text-black/50 dark:text-white/50">
+          All figures on this tab are in USD.
+        </div>
+      )}
+      {isColombia && (
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2.5 text-sm">
         <span className="text-black/50 dark:text-white/50">Exchange rate:</span>
         {editingFxRate ? (
@@ -880,6 +903,7 @@ export function ConstructionBudgetBoard() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -949,14 +973,14 @@ export function ConstructionBudgetBoard() {
         {showAddDeposit && canManage && (
           <div className="flex flex-wrap items-end gap-2 rounded-md border border-black/10 dark:border-white/10 p-3">
             <label className="flex flex-col gap-1 text-xs text-black/50 dark:text-white/50">
-              Amount (COP)
+              Amount ({isColombia ? "COP" : "USD"})
               <input
                 type="text"
                 inputMode="decimal"
                 className="w-40 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
                 value={depositAmountDraft}
                 onChange={(e) => setDepositAmountDraft(e.target.value)}
-                placeholder="20.000.000"
+                placeholder={isColombia ? "20.000.000" : "20000"}
                 autoFocus
               />
             </label>
@@ -1200,9 +1224,11 @@ export function ConstructionBudgetBoard() {
                 <th className="px-3 py-2 font-medium">Description</th>
                 <th className="px-3 py-2 font-medium">Unit</th>
                 <th className="px-3 py-2 font-medium text-right">Qty</th>
-                <th className="px-3 py-2 font-medium text-right">Unit price (COP)</th>
-                <th className="px-3 py-2 font-medium text-right">Budgeted ({showUsd ? "USD" : "COP"})</th>
-                <th className="px-3 py-2 font-medium text-right">Actual (COP)</th>
+                <th className="px-3 py-2 font-medium text-right">Unit price ({isColombia ? "COP" : "USD"})</th>
+                <th className="px-3 py-2 font-medium text-right">
+                  Budgeted ({isColombia ? (showUsd ? "USD" : "COP") : "USD"})
+                </th>
+                <th className="px-3 py-2 font-medium text-right">Actual ({isColombia ? "COP" : "USD"})</th>
                 <th className="px-3 py-2 font-medium text-right">Variance</th>
                 <th className="px-3 py-2" />
               </tr>
@@ -1235,6 +1261,7 @@ export function ConstructionBudgetBoard() {
                         saving={savingId === item.id}
                         canManage={canManage}
                         canWrite={canWrite}
+                        isColombia={isColombia}
                         money={money}
                         onSaveActual={(v) => void saveActual(item, v)}
                         onRemove={() => void removeItem(item)}
@@ -1323,6 +1350,7 @@ function ItemRow({
   saving,
   canManage,
   canWrite,
+  isColombia,
   money,
   onSaveActual,
   onRemove,
@@ -1342,6 +1370,10 @@ function ItemRow({
    * (2026-08-21, Seni's ask). A CEO login other than Seni (Ahmed, Geo) sees
    * these fields read-only. */
   canWrite: boolean;
+  /** False on every property except Legacy Colombia (2026-08-21) — this
+   * property tracks construction spend in USD only, so the entry field and
+   * unit-price column below are labeled/formatted as USD instead of COP. */
+  isColombia: boolean;
   /** Renders a COP amount in the tab's current display currency. */
   money: (cop: number | null) => string;
   onSaveActual: (v: number | null) => void;
@@ -1387,7 +1419,7 @@ function ItemRow({
         </td>
         <td className="px-3 py-1.5 whitespace-nowrap">{item.unit}</td>
         <td className="px-3 py-1.5 text-right whitespace-nowrap">{item.quantity ?? ""}</td>
-        <td className="px-3 py-1.5 text-right whitespace-nowrap">{fmtCop(item.unitPriceCop)}</td>
+        <td className="px-3 py-1.5 text-right whitespace-nowrap">{money(item.unitPriceCop)}</td>
         <td className="px-3 py-1.5 text-right whitespace-nowrap">{money(item.totalCop)}</td>
         <td className="px-3 py-1.5 text-right whitespace-nowrap">
           <input
@@ -1395,7 +1427,7 @@ function ItemRow({
             min={0}
             step="1"
             className="w-32 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-1.5 py-1 text-right text-xs"
-            placeholder="COP"
+            placeholder={isColombia ? "COP" : "USD"}
             value={draft}
             disabled={!canWrite || saving}
             onChange={(e) => setDraft(e.target.value)}

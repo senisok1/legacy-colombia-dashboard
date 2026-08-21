@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionFromRequest } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
-import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, isColombiaGroup } from "@/lib/propertyGroups";
 import {
   canManageConstruction,
   getTotalConstructionFundAllocationsCop,
@@ -49,18 +49,21 @@ export async function GET(req: NextRequest) {
   if (error) return error;
   try {
     const groupId = await resolveGroupId(req, session.email);
+    const colombia = isColombiaGroup(groupId);
     // ALL COP since 2026-08-21 (Seni: "make everything COP... I will enter
     // the amounts deposited in COP as well"). USD is display-only, derived
     // client-side from fxRate. "Spent" = budget lines' actual COP + fund
     // allocations to Construction Management open items ("every dollar is
-    // accounted for").
+    // accounted for"). USD-only properties (2026-08-21) skip the rate
+    // lookup entirely — see api/construction-budget/route.ts's header
+    // comment for why rate 1 is the correct passthrough.
     const [deposits, items, spendByCategory, allocations, allocatedCop, fxRate] = await Promise.all([
       listConstructionFundsDeposits(session.organizationId, groupId),
       listConstructionBudgetItems(session.organizationId, groupId),
       getConstructionFundsSpendByCategory(session.organizationId, groupId),
       listConstructionFundAllocations(session.organizationId, groupId),
       getTotalConstructionFundAllocationsCop(session.organizationId, groupId),
-      getConstructionBudgetFxRate(session.organizationId, groupId),
+      colombia ? getConstructionBudgetFxRate(session.organizationId, groupId) : Promise.resolve(1),
     ]);
     const totalDepositedCop = deposits.reduce((s, d) => s + d.amountCop, 0);
     const budgetSpentCop = items.reduce((s, i) => s + (i.actualCop ?? 0), 0);
@@ -75,6 +78,7 @@ export async function GET(req: NextRequest) {
       spendByCategory,
       allocations,
       fxRate,
+      currencyMode: colombia ? "cop" : "usd",
       canManage: canManageConstruction(session.email, session.role, groupId),
     });
   } catch (err) {
@@ -90,7 +94,7 @@ export async function POST(req: NextRequest) {
 
   const body = (await req.json().catch(() => null)) as { amountCop?: number; note?: string; depositedAt?: string } | null;
   if (typeof body?.amountCop !== "number" || !Number.isFinite(body.amountCop) || body.amountCop <= 0) {
-    return NextResponse.json({ error: "Enter a positive deposit amount (COP)." }, { status: 400 });
+    return NextResponse.json({ error: "Enter a positive deposit amount." }, { status: 400 });
   }
   if (body.depositedAt && !/^\d{4}-\d{2}-\d{2}$/.test(body.depositedAt)) {
     return NextResponse.json({ error: "Invalid date." }, { status: 400 });
