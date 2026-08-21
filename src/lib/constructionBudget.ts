@@ -99,7 +99,7 @@ function fromRow(r: Row): ConstructionBudgetItem {
 export type ConstructionBudgetLogEntry = {
   id: string;
   itemDescription: string | null;
-  action: "imported" | "updated" | "deleted" | "noted";
+  action: "imported" | "updated" | "deleted" | "noted" | "deposited";
   detail: string | null;
   actor: string;
   at: string;
@@ -441,6 +441,149 @@ export async function updateConstructionBudgetItem(input: {
     );
   }
   return fromRow(row);
+}
+
+// Construction Funds — a deposits ledger separate from
+// construction_budget_items (2026-08-20, Seni's ask: "a 'remaining balance'
+// box that shows construction funds I've deposited but haven't been used
+// yet... a column that shows where the balance is spent so that funds that
+// I deposit are always accounted for"). Deposits live in their own table so
+// a budget re-import (which wipes and recreates construction_budget_items,
+// see replaceConstructionBudgetItems above) never touches them — Seni's
+// framing ("these items will always have to be added after an import by the
+// CRM") confirmed deposits are managed entirely in the CRM, not sourced from
+// the spreadsheet. "Spent" is computed live from actual_usd, which is
+// already the existing per-line "real spend" field on this tab.
+export type ConstructionFundsDeposit = {
+  id: string;
+  amountUsd: number;
+  note: string | null;
+  depositedAt: string;
+  createdAt: string;
+  createdBy: string;
+};
+
+type DepositRow = {
+  id: string;
+  amount_usd: string;
+  note: string | null;
+  deposited_at: string;
+  created_at: string;
+  created_by_email: string;
+  created_by_name: string | null;
+};
+
+function depositFromRow(r: DepositRow): ConstructionFundsDeposit {
+  return {
+    id: r.id,
+    amountUsd: Number(r.amount_usd),
+    note: r.note,
+    depositedAt: r.deposited_at,
+    createdAt: r.created_at,
+    createdBy: r.created_by_name?.trim() || r.created_by_email,
+  };
+}
+
+export async function listConstructionFundsDeposits(
+  organizationId: string,
+  propertyGroupId: string
+): Promise<ConstructionFundsDeposit[]> {
+  const rows = await query<DepositRow>(
+    `select id, amount_usd, note, deposited_at, created_at, created_by_email, created_by_name
+     from construction_funds_deposits
+     where organization_id = $1 and property_group_id = $2
+     order by deposited_at desc, created_at desc`,
+    [organizationId, propertyGroupId]
+  );
+  return rows.map(depositFromRow);
+}
+
+/** Seni-only (enforced by the caller, see api/construction-budget/funds/
+ * route.ts) — logging a deposit is a real money event, same trust tier as
+ * import/delete/FX rate on this tab. */
+export async function addConstructionFundsDeposit(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  amountUsd: number;
+  note: string | null;
+  depositedAt: string | null;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<ConstructionFundsDeposit> {
+  const row = await queryOne<DepositRow>(
+    `insert into construction_funds_deposits
+       (organization_id, property_group_id, amount_usd, note, deposited_at, created_by_email, created_by_name)
+     values ($1, $2, $3, $4, coalesce($5::date, current_date), $6, $7)
+     returning id, amount_usd, note, deposited_at, created_at, created_by_email, created_by_name`,
+    [input.organizationId, input.propertyGroupId, input.amountUsd, input.note, input.depositedAt, input.actorEmail, input.actorName]
+  );
+  if (!row) throw new Error("Failed to record the deposit.");
+
+  await query(
+    `insert into construction_budget_activity_log
+       (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
+     values ($1, $2, null, null, 'deposited', $3, $4, $5)`,
+    [
+      input.organizationId,
+      input.propertyGroupId,
+      `$${Math.round(input.amountUsd).toLocaleString("en-US")} deposited${input.note ? ` — ${input.note}` : ""}`,
+      input.actorEmail,
+      input.actorName,
+    ]
+  );
+
+  return depositFromRow(row);
+}
+
+/** Seni-only, same policy as addConstructionFundsDeposit. */
+export async function deleteConstructionFundsDeposit(input: {
+  organizationId: string;
+  propertyGroupId: string;
+  id: string;
+  actorEmail: string;
+  actorName: string | null;
+}): Promise<boolean> {
+  const row = await queryOne<{ id: string; amount_usd: string }>(
+    `delete from construction_funds_deposits
+     where id = $1 and organization_id = $2 and property_group_id = $3
+     returning id, amount_usd`,
+    [input.id, input.organizationId, input.propertyGroupId]
+  );
+  if (!row) return false;
+
+  await query(
+    `insert into construction_budget_activity_log
+       (organization_id, property_group_id, item_id, item_description, action, detail, actor_email, actor_name)
+     values ($1, $2, null, null, 'deposited', $3, $4, $5)`,
+    [
+      input.organizationId,
+      input.propertyGroupId,
+      `Removed a $${Math.round(Number(row.amount_usd)).toLocaleString("en-US")} deposit`,
+      input.actorEmail,
+      input.actorName,
+    ]
+  );
+  return true;
+}
+
+/** Category breakdown of Actual (USD) spend — "a column that shows where
+ * the balance is spent" (2026-08-20, Seni's ask). Only categories with real
+ * spend recorded appear, biggest draw on the deposited balance first. */
+export type ConstructionFundsCategorySpend = { category: string; spentUsd: number };
+
+export async function getConstructionFundsSpendByCategory(
+  organizationId: string,
+  propertyGroupId: string
+): Promise<ConstructionFundsCategorySpend[]> {
+  const rows = await query<{ category: string; spent: string }>(
+    `select category, sum(actual_usd) as spent
+     from construction_budget_items
+     where organization_id = $1 and property_group_id = $2 and actual_usd is not null and actual_usd <> 0
+     group by category
+     order by sum(actual_usd) desc`,
+    [organizationId, propertyGroupId]
+  );
+  return rows.map((r) => ({ category: r.category, spentUsd: Number(r.spent) }));
 }
 
 export async function deleteConstructionBudgetItem(input: {

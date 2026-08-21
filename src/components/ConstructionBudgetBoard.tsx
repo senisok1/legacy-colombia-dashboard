@@ -62,10 +62,37 @@ type ImportRow = {
 type LogEntry = {
   id: string;
   itemDescription: string | null;
-  action: "imported" | "updated" | "deleted" | "noted";
+  action: "imported" | "updated" | "deleted" | "noted" | "deposited";
   detail: string | null;
   actor: string;
   at: string;
+};
+
+// Construction Funds (2026-08-20, Seni's ask: "a 'remaining balance' box
+// that shows construction funds I've deposited but haven't been used yet...
+// a column that shows where the balance is spent so that funds that I
+// deposit are always accounted for"). A ledger separate from the budget's
+// line items — deposits live in their own table (api/construction-budget/
+// funds/route.ts) so a re-import never touches them. "Spent" and the
+// category breakdown are both computed live from actual_usd, the existing
+// per-line real-spend field.
+type Deposit = {
+  id: string;
+  amountUsd: number;
+  note: string | null;
+  depositedAt: string;
+  createdAt: string;
+  createdBy: string;
+};
+
+type CategorySpend = { category: string; spentUsd: number };
+
+type Funds = {
+  deposits: Deposit[];
+  totalDeposited: number;
+  totalSpent: number;
+  remaining: number;
+  spendByCategory: CategorySpend[];
 };
 
 function fmtUsd(n: number | null): string {
@@ -362,6 +389,17 @@ export function ConstructionBudgetBoard() {
   const [loadingNotesId, setLoadingNotesId] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState<Record<string, string>>({});
   const [postingNoteId, setPostingNoteId] = useState<string | null>(null);
+  // Construction Funds (2026-08-20, Seni's ask) — deposits ledger + the
+  // Remaining Balance box. Loaded from a separate endpoint since deposits
+  // live in their own table, independent of the budget import cycle.
+  const [funds, setFunds] = useState<Funds | null>(null);
+  const [showAddDeposit, setShowAddDeposit] = useState(false);
+  const [depositAmountDraft, setDepositAmountDraft] = useState("");
+  const [depositDateDraft, setDepositDateDraft] = useState("");
+  const [depositNoteDraft, setDepositNoteDraft] = useState("");
+  const [savingDeposit, setSavingDeposit] = useState(false);
+  const [showDepositsList, setShowDepositsList] = useState(false);
+  const [removingDepositId, setRemovingDepositId] = useState<string | null>(null);
   const hasDataRef = useRef(false);
 
   const load = useCallback(async (fresh = false) => {
@@ -380,9 +418,29 @@ export function ConstructionBudgetBoard() {
     }
   }, []);
 
+  const loadFunds = useCallback(async () => {
+    try {
+      const res = await fetch("/api/construction-budget/funds");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setFunds({
+        deposits: json.deposits ?? [],
+        totalDeposited: json.totalDeposited ?? 0,
+        totalSpent: json.totalSpent ?? 0,
+        remaining: json.remaining ?? 0,
+        spendByCategory: json.spendByCategory ?? [],
+      });
+    } catch {
+      // Silent — the Construction Funds box just stays in its loading state
+      // and retries on the next reload; the main budget table is the
+      // important thing to get on screen.
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadFunds();
+  }, [load, loadFunds]);
 
   async function saveFxRate() {
     const rate = parseCoNumber(fxRateDraft);
@@ -508,6 +566,11 @@ export function ConstructionBudgetBoard() {
       setPreview(null);
       setShowImport(false);
       await load();
+      // A re-import wipes every row's Actual (USD) along with the row
+      // itself (see replaceConstructionBudgetItems) — refresh the Funds box
+      // so "Spent"/"Remaining balance" reflect that immediately rather than
+      // showing stale figures from the budget that just got replaced.
+      await loadFunds();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Import failed.");
     } finally {
@@ -528,8 +591,11 @@ export function ConstructionBudgetBoard() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setItems((prev) => (prev ? prev.map((i) => (i.id === item.id ? json.item : i)) : prev));
       // Background refresh so the activity log picks up the new "updated"
-      // entry without the user having to do anything.
+      // entry, and the Funds box's "Spent"/"Remaining balance"/category
+      // breakdown pick up the new Actual (USD) figure, without the user
+      // having to do anything.
       void load(true);
+      void loadFunds();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
@@ -551,6 +617,61 @@ export function ConstructionBudgetBoard() {
       setItems((prev) => (prev ? prev.filter((i) => i.id !== item.id) : prev));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to remove.");
+    }
+  }
+
+  async function addDeposit() {
+    const amount = parseCoNumber(depositAmountDraft);
+    if (amount === null || amount <= 0) {
+      setError("Enter a valid deposit amount.");
+      return;
+    }
+    setSavingDeposit(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction-budget/funds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amountUsd: amount,
+          note: depositNoteDraft.trim() || undefined,
+          depositedAt: depositDateDraft || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setNotice(`Logged a ${fmtUsd(amount)} deposit.`);
+      setDepositAmountDraft("");
+      setDepositNoteDraft("");
+      setDepositDateDraft("");
+      setShowAddDeposit(false);
+      await loadFunds();
+      void load(true); // picks up the new "deposited" activity-log entry
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to log the deposit.");
+    } finally {
+      setSavingDeposit(false);
+    }
+  }
+
+  async function removeDeposit(deposit: Deposit) {
+    if (removingDepositId || !window.confirm(`Remove the ${fmtUsd(deposit.amountUsd)} deposit from ${deposit.depositedAt}?`)) return;
+    setRemovingDepositId(deposit.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/construction-budget/funds", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: deposit.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await loadFunds();
+      void load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove the deposit.");
+    } finally {
+      setRemovingDepositId(null);
     }
   }
 
@@ -646,6 +767,140 @@ export function ConstructionBudgetBoard() {
           </div>
         </div>
       </div>
+
+      {/* Construction Funds — deposits ledger + Remaining Balance box
+          (2026-08-20, Seni's ask). Viewing is open to anyone who can see
+          this tab; logging/removing a deposit is Seni-only. Deposits live in
+          their own table, so they (and the deposit log) survive a budget
+          re-import untouched — only the spend-by-category breakdown below
+          moves with whatever Actual (USD) figures are currently entered. */}
+      <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">Construction Funds</h3>
+          {canManage && (
+            <button
+              onClick={() => setShowAddDeposit((s) => !s)}
+              className="shrink-0 rounded-md border border-black/15 dark:border-white/15 px-3 py-1.5 text-xs hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              {showAddDeposit ? "Cancel" : "Log a deposit"}
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3">
+            <div className="text-xs text-black/50 dark:text-white/50">Total deposited</div>
+            <div className="text-lg font-semibold">{funds ? fmtUsd(funds.totalDeposited) : "…"}</div>
+          </div>
+          <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3">
+            <div className="text-xs text-black/50 dark:text-white/50">Spent from deposits</div>
+            <div className="text-lg font-semibold">{funds ? fmtUsd(funds.totalSpent) : "…"}</div>
+          </div>
+          <div className="rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3">
+            <div className="text-xs text-black/50 dark:text-white/50">Remaining balance</div>
+            <div className={`text-lg font-semibold ${funds && funds.remaining < 0 ? "text-red-500" : ""}`}>
+              {funds ? fmtUsd(funds.remaining) : "…"}
+            </div>
+          </div>
+        </div>
+
+        {showAddDeposit && canManage && (
+          <div className="flex flex-wrap items-end gap-2 rounded-md border border-black/10 dark:border-white/10 p-3">
+            <label className="flex flex-col gap-1 text-xs text-black/50 dark:text-white/50">
+              Amount (USD)
+              <input
+                type="text"
+                inputMode="decimal"
+                className="w-32 rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
+                value={depositAmountDraft}
+                onChange={(e) => setDepositAmountDraft(e.target.value)}
+                placeholder="5000"
+                autoFocus
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-black/50 dark:text-white/50">
+              Date
+              <input
+                type="date"
+                className="rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
+                value={depositDateDraft}
+                onChange={(e) => setDepositDateDraft(e.target.value)}
+              />
+            </label>
+            <label className="flex min-w-[10rem] flex-1 flex-col gap-1 text-xs text-black/50 dark:text-white/50">
+              Note (optional)
+              <input
+                type="text"
+                className="w-full rounded-md border border-black/15 dark:border-white/15 bg-transparent px-2 py-1 text-sm"
+                value={depositNoteDraft}
+                onChange={(e) => setDepositNoteDraft(e.target.value)}
+                placeholder="e.g. wire from personal account"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void addDeposit();
+                }}
+              />
+            </label>
+            <button
+              onClick={() => void addDeposit()}
+              disabled={savingDeposit}
+              className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs text-white disabled:opacity-40"
+            >
+              {savingDeposit ? "Saving…" : "Add deposit"}
+            </button>
+          </div>
+        )}
+
+        {funds && funds.spendByCategory.length > 0 && (
+          <div>
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-black/50 dark:text-white/50">
+              Where the balance is spent
+            </div>
+            <ul className="space-y-1 text-sm">
+              {funds.spendByCategory.map((c) => (
+                <li key={c.category} className="flex items-center justify-between gap-2 text-black/70 dark:text-white/70">
+                  <span>{c.category}</span>
+                  <span className="font-medium">{fmtUsd(c.spentUsd)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {funds && funds.deposits.length > 0 && (
+          <div>
+            <button
+              onClick={() => setShowDepositsList((v) => !v)}
+              className="text-xs font-medium uppercase tracking-wide text-black/50 hover:text-black/80 dark:text-white/50 dark:hover:text-white/80"
+            >
+              Deposits ({funds.deposits.length}) {showDepositsList ? "▾" : "▸"}
+            </button>
+            {showDepositsList && (
+              <ul className="mt-1 space-y-1">
+                {funds.deposits.map((d) => (
+                  <li key={d.id} className="flex items-start justify-between gap-2 text-sm text-black/70 dark:text-white/70">
+                    <div>
+                      <span className="font-medium">{fmtUsd(d.amountUsd)}</span>{" "}
+                      <span className="text-xs text-black/40 dark:text-white/40">
+                        {d.depositedAt} — logged by {d.createdBy}
+                      </span>
+                      {d.note && <div className="text-xs text-black/50 dark:text-white/50">{d.note}</div>}
+                    </div>
+                    {canManage && (
+                      <button
+                        onClick={() => void removeDeposit(d)}
+                        disabled={removingDepositId === d.id}
+                        className="shrink-0 rounded px-1.5 py-0.5 text-xs text-black/40 hover:text-red-500 dark:text-white/40 disabled:opacity-40"
+                      >
+                        {removingDepositId === d.id ? "Deleting…" : "Delete"}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </section>
 
       {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
