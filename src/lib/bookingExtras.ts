@@ -62,11 +62,24 @@ function toExtra(r: ExtraRow): BookingExtra {
   const guestPaid = money(r.guest_paid);
   const vendorPaid = money(r.vendor_paid);
   const margin = Math.round((guestPaid - vendorPaid) * 100) / 100;
-  // Odd cent goes to the house's side so houseShare + gabrielShare always
-  // equals margin exactly — two figures that silently failed to add up to
-  // the number above them would be worse than no figure at all.
-  const houseShare = Math.round((margin / 2) * 100) / 100;
-  const gabrielShare = Math.round((margin - houseShare) * 100) / 100;
+  // Ice tub setup is house-only (2026-08-22, Seni's ask: "100% of what the
+  // guest pays goes to the house") — Gabriel doesn't arrange or run this
+  // one, unlike the chef/massage/jetski/pontoon extras, so it skips the
+  // normal 50/50 split entirely: the house keeps the whole margin, Gabriel
+  // gets nothing. margin still nets out any real vendor cost first (same as
+  // every other kind) — it's the SPLIT that's different, not the math.
+  let houseShare: number;
+  let gabrielShare: number;
+  if (r.kind === "ice_tub") {
+    houseShare = margin;
+    gabrielShare = 0;
+  } else {
+    // Odd cent goes to the house's side so houseShare + gabrielShare always
+    // equals margin exactly — two figures that silently failed to add up to
+    // the number above them would be worse than no figure at all.
+    houseShare = Math.round((margin / 2) * 100) / 100;
+    gabrielShare = Math.round((margin - houseShare) * 100) / 100;
+  }
   return {
     id: r.id,
     bookingId: Number(r.booking_id),

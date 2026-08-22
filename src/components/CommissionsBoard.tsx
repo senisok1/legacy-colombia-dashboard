@@ -176,6 +176,11 @@ function previewSplit(d: ExtraDraft): { houseShare: number; gabrielShare: number
   const v = Number(d.vendorPaid.replace(/[$,\s]/g, "") || 0);
   if (!Number.isFinite(g) || !Number.isFinite(v) || d.guestPaid.trim() === "") return null;
   const margin = Math.round((g - v) * 100) / 100;
+  // Ice tub setup is house-only (2026-08-22, Seni's ask: "100% of what the
+  // guest pays goes to the house") — mirrors lib/bookingExtras.ts's toExtra(),
+  // so the live preview while filling the form matches what actually gets
+  // saved instead of showing a misleading 50/50 split.
+  if (d.kind === "ice_tub") return { houseShare: margin, gabrielShare: 0 };
   const houseShare = Math.round((margin / 2) * 100) / 100;
   const gabrielShare = Math.round((margin - houseShare) * 100) / 100;
   return { houseShare, gabrielShare };
