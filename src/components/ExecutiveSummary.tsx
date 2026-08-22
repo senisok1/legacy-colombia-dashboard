@@ -76,16 +76,19 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
           subValue={<Money amount={report.revParNet} />}
         />
         <StatCard label="Direct bookings (30d)" value={`${report.directBookingPct}%`} />
+        {/* extrasYtd.houseRevenue is COP-native (2026-08-22 fix — see
+            lib/executiveReport.ts); blend using the pre-converted
+            extrasHouseRevenueYtdUsd instead of adding pesos onto dollars. */}
         <StatCard
           label={report.extrasYtd?.count ? "Total revenue YTD" : "Revenue YTD"}
           value={<Money amount={report.extrasYtd?.count ? report.totalRevenueYtdGross : report.revenueYtdGross} />}
           subLabel="Net"
-          subValue={<Money amount={report.revenueYtdNet + (report.extrasYtd?.houseRevenue ?? 0)} />}
+          subValue={<Money amount={report.revenueYtdNet + (report.extrasHouseRevenueYtdUsd ?? 0)} />}
           hint={
             report.extrasYtd?.count
-              ? `Stays $${Math.round(report.revenueYtdGross).toLocaleString()} · Extras $${Math.round(
+              ? `Stays $${Math.round(report.revenueYtdGross).toLocaleString()} · Extras ${Math.round(
                   report.extrasYtd.houseRevenue
-                ).toLocaleString()} (house share)`
+                ).toLocaleString()} COP (house share)`
               : undefined
           }
         />
@@ -94,9 +97,9 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
           value={<Money amount={report.extrasMtd?.count ? report.totalRevenueMtdGross : report.revenueMtdGross} />}
           hint={
             report.extrasMtd?.count
-              ? `Stays $${Math.round(report.revenueMtdGross).toLocaleString()} · Extras $${Math.round(
+              ? `Stays $${Math.round(report.revenueMtdGross).toLocaleString()} · Extras ${Math.round(
                   report.extrasMtd.houseRevenue
-                ).toLocaleString()}`
+                ).toLocaleString()} COP`
               : undefined
           }
         />
@@ -212,18 +215,22 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
               </tr>
             </thead>
             <tbody>
+              {/* Extras figures are COP-native (2026-08-22 fix — see
+                  lib/executiveReport.ts / lib/bookingExtras.ts); explicit
+                  currency="COP" so <Money> formats/converts correctly
+                  instead of assuming its USD default. */}
               {report.extrasYtd.byKind.map((row) => (
                 <tr key={row.label} className="border-t border-black/5 dark:border-white/5">
                   <td className="py-1">{row.label}</td>
                   <td className="py-1 text-right">{row.count}</td>
                   <td className="py-1 text-right text-black/50 dark:text-white/50">
-                    <Money amount={row.guestPaid} />
+                    <Money amount={row.guestPaid} currency="COP" />
                   </td>
                   <td className="py-1 text-right font-semibold">
-                    <Money amount={row.houseRevenue} />
+                    <Money amount={row.houseRevenue} currency="COP" />
                   </td>
                   <td className="py-1 text-right text-black/50 dark:text-white/50">
-                    <Money amount={row.commission} />
+                    <Money amount={row.commission} currency="COP" />
                   </td>
                 </tr>
               ))}
@@ -231,13 +238,13 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
                 <td className="py-1">Total</td>
                 <td className="py-1 text-right">{report.extrasYtd.count}</td>
                 <td className="py-1 text-right">
-                  <Money amount={report.extrasYtd.guestPaid} />
+                  <Money amount={report.extrasYtd.guestPaid} currency="COP" />
                 </td>
                 <td className="py-1 text-right">
-                  <Money amount={report.extrasYtd.houseRevenue} />
+                  <Money amount={report.extrasYtd.houseRevenue} currency="COP" />
                 </td>
                 <td className="py-1 text-right">
-                  <Money amount={report.extrasYtd.commission} />
+                  <Money amount={report.extrasYtd.commission} currency="COP" />
                 </td>
               </tr>
             </tbody>
@@ -250,13 +257,13 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
             />
             <StatCard
               label="House share per stay"
-              value={<Money amount={report.extrasYtd.houseRevenuePerStay} />}
+              value={<Money amount={report.extrasYtd.houseRevenuePerStay} currency="COP" />}
               hint="Averaged across every stay, not just those with extras"
             />
-            <StatCard label="Extras MTD (house)" value={<Money amount={report.extrasMtd.houseRevenue} />} />
+            <StatCard label="Extras MTD (house)" value={<Money amount={report.extrasMtd.houseRevenue} currency="COP" />} />
             <StatCard
               label="Commission paid YTD"
-              value={<Money amount={report.extrasYtd.commission} />}
+              value={<Money amount={report.extrasYtd.commission} currency="COP" />}
               hint="A cost, not revenue"
             />
           </div>

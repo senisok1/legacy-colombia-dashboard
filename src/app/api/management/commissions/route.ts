@@ -241,8 +241,19 @@ async function buildCommissionsBoard(orgId: string, groupId: string) {
 
   const payable = [...extraLines, ...directLines].filter((l) => l.approved && !l.declined);
   const pending = [...extraLines, ...directLines].filter((l) => !l.approved && !l.declined);
-  const payableTotalUsd = Math.round(payable.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
-  const pendingTotalUsd = Math.round(pending.reduce((s, l) => s + l.gabrielAmount, 0) * 100) / 100;
+  // EXTRAS ARE COP-NATIVE, DIRECT BOOKINGS ARE USD-NATIVE (2026-08-22 fix,
+  // Seni: Gabriel's 300,000/200,000 COP pontoon entry made these headline
+  // totals blow up to tens of millions of COP). `l.gabrielAmount` for an
+  // extra IS a peso figure (Gabriel always enters local-vendor cash in COP —
+  // see lib/bookingExtras.ts); this USD total must divide it by the live
+  // rate instead of summing it as if it were already dollars. A direct
+  // booking's gabrielAmount genuinely is USD (OwnerRez's own totalAmount ×
+  // commissionPct), so it's untouched. Mirrors CommissionsBoard.tsx's
+  // gabrielUsdFor().
+  const usdEquivalent = (l: ExtraLine | DirectLine): number =>
+    l.type === "extra" ? (previewRate ? l.gabrielAmount / previewRate.usdToTarget : 0) : l.gabrielAmount;
+  const payableTotalUsd = Math.round(payable.reduce((s, l) => s + usdEquivalent(l), 0) * 100) / 100;
+  const pendingTotalUsd = Math.round(pending.reduce((s, l) => s + usdEquivalent(l), 0) * 100) / 100;
 
   // Stay picker for "log an extra" (2026-08-19: the Add Extra form moved
   // here from Team Management, so it needs its own booking list instead
@@ -558,9 +569,22 @@ export async function POST(req: NextRequest) {
       .map((d) => ({ commission: d, split: computeSplit(d, bookingsById.get(d.bookingId)) }))
       .filter((x): x is { commission: DirectBookingCommission; split: NonNullable<ReturnType<typeof computeSplit>> } => x.split !== null);
 
+    const fx = await getUsdToRate("COP");
+    // EXTRAS ARE COP-NATIVE, DIRECT BOOKINGS ARE USD-NATIVE (2026-08-22 fix,
+    // Seni: Gabriel logged a pontoon extra as 300,000/200,000 COP and the
+    // settle math — which used to sum e.gabrielShare directly as USD, then
+    // multiply it by the live rate AGAIN to get a COP total — would have
+    // produced a payout roughly 3,600x too large. `e.gabrielShare` on an
+    // extra is already pesos (Gabriel always enters local-vendor cash in
+    // COP — see lib/bookingExtras.ts); this only needs to be DIVIDED by the
+    // live rate to get its USD-equivalent contribution to totalUsd, and used
+    // AS-IS (no multiply) for the real COP total. Direct bookings are
+    // untouched — genuinely USD-native (OwnerRez's own totalAmount), same
+    // locked-rate/override math as before.
+    const extraUsdEquivalent = (e: BookingExtra) => e.gabrielShare / fx.usdToTarget;
     const totalUsd =
       Math.round(
-        (payableExtras.reduce((s, e) => s + e.gabrielShare, 0) +
+        (payableExtras.reduce((s, e) => s + extraUsdEquivalent(e), 0) +
           payableDirectWithSplit.reduce((s, x) => s + x.split.gabrielAmount, 0)) *
           100
       ) / 100;
@@ -576,13 +600,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const fx = await getUsdToRate("COP");
     // Per-line rates (2026-08-19, Seni's ask): a Gabriel direct booking uses
     // the USD→COP rate LOCKED on the day it was detected, never the live
-    // rate — extras (no locked rate concept) still convert at today's live
-    // rate. The buffer applies uniformly on top. effective_rate stored below
-    // is therefore the BLENDED rate (totalCop / totalUsd), which is exactly
-    // what "rate actually used for this payout" should mean now.
+    // rate — extras (no locked rate concept, and COP-native since 2026-08-22)
+    // pass straight through. The buffer applies uniformly on top.
+    // effective_rate stored below is therefore the BLENDED rate
+    // (totalCop / totalUsd), which is exactly what "rate actually used for
+    // this payout" should mean now.
     const rateFor = (locked: number | null | undefined) => locked ?? fx.usdToTarget;
     // A guest-payout override (2026-08-19, Seni's ask) replaces the
     // rate-derived COP figure for that one line entirely — it IS the real
@@ -593,7 +617,7 @@ export async function POST(req: NextRequest) {
       return override ? override.gabrielCop : x.split.gabrielAmount * rateFor(x.commission.fxRate);
     };
     const copBeforeBuffer =
-      payableExtras.reduce((s, e) => s + e.gabrielShare * fx.usdToTarget, 0) +
+      payableExtras.reduce((s, e) => s + e.gabrielShare, 0) +
       payableDirectWithSplit.reduce((s, x) => s + copFor(x), 0);
     const totalCop = Math.round(copBeforeBuffer * (1 + fxBufferPct / 100));
     const effectiveRate = totalUsd > 0 ? Math.round((totalCop / totalUsd) * 10000) / 10000 : 0;
@@ -603,7 +627,7 @@ export async function POST(req: NextRequest) {
         type: "extra" as const,
         id: e.id,
         bookingId: e.bookingId,
-        amountUsd: e.gabrielShare,
+        amountUsd: extraUsdEquivalent(e),
         fxRate: fx.usdToTarget,
       })),
       ...payableDirectWithSplit.map((x) => ({

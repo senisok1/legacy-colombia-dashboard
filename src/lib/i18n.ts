@@ -690,8 +690,11 @@ const STRINGS: Dict = {
   "comm.kind": { English: "Type", Spanish: "Tipo", Portuguese: "Tipo" },
   "comm.describeExtra": { English: "Describe the extra", Spanish: "Describe el extra", Portuguese: "Descreva o extra" },
   "comm.serviceDateField": { English: "Date (defaults to arrival)", Spanish: "Fecha (por defecto la llegada)", Portuguese: "Data (padrão: chegada)" },
-  "comm.guestPaidField": { English: "Guest paid", Spanish: "Pagó el huésped", Portuguese: "Hóspede pagou" },
-  "comm.vendorPaidField": { English: "Paid to vendor", Spanish: "Pagado al proveedor", Portuguese: "Pago ao fornecedor" },
+  // Explicit "(COP)" added 2026-08-22 (Seni's ask, after Gabriel entered a
+  // pontoon extra in pesos and the totals blew up — these fields were
+  // silently treated as USD everywhere with no currency shown at all).
+  "comm.guestPaidField": { English: "Guest paid (COP)", Spanish: "Pagó el huésped (COP)", Portuguese: "Hóspede pagou (COP)" },
+  "comm.vendorPaidField": { English: "Paid to vendor (COP)", Spanish: "Pagado al proveedor (COP)", Portuguese: "Pago ao fornecedor (COP)" },
   "comm.notesField": { English: "Notes (optional)", Spanish: "Notas (opcional)", Portuguese: "Notas (opcional)" },
   "comm.saveExtra": { English: "Save extra", Spanish: "Guardar extra", Portuguese: "Salvar extra" },
   "comm.markSettled": {

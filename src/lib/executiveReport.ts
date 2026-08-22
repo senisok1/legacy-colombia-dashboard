@@ -9,6 +9,7 @@ import { listContentPieces } from "./contentMarketing";
 import { getAllPendingDrafts, getRecentResponseTimes } from "./pendingDrafts";
 import { getWeekdayWeekendRates, getRateComparisonSummary, type RateComparisonSummary } from "./revenueManager";
 import { listBookingExtras, EXTRAS_PROPERTY_GROUP_ID } from "./bookingExtras";
+import { getUsdToRate } from "./exchangeRate";
 import {
   summarizeExtras,
   yearStartIso,
@@ -145,8 +146,14 @@ export type ExecutiveReport = {
   // from ADR / RevPAR / occupancy above — see lib/extrasAnalytics.ts.
   extrasYtd: ExtrasSummary;
   extrasMtd: ExtrasSummary;
-  totalRevenueYtdGross: number; // revenueYtdGross + extrasYtd.houseRevenue
+  totalRevenueYtdGross: number; // revenueYtdGross + extrasHouseRevenueYtdUsd
   totalRevenueMtdGross: number;
+  // USD-equivalent of extrasYtd/Mtd.houseRevenue (2026-08-22 fix) — extras
+  // figures are COP-native, so any UI that needs to blend them with a USD
+  // revenue figure (e.g. a "Net" subValue) should use these, never
+  // extrasYtd.houseRevenue directly. 0 when there's no rate available.
+  extrasHouseRevenueYtdUsd: number;
+  extrasHouseRevenueMtdUsd: number;
   bookingPace: { d30: BookingPaceSummary; d90: BookingPaceSummary; d365: BookingPaceSummary };
   inquiries: InquiryFunnel;
   guestResponseTime: GuestResponseTime;
@@ -195,6 +202,16 @@ export async function buildExecutiveReport(
   const extrasMtd = extrasByBooking.size
     ? summarizeExtras(bookings, extrasByBooking, monthStartIso())
     : EMPTY_EXTRAS_SUMMARY;
+  // extrasYtd/Mtd.houseRevenue are COP-native (Gabriel always enters
+  // local-vendor cash in pesos — see lib/bookingExtras.ts), while
+  // stats.ytdRevenue/revenueMtdGross below are genuinely USD (OwnerRez's own
+  // booking totals). Convert before blending into totalRevenueYtd/MtdGross —
+  // discovered 2026-08-22 alongside the identical bug in the Commissions
+  // tab's headline totals and the Dashboard's revenue card (Seni: Gabriel's
+  // pontoon entry made everything blow up).
+  const extrasFxRate = extrasByBooking.size ? await getUsdToRate("COP").catch(() => null) : null;
+  const extrasHouseRevenueYtdUsd = extrasFxRate ? extrasYtd.houseRevenue / extrasFxRate.usdToTarget : 0;
+  const extrasHouseRevenueMtdUsd = extrasFxRate ? extrasMtd.houseRevenue / extrasFxRate.usdToTarget : 0;
 
   const adr30 = adr(bookings, 30);
   const revPar30 = revPar(bookings, 30);
@@ -494,8 +511,10 @@ export async function buildExecutiveReport(
     revenueTodayNet,
     extrasYtd,
     extrasMtd,
-    totalRevenueYtdGross: Math.round((stats.ytdRevenue + extrasYtd.houseRevenue) * 100) / 100,
-    totalRevenueMtdGross: Math.round((revenueMtdGross + extrasMtd.houseRevenue) * 100) / 100,
+    totalRevenueYtdGross: Math.round((stats.ytdRevenue + extrasHouseRevenueYtdUsd) * 100) / 100,
+    totalRevenueMtdGross: Math.round((revenueMtdGross + extrasHouseRevenueMtdUsd) * 100) / 100,
+    extrasHouseRevenueYtdUsd: Math.round(extrasHouseRevenueYtdUsd * 100) / 100,
+    extrasHouseRevenueMtdUsd: Math.round(extrasHouseRevenueMtdUsd * 100) / 100,
     bookingPace: {
       d30: { daysOut: pace30.daysOut, nightsBooked: pace30.nightsBooked, nightsAvailable: pace30.nightsAvailable, pct: pace30.pct },
       d90: { daysOut: pace90.daysOut, nightsBooked: pace90.nightsBooked, nightsAvailable: pace90.nightsAvailable, pct: pace90.pct },
@@ -572,7 +591,7 @@ export function formatReportForWhatsApp(report: ExecutiveReport): string {
   // double-counting Gabriel's commission.
   if (report.extrasYtd.count > 0) {
     lines.push(
-      `Extras YTD (house share): $${report.extrasYtd.houseRevenue.toFixed(0)} · attach rate ${report.extrasYtd.attachRatePct}%`
+      `Extras YTD (house share): ${report.extrasYtd.houseRevenue.toFixed(0)} COP · attach rate ${report.extrasYtd.attachRatePct}%`
     );
     lines.push(`Total revenue YTD: $${report.totalRevenueYtdGross.toFixed(0)} (stays + extras)`);
   }
@@ -647,6 +666,13 @@ export function formatReportForWhatsApp(report: ExecutiveReport): string {
  * most email clients strip <style> blocks. */
 export function formatReportForEmailHtml(report: ExecutiveReport): string {
   const money = (n: number) => `$${n.toFixed(0)}`;
+  // Extras (guestPaid/houseRevenue/commission/houseRevenuePerStay) are
+  // COP-native, not USD (2026-08-22 fix — see extrasAnalytics.ts and
+  // dashboard/page.tsx for the same bug) — a dedicated formatter so this
+  // report never prefixes a "$" onto a peso figure again. totalRevenueYtd/
+  // MtdGross are the one blended figure that's genuinely USD (converted at
+  // build time in buildExecutiveReport below) and keep using money().
+  const cop = (n: number) => `${Math.round(n).toLocaleString("en-US")} COP`;
   const attentionRows = report.topAttention.length
     ? report.topAttention
         .map((item) => {
@@ -720,7 +746,7 @@ export function formatReportForEmailHtml(report: ExecutiveReport): string {
           report.extrasYtd.count > 0
             ? `<tr>
           <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;">Extras YTD (house share)</td>
-          <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${money(report.extrasYtd.houseRevenue)}</td>
+          <td style="padding:8px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${cop(report.extrasYtd.houseRevenue)}</td>
         </tr>
         <tr>
           <td style="padding:8px 0;border-bottom:2px solid #333;"><strong>Total revenue YTD</strong></td>
@@ -818,25 +844,25 @@ ${
             (r) => `<tr>
           <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;">${r.label}</td>
           <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;">${r.count}</td>
-          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;color:#737373;">${money(r.guestPaid)}</td>
-          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${money(r.houseRevenue)}</td>
-          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;color:#737373;">${money(r.commission)}</td>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;color:#737373;">${cop(r.guestPaid)}</td>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;font-weight:600;">${cop(r.houseRevenue)}</td>
+          <td style="padding:6px 0;border-bottom:1px solid #e5e5e5;text-align:right;color:#737373;">${cop(r.commission)}</td>
         </tr>`
           )
           .join("")}
         <tr>
           <td style="padding:6px 0;border-bottom:2px solid #333;font-weight:700;">Total</td>
           <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${report.extrasYtd.count}</td>
-          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${money(report.extrasYtd.guestPaid)}</td>
-          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${money(report.extrasYtd.houseRevenue)}</td>
-          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${money(report.extrasYtd.commission)}</td>
+          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${cop(report.extrasYtd.guestPaid)}</td>
+          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${cop(report.extrasYtd.houseRevenue)}</td>
+          <td style="padding:6px 0;border-bottom:2px solid #333;text-align:right;font-weight:700;">${cop(report.extrasYtd.commission)}</td>
         </tr>
       </table>
       <p style="margin:6px 0 0;color:#737373;font-size:13px;">
         Attach rate <strong>${report.extrasYtd.attachRatePct}%</strong>
         (${report.extrasYtd.staysWithExtras} of ${report.extrasYtd.totalStays} stays)
-        &middot; ${money(report.extrasYtd.houseRevenuePerStay)} house share per stay
-        &middot; MTD house share ${money(report.extrasMtd.houseRevenue)}
+        &middot; ${cop(report.extrasYtd.houseRevenuePerStay)} house share per stay
+        &middot; MTD house share ${cop(report.extrasMtd.houseRevenue)}
       </p>
 `
     : ""

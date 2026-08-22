@@ -15,6 +15,7 @@ import { OccupancyCalendar } from "@/components/OccupancyCalendar";
 import { RevenueBySourceChart } from "@/components/RevenueBySourceChart";
 import { listBookingExtras, EXTRAS_PROPERTY_GROUP_ID } from "@/lib/bookingExtras";
 import { summarizeExtras, yearStartIso, EMPTY_EXTRAS_SUMMARY } from "@/lib/extrasAnalytics";
+import { getUsdToRate } from "@/lib/exchangeRate";
 import { ssrSnapshotFirst } from "@/lib/ssrSnapshot";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import type { Booking, Guest } from "@/lib/types";
@@ -114,7 +115,19 @@ export default async function DashboardPage() {
       ? summarizeExtras(bookings, await listBookingExtras(session!.organizationId).catch(() => new Map()), yearStartIso())
       : EMPTY_EXTRAS_SUMMARY;
   const showExtras = extrasSummary.count > 0;
-  const totalRevenueYtd = stats.ytdRevenue + extrasSummary.houseRevenue;
+  // extrasSummary's guestPaid/houseRevenue/commission are COP-native (Gabriel
+  // always enters local-vendor cash in pesos — see lib/bookingExtras.ts and
+  // lib/extrasAnalytics.ts), while stats.ytdRevenue is genuinely USD
+  // (OwnerRez's own booking totals). Blending them with a raw `+` (as this
+  // used to do) added a peso figure onto a dollar figure — e.g. a 130,000
+  // COP house share silently became "$130,000" of extra YTD revenue.
+  // Discovered 2026-08-22 alongside the same bug in the Commissions tab's
+  // headline totals (Seni: Gabriel's pontoon entry). Converts to a genuine
+  // USD-equivalent before folding into the USD-native total; only fetches a
+  // rate when there's actually an extras figure to convert.
+  const extrasFxRate = showExtras ? await getUsdToRate("COP").catch(() => null) : null;
+  const extrasHouseRevenueUsd = extrasFxRate ? extrasSummary.houseRevenue / extrasFxRate.usdToTarget : 0;
+  const totalRevenueYtd = stats.ytdRevenue + extrasHouseRevenueUsd;
   const lang = viewer?.language;
 
   return (
@@ -133,12 +146,12 @@ export default async function DashboardPage() {
             label={showExtras ? "Total revenue (YTD)" : "Revenue (YTD)"}
             value={<Money amount={showExtras ? totalRevenueYtd : stats.ytdRevenue} />}
             subLabel="Net"
-            subValue={<Money amount={stats.ytdNetRevenue + extrasSummary.houseRevenue} />}
+            subValue={<Money amount={stats.ytdNetRevenue + extrasHouseRevenueUsd} />}
             hint={
               showExtras
-                ? `Stays $${Math.round(stats.ytdRevenue).toLocaleString()} · Extras $${Math.round(
+                ? `Stays $${Math.round(stats.ytdRevenue).toLocaleString()} · Extras ${Math.round(
                     extrasSummary.houseRevenue
-                  ).toLocaleString()} (house share) · ${stats.ytdBookings} bookings`
+                  ).toLocaleString()} COP (house share) · ${stats.ytdBookings} bookings`
                 : `${stats.ytdBookings} bookings · gross / net after channel fees`
             }
           />
@@ -203,18 +216,22 @@ export default async function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody>
+                  {/* Extras figures are COP-native throughout (2026-08-22
+                      fix) — explicit currency="COP" so <Money> formats/
+                      converts them correctly instead of assuming its USD
+                      default. */}
                   {extrasSummary.byKind.map((row) => (
                     <tr key={row.label} className="border-t border-black/5 dark:border-white/5">
                       <td className="py-1">{row.label}</td>
                       <td className="py-1 text-right">{row.count}</td>
                       <td className="py-1 text-right text-black/50 dark:text-white/50">
-                        <Money amount={row.guestPaid} />
+                        <Money amount={row.guestPaid} currency="COP" />
                       </td>
                       <td className="py-1 text-right font-semibold">
-                        <Money amount={row.houseRevenue} />
+                        <Money amount={row.houseRevenue} currency="COP" />
                       </td>
                       <td className="py-1 text-right text-black/50 dark:text-white/50">
-                        <Money amount={row.commission} />
+                        <Money amount={row.commission} currency="COP" />
                       </td>
                     </tr>
                   ))}
@@ -222,20 +239,20 @@ export default async function DashboardPage() {
                     <td className="py-1">Total</td>
                     <td className="py-1 text-right">{extrasSummary.count}</td>
                     <td className="py-1 text-right">
-                      <Money amount={extrasSummary.guestPaid} />
+                      <Money amount={extrasSummary.guestPaid} currency="COP" />
                     </td>
                     <td className="py-1 text-right">
-                      <Money amount={extrasSummary.houseRevenue} />
+                      <Money amount={extrasSummary.houseRevenue} currency="COP" />
                     </td>
                     <td className="py-1 text-right">
-                      <Money amount={extrasSummary.commission} />
+                      <Money amount={extrasSummary.commission} currency="COP" />
                     </td>
                   </tr>
                 </tbody>
               </table>
               <p className="mt-2 text-xs text-black/50 dark:text-white/50">
                 Attach rate {extrasSummary.attachRatePct}% ({extrasSummary.staysWithExtras} of{" "}
-                {extrasSummary.totalStays} stays) · ${Math.round(extrasSummary.houseRevenuePerStay).toLocaleString()} house
+                {extrasSummary.totalStays} stays) · {Math.round(extrasSummary.houseRevenuePerStay).toLocaleString()} COP house
                 share per stay. Only the house share counts as revenue — commission is Gabriel&apos;s and passes through.
               </p>
             </div>

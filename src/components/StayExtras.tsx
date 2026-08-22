@@ -19,8 +19,11 @@ import { EXTRA_KINDS, extraKindLabel, type BookingExtra } from "@/lib/bookingExt
 // enforced server-side in api/management/extras' PATCH/DELETE, this is just
 // the matching display.
 
+// All figures here (guestPaid, vendorPaid, houseShare, gabrielShare) are
+// COP-native — Gabriel always enters local-vendor cash pesos, never USD
+// (2026-08-22 fix, same bug as the Commissions tab headline totals).
 function money(n: number): string {
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  return `${Math.round(n).toLocaleString("en-US")} COP`;
 }
 
 type Draft = {

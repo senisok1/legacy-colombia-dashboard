@@ -441,24 +441,38 @@ export function CommissionsBoard() {
   const approved = allLines.filter((l) => l.approved && !l.declined);
   const declined = allLines.filter((l) => l.declined);
 
-  // House share of the payable (approved, unsettled) lines — what Gabriel
-  // owes the house in cash, since he's the one who collects from the guest
-  // (2026-08-19, Seni's ask: "we need to know how much Gabriel owes the
-  // house so that I can count the COP and settle it out"). Derived from the
-  // same lines as payableTotalUsd, never stored.
-  const payableHouseUsd = Math.round(approved.reduce((s, l) => s + l.houseAmount, 0) * 100) / 100;
-
   // Per-line COP display/preview (2026-08-19, Seni's ask): a direct booking
   // converts at its LOCKED detection-day rate; extras at today's live rate.
   // Mirrors the server's settlement math exactly (see route.ts POST).
   const liveRate = data.previewRate?.usdToTarget ?? null;
   const lineRate = (l: Line): number | null => (l.type === "direct_booking" ? (l.fxRate ?? liveRate) : liveRate);
+  // EXTRAS ARE COP-NATIVE (2026-08-22 fix, Seni: Gabriel logged a pontoon at
+  // 300,000/200,000 and the totals blew up to tens of millions of COP).
+  // Root cause: booking_extras.guest_paid/vendor_paid (and the derived
+  // margin/houseShare/gabrielShare) were silently treated as USD everywhere
+  // in this component — direct bookings genuinely ARE USD (OwnerRez's own
+  // totalAmount), but extras are local-vendor cash Gabriel arranges in
+  // Colombia and always enters in pesos (chef, massage, jet skis, pontoon,
+  // ice tub, daily cleaning — see lib/bookingExtras.ts). A guest paying
+  // "300000" for a pontoon means 300,000 COP, never $300,000 USD. Extras
+  // never had a real-money entry through this tab before this pontoon line
+  // (grep confirms zero prior settled extras), so the bug was latent since
+  // the Commissions tab shipped 2026-08-19 and only just got exercised.
+  // Fix: every helper below branches on `l.type` — an extra's stored
+  // guestPaid/vendorPaid/houseAmount/gabrielAmount ARE the COP figure
+  // directly (no rate multiply); converting one to USD DIVIDES by the live
+  // rate instead. Direct bookings are untouched — their whole existing
+  // locked-rate/override machinery stays exactly as it was.
   /** One line's amount, respecting the USD/COP toggle AND per-line locked
    * rates. `kind` lets a direct-booking line with a guest-payout override
    * (2026-08-19, Seni's ask) show the manually corrected COP split instead
    * of the rate-derived one — the override always wins over rate math. */
   const money = (l: Line, amount: number, kind?: "house" | "gabriel"): string => {
-    if (l.type === "direct_booking" && kind && displayCurrency === "COP") {
+    if (l.type === "extra") {
+      if (displayCurrency === "COP") return cop(amount);
+      return liveRate ? format(amount / liveRate, "USD") : cop(amount);
+    }
+    if (kind && displayCurrency === "COP") {
       const ov = copSplitOverride(l);
       if (ov) return cop(kind === "house" ? ov.houseCop : ov.gabrielCop);
     }
@@ -470,21 +484,34 @@ export function CommissionsBoard() {
    * the settle-modal math below, which is COP regardless of the header
    * toggle. */
   const gabrielCopFor = (l: Line): number | null => {
-    if (l.type === "direct_booking") {
-      const ov = copSplitOverride(l);
-      if (ov) return ov.gabrielCop;
-    }
+    if (l.type === "extra") return l.gabrielAmount;
+    const ov = copSplitOverride(l);
+    if (ov) return ov.gabrielCop;
     const r = lineRate(l);
     return r === null ? null : l.gabrielAmount * r;
   };
   const houseCopFor = (l: Line): number | null => {
-    if (l.type === "direct_booking") {
-      const ov = copSplitOverride(l);
-      if (ov) return ov.houseCop;
-    }
+    if (l.type === "extra") return l.houseAmount;
+    const ov = copSplitOverride(l);
+    if (ov) return ov.houseCop;
     const r = lineRate(l);
     return r === null ? null : l.houseAmount * r;
   };
+  /** USD-equivalent of a line's Gabriel/house share — genuinely native for a
+   * direct booking (OwnerRez's own totalAmount), DERIVED for an extra by
+   * dividing its native-COP amount by the live rate. Used anywhere a USD
+   * figure is needed (the USD view of the headline cards, the settle
+   * modal's per-line USD amount) instead of assuming `.gabrielAmount`/
+   * `.houseAmount` are already USD. */
+  const gabrielUsdFor = (l: Line): number => (l.type === "extra" ? (liveRate ? l.gabrielAmount / liveRate : 0) : l.gabrielAmount);
+  const houseUsdFor = (l: Line): number => (l.type === "extra" ? (liveRate ? l.houseAmount / liveRate : 0) : l.houseAmount);
+
+  // House share of the payable (approved, unsettled) lines — what Gabriel
+  // owes the house in cash, since he's the one who collects from the guest
+  // (2026-08-19, Seni's ask: "we need to know how much Gabriel owes the
+  // house so that I can count the COP and settle it out"). Derived from the
+  // same lines as payableTotalUsd, never stored.
+  const payableHouseUsd = Math.round(approved.reduce((s, l) => s + houseUsdFor(l), 0) * 100) / 100;
 
   // Headline cards ("Owed to Gabriel", "Gabriel owes the house", "Awaiting
   // approval") need to reflect a guest-payout override too (2026-08-19,
@@ -509,8 +536,8 @@ export function CommissionsBoard() {
     return c === null ? s : s + c;
   }, 0);
 
-  const settleAmountUsd = settleTarget === "all" ? data.payableTotalUsd : settleTarget ? settleTarget.gabrielAmount : 0;
-  const settleHouseUsd = settleTarget === "all" ? payableHouseUsd : settleTarget ? settleTarget.houseAmount : 0;
+  const settleAmountUsd = settleTarget === "all" ? data.payableTotalUsd : settleTarget ? gabrielUsdFor(settleTarget) : 0;
+  const settleHouseUsd = settleTarget === "all" ? payableHouseUsd : settleTarget ? houseUsdFor(settleTarget) : 0;
   const bufferNum = Number(bufferPct) || 0;
   // Pre-buffer COP using each line's own rate (locked for direct bookings) —
   // or its guest-payout override when one is set (2026-08-19, Seni's ask),
@@ -681,8 +708,10 @@ export function CommissionsBoard() {
                 />
               </label>
               <span className="text-xs text-black/50 dark:text-white/50">
-                {t("comm.house")} <span className="font-semibold">{split ? usd(split.houseShare) : "—"}</span> ·{" "}
-                {t("comm.gabriel")} <span className="font-semibold">{split ? usd(split.gabrielShare) : "—"}</span>
+                {/* COP, not USD (2026-08-22 fix) — guestPaid/vendorPaid above
+                    are COP-native, so the live preview must match. */}
+                {t("comm.house")} <span className="font-semibold">{split ? cop(split.houseShare) : "—"}</span> ·{" "}
+                {t("comm.gabriel")} <span className="font-semibold">{split ? cop(split.gabrielShare) : "—"}</span>
               </span>
             </div>
 
