@@ -128,6 +128,15 @@ function when(iso: string | null): string {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// Full stay range for the "which stay" picker (2026-08-22, Seni's ask) —
+// e.g. "Aug 20 - Aug 22, 2026". Year only shown once, on the end date.
+function stayRange(arrival: string | null, departure: string | null): string {
+  if (!arrival) return "";
+  const start = new Date(arrival).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (!departure) return when(arrival);
+  return `${start} - ${when(departure)}`;
+}
+
 function lineTitle(l: Line, t: (key: string) => string): string {
   if (l.type === "extra") {
     // The server's `label` field is a raw, untranslated value (the "other"
@@ -643,7 +652,7 @@ export function CommissionsBoard() {
                   {data.stays.map((s) => (
                     <option key={s.bookingId} value={s.bookingId}>
                       {s.guestName}
-                      {s.arrival ? ` (${when(s.arrival)})` : ""}
+                      {s.arrival ? ` (${stayRange(s.arrival, s.departure)})` : ""}
                     </option>
                   ))}
                 </select>

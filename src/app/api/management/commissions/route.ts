@@ -261,14 +261,12 @@ async function buildCommissionsBoard(orgId: string, groupId: string) {
   // Not date-filtered — an extra can legitimately be logged for a stay
   // that already departed (Gabriel remembering a chef he arranged last
   // week), same reasoning stayDates() used to allow in StayExtras.tsx.
-  // Ordering (2026-08-21, Seni's ask: "start the dropdown with the current
-  // stay and then descending to future stays in order"): the guest who's
-  // in-house right now leads the list, then upcoming stays follow in
-  // chronological order — a currently in-house stay's own arrival date is
-  // always earlier than any future stay's, so a plain ascending sort by
-  // arrival naturally puts it first. Already-departed stays stay in the
-  // list (still loggable) but move to the end, most-recent-departure first,
-  // same order they used to be shown in overall.
+  // Ordering (2026-08-22, Seni's ask: "let's start with the 5 previous
+  // guests... in case we forgot to log an extra for a past guest"): the
+  // 5 most-recently-departed stays lead the list (most recent first) as a
+  // deliberate reminder prompt, THEN the in-house/upcoming stays in
+  // chronological order (same as the 2026-08-21 ordering), then any older
+  // past stays beyond the top 5, most-recent-departure first.
   const todayIso = new Date().toISOString().slice(0, 10);
   const eligibleStays = bookings.filter((b) => !b.isBlock && b.status !== "Cancelled");
   const currentAndFutureStays = eligibleStays
@@ -277,7 +275,9 @@ async function buildCommissionsBoard(orgId: string, groupId: string) {
   const pastStays = eligibleStays
     .filter((b) => b.departure && b.departure.slice(0, 10) < todayIso)
     .sort((a, b) => new Date(b.arrival || 0).getTime() - new Date(a.arrival || 0).getTime());
-  const stays = [...currentAndFutureStays, ...pastStays]
+  const recentPastStays = pastStays.slice(0, 5);
+  const olderPastStays = pastStays.slice(5);
+  const stays = [...recentPastStays, ...currentAndFutureStays, ...olderPastStays]
     .slice(0, 300)
     .map((b) => ({
       bookingId: b.id,
