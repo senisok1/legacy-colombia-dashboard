@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { NavBar } from "@/components/NavBar";
+import { AppShell } from "@/components/shell/AppShell";
 import { StatusBanner } from "@/components/StatusBanner";
 import { CurrencyProvider } from "@/components/CurrencyProvider";
 import { LanguageProvider } from "@/components/LanguageProvider";
@@ -99,9 +99,23 @@ export default async function RootLayout({
           <CurrencyProvider
             secondaryCurrency={propertyGroupId === DEFAULT_PROPERTY_GROUP_ID ? secondaryCurrency : null}
           >
-            <NavBar role={session?.role} propertyGroupId={propertyGroupId} propertyGroups={allowedGroups} />
-            <StatusBanner />
-            <main className="flex-1">{children}</main>
+            {/* AppShell replaced NavBar 2026-08-22 (premium UI refresh):
+                persistent left sidebar on desktop, compact top bar + fixed
+                bottom nav on mobile. The nav model and badge polling it uses
+                were lifted verbatim from NavBar into lib/navModel.ts and
+                components/shell/useNavBadges.ts, so routes, roles, badges
+                and modules are unchanged — presentation only. */}
+            <AppShell
+              role={session?.role}
+              propertyGroupId={propertyGroupId}
+              propertyGroups={allowedGroups}
+              userName={me?.name || session?.email?.split("@")[0] || "Account"}
+              userRole={session?.role ?? ""}
+              locale={htmlLang}
+            >
+              <StatusBanner />
+              {children}
+            </AppShell>
           </CurrencyProvider>
         </LanguageProvider>
       </body>

@@ -56,6 +56,18 @@ const STRINGS: Dict = {
     Portuguese: "Atualizar os dados desta página",
   },
   "nav.refreshing": { English: "Refreshing…", Spanish: "Actualizando…", Portuguese: "Atualizando…" },
+  // Shell chrome (2026-08-22 UI refresh): sidebar collapse, mobile bottom
+  // nav destinations, More drawer.
+  "nav.collapseSidebar": { English: "Collapse", Spanish: "Contraer", Portuguese: "Recolher" },
+  "nav.expandSidebar": { English: "Expand", Spanish: "Expandir", Portuguese: "Expandir" },
+  "nav.search": { English: "Search", Spanish: "Buscar", Portuguese: "Buscar" },
+  "nav.currency": { English: "Currency", Spanish: "Moneda", Portuguese: "Moeda" },
+  "nav.more": { English: "More", Spanish: "Más", Portuguese: "Mais" },
+  // "Stays" and "Tasks" are fast mobile paths to EXISTING routes
+  // (/management, /construction) — not new sections.
+  "nav.stays": { English: "Stays", Spanish: "Estancias", Portuguese: "Estadias" },
+  "nav.messages": { English: "Messages", Spanish: "Mensajes", Portuguese: "Mensagens" },
+  "nav.tasks": { English: "Tasks", Spanish: "Tareas", Portuguese: "Tarefas" },
   // Currency toggle tooltip (2026-08-22 audit — CurrencyToggle rendered raw
   // English into a title attribute NavBar's own nav.* keys never covered).
   "nav.loadingExchangeRate": { English: "Loading exchange rate…", Spanish: "Cargando tasa de cambio…", Portuguese: "Carregando taxa de câmbio…" },

@@ -6,10 +6,11 @@ import { summaryStats, revenueBySource, isRevenueCounting } from "@/lib/finance"
 import { getServerSession } from "@/lib/session";
 import { getUserByEmail } from "@/lib/users";
 import { cookies } from "next/headers";
-import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, propertyGroupById } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { StatCard } from "@/components/StatCard";
 import { Money } from "@/components/Money";
+import { PropertyHero } from "@/components/shell/PropertyHero";
 import { BookingsTable } from "@/components/BookingsTable";
 import { OccupancyCalendar } from "@/components/OccupancyCalendar";
 import { RevenueBySourceChart } from "@/components/RevenueBySourceChart";
@@ -131,16 +132,15 @@ export default async function DashboardPage() {
   const lang = viewer?.language;
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
+    <div className="mx-auto max-w-6xl px-4 md:px-6 py-4 md:py-6 space-y-5 md:space-y-6">
       <AutoRefresh enabled={fromSnapshot} />
-      <div>
-        <h1 className="text-xl font-semibold">{t("dash.title", lang)}</h1>
-        <p className="text-sm text-black/50 dark:text-white/50">
-          {t("dash.subtitle", lang)} {propertyGroupById(groupId).label}.
-        </p>
-      </div>
+      {/* The page's own "Dashboard" heading moved into the shell's top
+          header (2026-08-22 UI refresh) — repeating it here would say the
+          same thing twice. Its place is taken by the property hero, which
+          uses this property's own top OwnerRez photo. */}
+      <PropertyHero groupId={groupId} />
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         {!isTeam && (
           <StatCard
             label={showExtras ? "Total revenue (YTD)" : "Revenue (YTD)"}

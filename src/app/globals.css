@@ -78,6 +78,94 @@ body {
   --accent-hover: #334155;
 }
 
+/* ---- Legacy Luxe — the premium hospitality scheme (2026-08-22) ----
+   Seni's UI refresh spec, verbatim palette: charcoal #0E1116 background,
+   deep slate #171C22 secondary surface, sea-teal #14B8A6 primary accent,
+   soft teal #5EEAD4, warm ivory #F6F3EB text, muted stone #B8B4AA
+   secondary text, warm gold #D4AF37 used very sparingly. Explicitly
+   replaces red as the interface accent for Legacy Estate Rentals.
+
+   Built as a forceDark theme on the SAME override machinery red-black
+   already proved out (see that block below and its long comment): the app
+   reuses a small set of light-mode surface utilities everywhere, whose
+   dark: siblings only fire on OS dark preference, so a forced-dark theme
+   has to alias them explicitly or they leak white against the near-black
+   page. Aliasing rather than rewriting components is what keeps this a
+   pure presentation change — no component logic is touched. */
+:root[data-theme="legacy-luxe"] {
+  color-scheme: dark;
+  --background: #0e1116;
+  --foreground: #f6f3eb;
+  --accent: #14b8a6;
+  --accent-hover: #5eead4;
+  /* Named tokens for the new shell (sidebar, hero, header strip). Kept as
+     their own variables so components can reference the design language
+     directly instead of hardcoding hexes. */
+  --surface: #171c22;
+  --surface-raised: #1d242c;
+  --border-subtle: rgba(246, 243, 235, 0.1);
+  --text-muted: #b8b4aa;
+  --accent-soft: #5eead4;
+  --accent-gold: #d4af37;
+}
+
+:root[data-theme="legacy-luxe"] .bg-white {
+  background-color: #171c22;
+}
+:root[data-theme="legacy-luxe"] .bg-white\/80 {
+  background-color: rgba(14, 17, 22, 0.85);
+}
+:root[data-theme="legacy-luxe"] .bg-white\/5 {
+  background-color: rgba(246, 243, 235, 0.04);
+}
+:root[data-theme="legacy-luxe"] .bg-black {
+  background-color: var(--accent);
+}
+:root[data-theme="legacy-luxe"] .bg-black\/5,
+:root[data-theme="legacy-luxe"] .hover\:bg-black\/5:hover {
+  background-color: rgba(246, 243, 235, 0.06);
+}
+:root[data-theme="legacy-luxe"] .bg-black\/10 {
+  background-color: rgba(246, 243, 235, 0.08);
+}
+:root[data-theme="legacy-luxe"] .bg-black\/20 {
+  background-color: rgba(246, 243, 235, 0.16);
+}
+:root[data-theme="legacy-luxe"] .border-black\/5 {
+  border-color: rgba(246, 243, 235, 0.05);
+}
+:root[data-theme="legacy-luxe"] .border-black\/10 {
+  border-color: rgba(246, 243, 235, 0.1);
+}
+:root[data-theme="legacy-luxe"] .border-black\/15 {
+  border-color: rgba(246, 243, 235, 0.14);
+}
+:root[data-theme="legacy-luxe"] .border-black\/30 {
+  border-color: rgba(246, 243, 235, 0.28);
+}
+/* Secondary text steps down through warm stone rather than plain grey —
+   this is most of what makes the palette read as "warm luxury" instead of
+   "generic dark mode". */
+:root[data-theme="legacy-luxe"] .text-black\/70 {
+  color: rgba(246, 243, 235, 0.78);
+}
+:root[data-theme="legacy-luxe"] .text-black\/60 {
+  color: #b8b4aa;
+}
+:root[data-theme="legacy-luxe"] .text-black\/50 {
+  color: rgba(184, 180, 170, 0.85);
+}
+:root[data-theme="legacy-luxe"] .text-black\/40 {
+  color: rgba(184, 180, 170, 0.65);
+}
+:root[data-theme="legacy-luxe"] .text-black\/30 {
+  color: rgba(184, 180, 170, 0.45);
+}
+/* Same opaque-dropdown fix red-black needed — see its comment below. */
+:root[data-theme="legacy-luxe"] .dark\:bg-neutral-900 {
+  background-color: #1d242c;
+}
+
 /* ---- Red & Black — Seni's own scheme ----
    Deliberately forces the near-black surface palette regardless of the
    visitor's OS light/dark preference (that's the "black" half of the

@@ -16,7 +16,14 @@
 // red-black-specific overrides for the app's common light-mode surface
 // utility classes (bg-white, border-black/10, text-black/50, etc.) so it
 // still looks fully black even when the visitor's OS is in light mode.
-export type ThemeId = "indigo" | "red-black" | "ocean" | "emerald" | "sunset" | "slate";
+// "legacy-luxe" (2026-08-22) is the premium hospitality scheme from Seni's
+// UI refresh spec: charcoal/near-black surfaces, deep slate cards, sea-teal
+// primary accent, warm ivory text, muted stone secondary text. It replaces
+// red-black as Legacy Estate Rentals' own look ("do not use red as the
+// primary interface accent — use teal"). Built as a forceDark theme reusing
+// the exact same override machinery red-black already proved out, so the
+// palette swap needs no per-component rewrites.
+export type ThemeId = "indigo" | "legacy-luxe" | "red-black" | "ocean" | "emerald" | "sunset" | "slate";
 
 export type Theme = {
   id: ThemeId;
@@ -30,6 +37,7 @@ export type Theme = {
 
 export const THEMES: Theme[] = [
   { id: "indigo", label: "Indigo (default)", swatch: "#4f46e5" },
+  { id: "legacy-luxe", label: "Legacy Luxe (teal)", swatch: "#14B8A6", forceDark: true },
   { id: "red-black", label: "Red & Black", swatch: "#dc2626", forceDark: true },
   { id: "ocean", label: "Ocean Blue", swatch: "#0284c7" },
   { id: "emerald", label: "Emerald", swatch: "#059669" },
