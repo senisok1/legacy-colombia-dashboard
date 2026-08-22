@@ -166,6 +166,34 @@ body {
   background-color: #1d242c;
 }
 
+/* Booking indicators → teal. The brief calls for teal on "calendar booking
+   indicators" and selected states, but the calendar day cells
+   (OccupancyCalendar.tsx), the "Booked" status chip (BookingsTable.tsx) and
+   the approved-commission rows (CommissionsBoard.tsx) all use literal
+   Tailwind blue utilities. Aliasing those classes here — rather than editing
+   the components — keeps this a presentation-only change: no component
+   markup, props or logic is touched, and every other theme keeps its
+   existing blue exactly as before. */
+:root[data-theme="legacy-luxe"] .bg-blue-500\/80 {
+  background-color: rgba(20, 184, 166, 0.85);
+}
+:root[data-theme="legacy-luxe"] .border-blue-600 {
+  border-color: #14b8a6;
+}
+:root[data-theme="legacy-luxe"] .bg-blue-500\/5 {
+  background-color: rgba(20, 184, 166, 0.07);
+}
+:root[data-theme="legacy-luxe"] .bg-blue-100,
+:root[data-theme="legacy-luxe"] .dark\:bg-blue-950 {
+  background-color: rgba(20, 184, 166, 0.16);
+}
+:root[data-theme="legacy-luxe"] .text-blue-800,
+:root[data-theme="legacy-luxe"] .dark\:text-blue-300,
+:root[data-theme="legacy-luxe"] .text-blue-600,
+:root[data-theme="legacy-luxe"] .dark\:text-blue-400 {
+  color: #5eead4;
+}
+
 /* ---- Red & Black — Seni's own scheme ----
    Deliberately forces the near-black surface palette regardless of the
    visitor's OS light/dark preference (that's the "black" half of the
