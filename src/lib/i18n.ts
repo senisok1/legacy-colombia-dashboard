@@ -47,6 +47,15 @@ const STRINGS: Dict = {
   "nav.logout": { English: "Log out", Spanish: "Cerrar sesión", Portuguese: "Sair" },
   "nav.switching": { English: "Switching…", Spanish: "Cambiando…", Portuguese: "Trocando…" },
   "nav.switchProperty": { English: "Switch property", Spanish: "Cambiar de propiedad", Portuguese: "Trocar de propriedade" },
+  // Refresh button (2026-08-22, Seni's ask) — reloads the current page so
+  // any changes made elsewhere (another login, another tab) show up.
+  "nav.refresh": { English: "Refresh", Spanish: "Actualizar", Portuguese: "Atualizar" },
+  "nav.refreshTitle": {
+    English: "Refresh this page's data",
+    Spanish: "Actualizar los datos de esta página",
+    Portuguese: "Atualizar os dados desta página",
+  },
+  "nav.refreshing": { English: "Refreshing…", Spanish: "Actualizando…", Portuguese: "Atualizando…" },
   // Currency toggle tooltip (2026-08-22 audit — CurrencyToggle rendered raw
   // English into a title attribute NavBar's own nav.* keys never covered).
   "nav.loadingExchangeRate": { English: "Loading exchange rate…", Spanish: "Cargando tasa de cambio…", Portuguese: "Carregando taxa de câmbio…" },

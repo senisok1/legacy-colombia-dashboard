@@ -136,6 +136,41 @@ function CurrencyToggle() {
   );
 }
 
+// Refresh button (2026-08-22, Seni's ask: "add a refresh tab somewhere on
+// each CRM screen so I can refresh if any modifications are made"). Every
+// data-heavy tab in this app (Commissions, Dashboard, Reports, Team
+// Management, Construction, Inbox, ...) follows the same "instant cached
+// snapshot paint, then fetch-fresh-on-mount" pattern — a full page reload
+// re-runs that fetch-on-mount effect from scratch on whatever tab is
+// currently open, so a plain `location.reload()` here is a reliable,
+// zero-per-page-wiring way to force every screen to pull the latest data.
+// Deliberately NOT `router.refresh()`: that only re-runs Server Components
+// and wouldn't touch the client-side `fresh=1` fetches most boards do in a
+// `useEffect` on mount (the component doesn't remount, so the effect
+// wouldn't re-fire). Lives in NavBar so it shows up on every page (NavBar
+// is rendered once in the root layout) without touching any individual
+// page/board component.
+function RefreshButton() {
+  const t = useT();
+  const [refreshing, setRefreshing] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        setRefreshing(true);
+        window.location.reload();
+      }}
+      disabled={refreshing}
+      title={t("nav.refreshTitle")}
+      className="px-2.5 py-1.5 rounded-md text-sm text-black/60 hover:bg-black/5 dark:text-white/60 dark:hover:bg-white/10 shrink-0 whitespace-nowrap disabled:opacity-60 flex items-center gap-1.5"
+    >
+      <span aria-hidden className={refreshing ? "inline-block animate-spin" : "inline-block"}>
+        ⟳
+      </span>
+      <span className="hidden sm:inline">{refreshing ? t("nav.refreshing") : t("nav.refresh")}</span>
+    </button>
+  );
+}
+
 function Badge({ count, active }: { count: number; active: boolean }) {
   if (count <= 0) return null;
   return (
@@ -587,6 +622,7 @@ export function NavBar({
               its own scoped COP/USD view toggle, so this global one next to
               Log out is redundant for that role specifically). */}
           {role !== "CONSTRUCTION" && <CurrencyToggle />}
+          <RefreshButton />
           <button
             onClick={logout}
             className="px-3 py-1.5 rounded-md text-sm text-black/50 hover:bg-black/5 dark:text-white/50 dark:hover:bg-white/10 shrink-0 whitespace-nowrap"
