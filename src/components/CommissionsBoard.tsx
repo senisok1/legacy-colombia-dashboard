@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "@/components/LanguageProvider";
+import { KpiTile, RecordRow, EmptyState, SectionCard } from "@/components/shell/Surfaces";
 import { useCurrency } from "@/components/CurrencyProvider";
 import { EXTRA_KINDS } from "@/lib/bookingExtrasShared";
 
@@ -617,26 +618,27 @@ export function CommissionsBoard() {
         <p className="text-xs text-black/50 dark:text-white/50">{t("comm.viewOnlyNote")}</p>
       )}
 
+      {/* Headline tiles now use the shared KpiTile (2026-08-22 polish pass):
+          same three figures, same currency logic, but the label/border tint
+          carries the meaning and the figure gets its own full-width line so
+          long COP amounts can't collide with anything. */}
       <div className="flex flex-wrap gap-3">
-        <div className="flex-1 min-w-[14rem] rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
-          <div className="text-xs text-blue-700 dark:text-blue-400">{t("comm.owedToGabriel")}</div>
-          <div className="text-2xl font-semibold">
-            {displayCurrency === "COP" ? cop(payableGabrielCop) : format(data.payableTotalUsd, "USD")}
-          </div>
-        </div>
-        <div className="flex-1 min-w-[14rem] rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-          <div className="text-xs text-emerald-700 dark:text-emerald-400">{t("comm.owedToHouse")}</div>
-          <div className="text-2xl font-semibold">
-            {displayCurrency === "COP" ? cop(payableHouseCop) : format(payableHouseUsd, "USD")}
-          </div>
-          <div className="mt-0.5 text-[11px] text-black/40 dark:text-white/40">{t("comm.owedToHouseHint")}</div>
-        </div>
-        <div className="flex-1 min-w-[14rem] rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
-          <div className="text-xs text-amber-700 dark:text-amber-400">{t("comm.awaitingApproval")}</div>
-          <div className="text-2xl font-semibold">
-            {displayCurrency === "COP" ? cop(pendingGabrielCop) : format(data.pendingTotalUsd, "USD")}
-          </div>
-        </div>
+        <KpiTile
+          tone="accent"
+          label={t("comm.owedToGabriel")}
+          value={displayCurrency === "COP" ? cop(payableGabrielCop) : format(data.payableTotalUsd, "USD")}
+        />
+        <KpiTile
+          tone="positive"
+          label={t("comm.owedToHouse")}
+          value={displayCurrency === "COP" ? cop(payableHouseCop) : format(payableHouseUsd, "USD")}
+          hint={t("comm.owedToHouseHint")}
+        />
+        <KpiTile
+          tone="warn"
+          label={t("comm.awaitingApproval")}
+          value={displayCurrency === "COP" ? cop(pendingGabrielCop) : format(data.pendingTotalUsd, "USD")}
+        />
       </div>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
@@ -779,17 +781,13 @@ export function CommissionsBoard() {
       </section>
 
       {/* Pending review */}
-      <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-2">
-        <h2 className="text-sm font-semibold">{t("comm.pendingReview")}</h2>
+      <SectionCard title={t("comm.pendingReview")}>
         {pending.length === 0 ? (
-          <p className="text-sm text-black/50 dark:text-white/50">{t("comm.noPending")}</p>
+          <EmptyState>{t("comm.noPending")}</EmptyState>
         ) : (
           <ul className="space-y-2">
             {pending.map((l) => (
-              <li
-                key={l.id}
-                className="rounded-lg bg-black/[0.03] dark:bg-white/[0.06] px-3 py-2 text-sm space-y-1.5"
-              >
+              <RecordRow key={l.id} className="space-y-1.5">
                 {/* Info row and actions row are deliberately two separate
                     flex containers, not one wrapping row (2026-08-22, Seni:
                     "this does not look uniform... the buttons should be on
@@ -918,11 +916,11 @@ export function CommissionsBoard() {
                   </button>
                 )}
                 </div>
-              </li>
+              </RecordRow>
             ))}
           </ul>
         )}
-      </section>
+      </SectionCard>
 
       {/* Approved / payable */}
       <section className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-2">
@@ -953,11 +951,11 @@ export function CommissionsBoard() {
           )}
         </div>
         {approved.length === 0 ? (
-          <p className="text-sm text-black/50 dark:text-white/50">{t("comm.noApproved")}</p>
+          <EmptyState>{t("comm.noApproved")}</EmptyState>
         ) : (
           <ul className="space-y-1">
             {approved.map((l) => (
-              <li
+              <RecordRow
                 key={l.id}
                 ref={(el) => {
                   // Auto-scroll a just-approved card into view and briefly
@@ -966,9 +964,8 @@ export function CommissionsBoard() {
                   // into this section without the owner seeing it land here.
                   if (l.id === justApprovedId && el) el.scrollIntoView({ behavior: "smooth", block: "center" });
                 }}
-                className={`rounded-lg px-3 py-2 text-sm space-y-1.5 transition-colors duration-1000 ${
-                  l.id === justApprovedId ? "bg-emerald-500/20 ring-2 ring-emerald-500/50" : "bg-blue-500/5"
-                }`}
+                highlight={l.id === justApprovedId}
+                className="space-y-1.5"
               >
                 {/* Same two-row split as the pending list above (2026-08-22
                     fix) — keeps every card's action row on its own line
@@ -1084,7 +1081,7 @@ export function CommissionsBoard() {
                   </button>
                 )}
                 </div>
-              </li>
+              </RecordRow>
             ))}
           </ul>
         )}
