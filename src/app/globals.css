@@ -187,6 +187,15 @@ body {
 :root[data-theme="legacy-luxe"] .dark\:bg-blue-950 {
   background-color: rgba(20, 184, 166, 0.16);
 }
+/* The revenue donut punches its centre hole with fill-white / dark:fill-
+   [#0a0a0a]. Under this theme the card behind it is #171C22, so the hole
+   has to match that surface or it reads as a dark disc floating on a
+   lighter card. */
+:root[data-theme="legacy-luxe"] .fill-white,
+:root[data-theme="legacy-luxe"] .dark\:fill-\[\#0a0a0a\] {
+  fill: #171c22;
+}
+
 :root[data-theme="legacy-luxe"] .text-blue-800,
 :root[data-theme="legacy-luxe"] .dark\:text-blue-300,
 :root[data-theme="legacy-luxe"] .text-blue-600,

@@ -3,15 +3,23 @@ import { Money } from "@/components/Money";
 
 // Fixed palette (not generated) so a given channel keeps the same color
 // across reloads even as the underlying data changes month to month.
+//
+// Retuned 2026-08-22 for the premium refresh: a teal-led ramp with warm
+// stone/gold accents, instead of the old primary blue/amber/red rainbow.
+// Segments stay clearly distinguishable (that's the whole job of a pie
+// palette) while reading as one deliberate palette rather than default
+// chart colours — the brief calls for teal on charts and warm gold used
+// very sparingly. Order matters: the biggest channel takes the first entry,
+// so sea-teal leads.
 const COLORS = [
-  "#3b82f6", // blue
-  "#f59e0b", // amber
-  "#10b981", // emerald
-  "#a855f7", // purple
-  "#ef4444", // red
-  "#06b6d4", // cyan
-  "#ec4899", // pink
-  "#84cc16", // lime
+  "#14b8a6", // sea teal — primary accent
+  "#5eead4", // soft teal
+  "#0e7490", // deep teal
+  "#d4af37", // warm gold, used sparingly
+  "#b8b4aa", // muted stone
+  "#2dd4bf", // bright teal
+  "#7dd3fc", // pale sky, for long tails
+  "#8b7355", // warm brown
 ];
 
 // Pure-SVG donut chart — no charting library dependency needed for a single
