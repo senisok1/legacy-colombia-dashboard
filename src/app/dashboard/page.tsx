@@ -12,7 +12,12 @@ import { StatCard } from "@/components/StatCard";
 import { Money } from "@/components/Money";
 import { PropertyHero } from "@/components/shell/PropertyHero";
 import { Sparkline, DonutRing, MiniBars } from "@/components/shell/MiniCharts";
-import { ConstructionOverviewCard, PropertyGalleryCard } from "@/components/shell/DashboardCards";
+import {
+  ConstructionOverviewCard,
+  PropertyGalleryCard,
+  RecentMessagesCard,
+  TeamOperationsCard,
+} from "@/components/shell/DashboardCards";
 import { propertyGroupById } from "@/lib/propertyGroups";
 import { BookingsTable } from "@/components/BookingsTable";
 import { OccupancyCalendar } from "@/components/OccupancyCalendar";
@@ -312,6 +317,17 @@ export default async function DashboardPage() {
           business logic. Each returns null when it has nothing to show, so
           the row simply doesn't appear on a property with no construction
           work or no listing photos. */}
+      {!isTeam && session?.organizationId && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+          <RecentMessagesCard organizationId={session.organizationId} groupId={groupId} />
+          <TeamOperationsCard
+            organizationId={session.organizationId}
+            groupId={groupId}
+            upcomingStays={allUpcoming.length}
+          />
+        </div>
+      )}
+
       {!isTeam && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
           {session?.organizationId && (
