@@ -3,7 +3,7 @@ import { getLatestRateSnapshots, getLatestRateOverrides } from "@/lib/revenueMan
 import { getServerSession } from "@/lib/session";
 import { cookies } from "next/headers";
 import { getUserByEmail } from "@/lib/users";
-import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, propertyGroupById } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { RevenueManagementExplorer } from "@/components/RevenueManagementExplorer";
 
@@ -35,7 +35,6 @@ export default async function RevenueManagementPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">AI Pricing — {propertyGroupById(groupId).label}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
           Occupancy/ADR rate recommendations. Review a night, edit the price if you want, and click Apply to push it
           live through PriceLabs.

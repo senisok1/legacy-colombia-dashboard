@@ -37,7 +37,6 @@ export default async function ActivityPage() {
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold">AI Activity</h1>
           <p className="text-sm text-black/50 dark:text-white/50">
             An append-only audit log of every action your AI agents have taken — what they reviewed, what they
             decided, and what happened as a result. Nothing here can be edited or deleted, by design.

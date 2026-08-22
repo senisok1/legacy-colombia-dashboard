@@ -21,7 +21,6 @@ export default async function MessagingPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Messaging</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
           Full conversation inbox with AI-suggested replies and automatic English translation, plus pre-arrival,
           check-in, and post-stay templates.

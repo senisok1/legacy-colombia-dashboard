@@ -42,7 +42,6 @@ export default async function MaintenancePage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Maintenance</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
           Work-order tracking for reported issues — guest-flagged or logged by hand. Nothing here pages a vendor
           or messages a guest automatically.

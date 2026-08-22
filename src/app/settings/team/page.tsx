@@ -13,7 +13,6 @@ export default async function TeamMembersPage() {
   return (
     <div className="mx-auto max-w-4xl px-6 py-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Add a Team Member</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
           Create and manage logins for your team — admins get full access, team members can view everything and
           add notes on the Management tab.

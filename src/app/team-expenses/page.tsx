@@ -18,7 +18,6 @@ export default async function TeamExpensesPage() {
   return (
     <div className="mx-auto max-w-4xl px-6 py-6 space-y-4">
       <div>
-        <h1 className="text-xl font-semibold">{t("exp.title", lang)}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">{t("exp.subtitle", lang)}</p>
       </div>
       <TeamExpenseRequests />

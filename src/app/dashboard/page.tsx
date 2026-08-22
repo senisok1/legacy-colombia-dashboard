@@ -11,6 +11,9 @@ import { enforceBillingLock } from "@/lib/billingGate";
 import { StatCard } from "@/components/StatCard";
 import { Money } from "@/components/Money";
 import { PropertyHero } from "@/components/shell/PropertyHero";
+import { Sparkline, DonutRing, MiniBars } from "@/components/shell/MiniCharts";
+import { ConstructionOverviewCard, PropertyGalleryCard } from "@/components/shell/DashboardCards";
+import { propertyGroupById } from "@/lib/propertyGroups";
 import { BookingsTable } from "@/components/BookingsTable";
 import { OccupancyCalendar } from "@/components/OccupancyCalendar";
 import { RevenueBySourceChart } from "@/components/RevenueBySourceChart";
@@ -131,6 +134,21 @@ export default async function DashboardPage() {
   const totalRevenueYtd = stats.ytdRevenue + extrasHouseRevenueUsd;
   const lang = viewer?.language;
 
+  // Trend series for the KPI cards' mini charts (2026-08-22, Seni's ask for
+  // charts/graphs on the dashboard). Derived entirely from `ytdBookings`,
+  // the SAME already-bounded, already-property-scoped set the Revenue (YTD)
+  // card and the channel pie chart use — so the shapes can never tell a
+  // different story than the numbers beside them. Nothing new is fetched.
+  const monthsElapsed = nowForYtd.getMonth() + 1;
+  const revenueByMonth = Array.from({ length: monthsElapsed }, () => 0);
+  const nightsByMonth = Array.from({ length: monthsElapsed }, () => 0);
+  for (const b of ytdBookings) {
+    const m = parseISO(b.arrival).getMonth();
+    if (m < 0 || m >= monthsElapsed) continue;
+    revenueByMonth[m] += b.totalAmount ?? 0;
+    nightsByMonth[m] += b.nights ?? 0;
+  }
+
   return (
     <div className="mx-auto max-w-6xl px-4 md:px-6 py-4 md:py-6 space-y-5 md:space-y-6">
       <AutoRefresh enabled={fromSnapshot} />
@@ -168,9 +186,15 @@ export default async function DashboardPage() {
                 `${stats.ytdBookings} bookings · gross / net after channel fees`
               )
             }
+            chart={<Sparkline values={revenueByMonth} />}
           />
         )}
-        <StatCard label={t("dash.occupancy90d", lang)} value={`${stats.occupancyRate90d}%`} hint={t("dash.occupancyHint", lang)} />
+        <StatCard
+          label={t("dash.occupancy90d", lang)}
+          value={`${stats.occupancyRate90d}%`}
+          hint={t("dash.occupancyHint", lang)}
+          chart={<DonutRing pct={stats.occupancyRate90d} />}
+        />
         {!isTeam && (
           <StatCard
             label="Avg nightly rate"
@@ -178,13 +202,14 @@ export default async function DashboardPage() {
             subLabel="Net"
             subValue={<Money amount={stats.avgNetNightlyRate} />}
             hint="Year to date · gross / net"
+            chart={<MiniBars values={nightsByMonth} />}
           />
         )}
         <StatCard label={t("dash.avgLengthOfStay", lang)} value={`${stats.avgLengthOfStay} ${t("mgmt.nights", lang)}`} hint={t("dash.yearToDate", lang)} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
+        <div className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 p-3 md:p-4 bg-white dark:bg-white/5">
           <h2 className="text-sm font-semibold mb-3">
             {t("dash.currentlyCheckedIn", lang)} ({stats.currentGuests.length})
           </h2>
@@ -198,20 +223,20 @@ export default async function DashboardPage() {
           <UpcomingArrivals bookings={allUpcoming} showTotal={!isTeam} />
         </div>
 
-        <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
+        <div className="rounded-xl border border-black/10 dark:border-white/10 p-3 md:p-4 bg-white dark:bg-white/5">
           <OccupancyCalendar bookings={withNames(bookings)} showFinancials={!isTeam} />
         </div>
       </div>
 
       {!isTeam && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-1 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
+          <div className="lg:col-span-1 rounded-xl border border-black/10 dark:border-white/10 p-3 md:p-4 bg-white dark:bg-white/5">
             <h2 className="text-sm font-semibold mb-3">Revenue by channel (YTD) — gross &amp; net</h2>
             <RevenueBySourceChart breakdown={revenueByChannel} />
           </div>
 
           {showExtras && (
-            <div className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">
+            <div className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 p-3 md:p-4 bg-white dark:bg-white/5">
               <div className="mb-3 flex items-baseline justify-between gap-2">
                 <h2 className="text-sm font-semibold">Extras revenue (YTD) — house share</h2>
                 {/* Labelled explicitly: unlike booking revenue, these figures
@@ -219,7 +244,12 @@ export default async function DashboardPage() {
                     reconcile to no payment processor. */}
                 <span className="text-xs text-black/40 dark:text-white/40">Manually recorded</span>
               </div>
-              <table className="w-full text-sm">
+              {/* Five columns can't fit a phone without squashing the
+                  numbers — scroll horizontally instead of shrinking, same
+                  treatment BookingsTable already uses (2026-08-22 mobile
+                  pass). No content is dropped on small screens. */}
+              <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[420px]">
                 <thead>
                   <tr className="text-left text-xs text-black/50 dark:text-white/50">
                     <th className="pb-1 font-medium">Extra</th>
@@ -264,6 +294,7 @@ export default async function DashboardPage() {
                   </tr>
                 </tbody>
               </table>
+              </div>
               <p className="mt-2 text-xs text-black/50 dark:text-white/50">
                 Attach rate {extrasSummary.attachRatePct}% ({extrasSummary.staysWithExtras} of{" "}
                 {extrasSummary.totalStays} stays) · {Math.round(extrasSummary.houseRevenuePerStay).toLocaleString()} COP house
@@ -274,6 +305,21 @@ export default async function DashboardPage() {
         </div>
       )}
 
+      {/* Operations overview strip (2026-08-22, Seni's ask for more data,
+          charts and photography on the dashboard). Both cards are read-only
+          summaries of data that already lives in other modules, each linking
+          through to the module that owns it — no new tables, workflows or
+          business logic. Each returns null when it has nothing to show, so
+          the row simply doesn't appear on a property with no construction
+          work or no listing photos. */}
+      {!isTeam && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
+          {session?.organizationId && (
+            <ConstructionOverviewCard organizationId={session.organizationId} groupId={groupId} />
+          )}
+          <PropertyGalleryCard groupId={groupId} label={propertyGroupById(groupId).label} />
+        </div>
+      )}
     </div>
   );
 }

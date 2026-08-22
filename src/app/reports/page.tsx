@@ -5,7 +5,7 @@ import { buildTrendReport } from "@/lib/trendReport";
 import { getServerSession } from "@/lib/session";
 import { cookies } from "next/headers";
 import { getUserByEmail } from "@/lib/users";
-import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId, propertyGroupById } from "@/lib/propertyGroups";
+import { PROPERTY_GROUP_COOKIE, effectivePropertyGroupId } from "@/lib/propertyGroups";
 import { enforceBillingLock } from "@/lib/billingGate";
 import { StatCard } from "@/components/StatCard";
 import { ExecutiveSummary } from "@/components/ExecutiveSummary";
@@ -58,7 +58,6 @@ export default async function ReportsPage() {
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <AutoRefresh enabled={fromSnapshot} />
       <div>
-        <h1 className="text-xl font-semibold">Reports — {propertyGroupById(groupId).label}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">
           Revenue and occupancy, computed directly from your booking data.
         </p>

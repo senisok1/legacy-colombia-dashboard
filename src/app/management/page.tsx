@@ -21,7 +21,6 @@ export default async function ManagementPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-6 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">{t("mgmt.title", lang)}</h1>
         <p className="text-sm text-black/50 dark:text-white/50">{t("mgmt.subtitle", lang)}</p>
       </div>
       <ManagementBoard />

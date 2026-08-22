@@ -52,8 +52,16 @@ function usePageTitle(): string {
     { prefix: "/revenue-management", label: "AI Pricing" },
     { prefix: "/activity", label: "AI Activity" },
     { prefix: "/bill-pay", label: "Bill Pay" },
+    // Settings sub-routes listed explicitly: these pages used to render
+    // their own <h1> ("Add a Team Member", "My Account"), which the shell
+    // header now owns — without these entries both would flatten to
+    // "Settings" and the more specific name would be lost.
+    { prefix: "/settings/team", label: "Add a Team Member" },
+    { prefix: "/settings/account", label: "My Account" },
     { prefix: "/settings", label: "Settings" },
     { prefix: "/billing", label: "Billing" },
+    { prefix: "/maintenance", label: "Maintenance" },
+    { prefix: "/vendors", label: "Vendors" },
     { prefix: "/guests", label: "CRM" },
   ];
   // Longest prefix wins so /construction-budget doesn't resolve to

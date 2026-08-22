@@ -15,7 +15,6 @@ export default async function BillingPage() {
   return (
     <div className="mx-auto max-w-5xl px-6 py-8 space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">Billing</h1>
         <p className="text-sm text-black/50 dark:text-white/50 mt-1">
           Manage your subscription — pricing is based on how many properties you manage.
         </p>
