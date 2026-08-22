@@ -336,6 +336,26 @@ export function CommissionsBoard() {
     void decide(l, false, true, reason);
   }
 
+  // Owner-only, extras-only (2026-08-22, Seni's ask). Server-side gate is the
+  // real enforcement (api/management/extras' DELETE is CEO-only + Legacy
+  // Colombia-scoped) — this button is just surfacing it in the UI, which
+  // never existed before even though the endpoint always has.
+  async function deleteExtra(l: ExtraLine) {
+    if (busyId === l.id) return;
+    if (!window.confirm(t("comm.deleteExtraConfirm"))) return;
+    setBusyId(l.id);
+    try {
+      const res = await fetch(`/api/management/extras?id=${encodeURIComponent(l.id)}`, { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await load(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("comm.couldntSave"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function settle() {
     setSettling(true);
     setError(null);
@@ -805,6 +825,15 @@ export function CommissionsBoard() {
                     {t("common.edit")}
                   </button>
                 )}
+                {l.type === "extra" && data.viewerIsOwner && (
+                  <button
+                    onClick={() => void deleteExtra(l)}
+                    disabled={busyId === l.id}
+                    className="text-xs text-red-600 dark:text-red-400 underline disabled:opacity-40"
+                  >
+                    {t("common.delete")}
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -885,6 +914,15 @@ export function CommissionsBoard() {
                     className="text-xs underline"
                   >
                     {t("common.edit")}
+                  </button>
+                )}
+                {data.viewerIsOwner && editMode && l.type === "extra" && (
+                  <button
+                    onClick={() => void deleteExtra(l)}
+                    disabled={busyId === l.id}
+                    className="text-xs text-red-600 dark:text-red-400 underline disabled:opacity-40"
+                  >
+                    {t("common.delete")}
                   </button>
                 )}
                 {data.viewerIsOwner && editMode && l.type === "direct_booking" && (

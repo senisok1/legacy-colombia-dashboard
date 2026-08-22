@@ -551,6 +551,11 @@ const STRINGS: Dict = {
     Portuguese: "Somente o proprietário — corrigir uma entrada aprovada antes de liquidá-la",
   },
   "comm.commissionPctLabel": { English: "Commission %", Spanish: "% de comisión", Portuguese: "% de comissão" },
+  "comm.deleteExtraConfirm": {
+    English: "Delete this extra service entirely? This can't be undone.",
+    Spanish: "¿Eliminar este servicio adicional por completo? No se puede deshacer.",
+    Portuguese: "Excluir este serviço adicional por completo? Não pode ser desfeito.",
+  },
   "comm.unlock": { English: "Unlock", Spanish: "Desbloquear", Portuguese: "Desbloquear" },
   "comm.unlockHelp": {
     English: "Owner only — undoes the settlement so this line can be corrected, then re-settled",
