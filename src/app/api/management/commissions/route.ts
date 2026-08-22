@@ -263,10 +263,14 @@ async function buildCommissionsBoard(orgId: string, groupId: string) {
   // week), same reasoning stayDates() used to allow in StayExtras.tsx.
   // Ordering (2026-08-22, Seni's ask: "let's start with the 5 previous
   // guests... in case we forgot to log an extra for a past guest"): the
-  // 5 most-recently-departed stays lead the list (most recent first) as a
-  // deliberate reminder prompt, THEN the in-house/upcoming stays in
-  // chronological order (same as the 2026-08-21 ordering), then any older
-  // past stays beyond the top 5, most-recent-departure first.
+  // 5 most-recently-departed stays lead the list as a deliberate reminder
+  // prompt. Follow-up same day: within that group of 5, go oldest-to-
+  // newest (Laura, Catalina, Octavio, Juan, Dennys) so it reads in one
+  // continuous chronological sweep straight into the in-house/upcoming
+  // stays that follow (Natalia and onward) — i.e. the whole dropdown is
+  // one ascending-by-date list, just with the 5 most recent departures
+  // pulled to the front. Any older past stays beyond the top 5 go last,
+  // most-recent-departure first (unchanged from before).
   const todayIso = new Date().toISOString().slice(0, 10);
   const eligibleStays = bookings.filter((b) => !b.isBlock && b.status !== "Cancelled");
   const currentAndFutureStays = eligibleStays
@@ -275,7 +279,7 @@ async function buildCommissionsBoard(orgId: string, groupId: string) {
   const pastStays = eligibleStays
     .filter((b) => b.departure && b.departure.slice(0, 10) < todayIso)
     .sort((a, b) => new Date(b.arrival || 0).getTime() - new Date(a.arrival || 0).getTime());
-  const recentPastStays = pastStays.slice(0, 5);
+  const recentPastStays = pastStays.slice(0, 5).reverse();
   const olderPastStays = pastStays.slice(5);
   const stays = [...recentPastStays, ...currentAndFutureStays, ...olderPastStays]
     .slice(0, 300)
