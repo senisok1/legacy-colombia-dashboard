@@ -79,16 +79,20 @@ export async function GET(req: NextRequest) {
     // Probe the non-property-specific paths anyway.
   }
 
+  // Round 2 (2026-08-22): /listings and /listings/{id} both return 200 with
+  // rich content (descriptions, amenities, policies) — so this account DOES
+  // have listing-endpoint access. Images just aren't in the default payload,
+  // so try the documented "include" style params that usually gate heavy
+  // sub-resources, and a couple of plausible sub-paths.
   const candidates = [
-    "/listings",
+    propertyId ? `/listings/${propertyId}?include_images=true` : null,
+    propertyId ? `/listings/${propertyId}?includeImages=true` : null,
+    propertyId ? `/listings/${propertyId}?include=images` : null,
+    propertyId ? `/listings/${propertyId}/image` : null,
+    propertyId ? `/listings/${propertyId}/media` : null,
+    "/images",
+    "/photos",
     propertyId ? `/listings/${propertyId}` : null,
-    propertyId ? `/listings/${propertyId}/images` : null,
-    propertyId ? `/listings/${propertyId}/photos` : null,
-    "/listingimages",
-    "/listingphotos",
-    propertyId ? `/properties/${propertyId}` : null,
-    propertyId ? `/properties/${propertyId}/images` : null,
-    propertyId ? `/properties/${propertyId}/photos` : null,
   ].filter((p): p is string => p !== null);
 
   const results = [];
@@ -104,8 +108,24 @@ export async function GET(req: NextRequest) {
       });
       const body = await res.text();
       // Cheap signal for "does this payload actually contain image URLs" —
-      // the whole question this route exists to answer.
+      // the whole question this route exists to answer. Widened to catch
+      // extensionless CDN URLs too (many image CDNs serve /image/12345).
       const looksLikeImages = /https?:\/\/[^"']+\.(jpe?g|png|webp)/i.test(body);
+      // Report the payload's top-level keys and any image-ish key names, so
+      // an image field that doesn't match the URL regex (relative path,
+      // extensionless CDN URL, nested object) is still discoverable.
+      let topLevelKeys: string[] = [];
+      let imageishKeys: string[] = [];
+      try {
+        const parsed = JSON.parse(body);
+        const probe = Array.isArray(parsed?.items) ? parsed.items[0] : parsed;
+        if (probe && typeof probe === "object") {
+          topLevelKeys = Object.keys(probe);
+          imageishKeys = topLevelKeys.filter((k) => /image|photo|media|thumb|picture|url/i.test(k));
+        }
+      } catch {
+        // Non-JSON body — the raw preview below is the fallback signal.
+      }
       results.push({
         path,
         status: res.status,
@@ -114,7 +134,20 @@ export async function GET(req: NextRequest) {
         sampleImageUrls: looksLikeImages
           ? [...body.matchAll(/https?:\/\/[^"']+?\.(?:jpe?g|png|webp)/gi)].slice(0, 5).map((m) => m[0])
           : [],
-        body: preview(body),
+        topLevelKeys,
+        imageishKeys,
+        imageishValues: Object.fromEntries(
+          imageishKeys.slice(0, 6).map((k) => {
+            try {
+              const parsed = JSON.parse(body);
+              const probe = Array.isArray(parsed?.items) ? parsed.items[0] : parsed;
+              return [k, preview(JSON.stringify(probe[k]), 300)];
+            } catch {
+              return [k, null];
+            }
+          })
+        ),
+        body: preview(body, 300),
       });
       // Be polite to the 1 req/sec rate limit this account runs under.
       await new Promise((r) => setTimeout(r, 1100));
