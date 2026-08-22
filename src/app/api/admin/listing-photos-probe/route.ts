@@ -4,6 +4,7 @@ import { getTargetProperties } from "@/lib/ownerrez";
 import { getOwnerRezCredentials } from "@/lib/credentials";
 import { getDefaultOrganizationId } from "@/lib/organizations";
 import { getSessionFromRequest } from "@/lib/session";
+import { PROPERTY_GROUPS } from "@/lib/propertyGroups";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -64,6 +65,56 @@ export async function GET(req: NextRequest) {
   }
   if (!email || !token) {
     return NextResponse.json({ error: "No OwnerRez credentials resolved." }, { status: 500 });
+  }
+
+  // ROUND 3 (2026-08-22): CONFIRMED — GET /v2/listings/{propertyId} returns a
+  // `photos` array of { caption, cropped_url, large_url, original_url, ... }.
+  // The URLs are extensionless CDN links (https://uc.orez.io/i/{hash}-Large),
+  // which is why the round-1 file-extension regex reported "no photos".
+  // This round walks EVERY property group and reports its first few photos,
+  // to confirm all five properties have usable imagery before the UI refresh
+  // depends on it (the spec forbids mixing photos between properties, so a
+  // property with zero photos would need to be caught now, not later).
+  if (req.nextUrl.searchParams.get("all") === "1") {
+    const perGroup = [];
+    for (const g of PROPERTY_GROUPS) {
+      try {
+        const props = await getTargetProperties(undefined, g.id);
+        const group: {
+          groupId: string;
+          label: string;
+          listings: { propertyId: number; name: string; photoCount: number; topPhotos: unknown[] }[];
+        } = { groupId: g.id, label: g.label, listings: [] };
+        for (const p of props) {
+          const res = await fetch(`${API_BASE}/listings/${p.id}`, {
+            headers: {
+              Authorization: authHeader(email, token),
+              Accept: "application/json",
+              "User-Agent": config.userAgent,
+            },
+            cache: "no-store",
+          });
+          const json = res.ok ? await res.json() : null;
+          const photos = Array.isArray(json?.photos) ? json.photos : [];
+          group.listings.push({
+            propertyId: p.id,
+            name: p.name,
+            photoCount: photos.length,
+            topPhotos: photos.slice(0, 3),
+          });
+          await new Promise((r) => setTimeout(r, 1100));
+        }
+        perGroup.push(group);
+      } catch (err) {
+        perGroup.push({
+          groupId: g.id,
+          label: g.label,
+          error: err instanceof Error ? err.message : "Unknown error.",
+          listings: [],
+        });
+      }
+    }
+    return NextResponse.json({ mode: "all-property-groups", perGroup });
   }
 
   // Use a real property id so the per-property paths are actually meaningful.
