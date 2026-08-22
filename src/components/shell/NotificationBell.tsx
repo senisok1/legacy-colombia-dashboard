@@ -77,6 +77,16 @@ export function NotificationBell({ badges }: { badges: NavBadges }) {
       urgent: false,
     },
     {
+      // Included so the bell can't contradict the nav: the Marketing badge
+      // is this same count, and a sidebar showing "146" beside a bell saying
+      // "all clear" would just look broken.
+      key: "campaigns",
+      label: `${badges.campaignsNeedingAttention} campaign candidate${badges.campaignsNeedingAttention === 1 ? "" : "s"} to review`,
+      count: badges.campaignsNeedingAttention,
+      href: "/crm-campaigns",
+      urgent: false,
+    },
+    {
       key: "maintenance",
       label: `${badges.workOrdersNeedingAttention} open work order${badges.workOrdersNeedingAttention === 1 ? "" : "s"}`,
       count: badges.workOrdersNeedingAttention,
