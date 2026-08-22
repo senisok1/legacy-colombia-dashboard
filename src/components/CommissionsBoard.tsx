@@ -208,6 +208,20 @@ export function CommissionsBoard() {
   const [data, setData] = useState<BoardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Approve/Decline feedback (2026-08-22, Seni: "when I approved Private
+  // chef and Private massage, nothing happened. It should approve and get
+  // locked immediately"). The approve DID work server-side both times
+  // (confirmed live) — the actual gap was purely visual: the Approve
+  // button gave no "in progress" text (just a faint opacity dim), and a
+  // successful approve moves the card out of "Awaiting owner review" into
+  // a whole different section ("Approved — locked") further down the
+  // page, so if that section wasn't in view the card just silently
+  // vanished from where Seni was looking. busyAction drives an
+  // "Approving…"/"Declining…" button label; justApprovedId drives an
+  // auto-scroll-into-view + brief highlight on the card's new home in the
+  // approved list, so approving now visibly, immediately shows the result.
+  const [busyAction, setBusyAction] = useState<"approve" | "decline" | null>(null);
+  const [justApprovedId, setJustApprovedId] = useState<string | null>(null);
   const [settleTarget, setSettleTarget] = useState<SettleTarget | null>(null);
   const [bufferPct, setBufferPct] = useState("0");
   const [note, setNote] = useState("");
@@ -251,6 +265,7 @@ export function CommissionsBoard() {
 
   async function decide(l: Line, approved: boolean, declined: boolean, declinedReason?: string) {
     setBusyId(l.id);
+    setBusyAction(approved ? "approve" : declined ? "decline" : null);
     try {
       const res = await fetch("/api/management/commissions", {
         method: "PUT",
@@ -260,10 +275,19 @@ export function CommissionsBoard() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       await load(true);
+      // Approving moves the card into a whole different section further
+      // down the page ("Approved — locked") — flag it so that section can
+      // scroll it into view and briefly highlight it, otherwise the card
+      // just silently vanishes from wherever the owner was looking.
+      if (approved && !declined) {
+        setJustApprovedId(l.id);
+        setTimeout(() => setJustApprovedId((cur) => (cur === l.id ? null : cur)), 2500);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("comm.couldntSave"));
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   }
 
@@ -853,14 +877,14 @@ export function CommissionsBoard() {
                       disabled={busyId === l.id}
                       className="rounded-md bg-[var(--accent)] px-2 py-1 text-xs text-white disabled:opacity-40"
                     >
-                      {t("comm.approve")}
+                      {busyId === l.id && busyAction === "approve" ? t("comm.approving") : t("comm.approve")}
                     </button>
                     <button
                       onClick={() => decline(l)}
                       disabled={busyId === l.id}
                       className="rounded-md border border-black/15 dark:border-white/15 px-2 py-1 text-xs disabled:opacity-40"
                     >
-                      {t("comm.decline")}
+                      {busyId === l.id && busyAction === "decline" ? t("comm.declining") : t("comm.decline")}
                     </button>
                     <button
                       onClick={() => setSettleTarget(l)}
@@ -935,7 +959,16 @@ export function CommissionsBoard() {
             {approved.map((l) => (
               <li
                 key={l.id}
-                className="rounded-lg bg-blue-500/5 px-3 py-2 text-sm space-y-1.5"
+                ref={(el) => {
+                  // Auto-scroll a just-approved card into view and briefly
+                  // highlight it (2026-08-22 fix) — otherwise a card
+                  // approved from the pending list above simply vanishes
+                  // into this section without the owner seeing it land here.
+                  if (l.id === justApprovedId && el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                }}
+                className={`rounded-lg px-3 py-2 text-sm space-y-1.5 transition-colors duration-1000 ${
+                  l.id === justApprovedId ? "bg-emerald-500/20 ring-2 ring-emerald-500/50" : "bg-blue-500/5"
+                }`}
               >
                 {/* Same two-row split as the pending list above (2026-08-22
                     fix) — keeps every card's action row on its own line

@@ -595,6 +595,10 @@ const STRINGS: Dict = {
   "comm.gabriel": { English: "Gabriel", Spanish: "Gabriel", Portuguese: "Gabriel" },
   "comm.approve": { English: "Approve", Spanish: "Aprobar", Portuguese: "Aprovar" },
   "comm.decline": { English: "Decline", Spanish: "Rechazar", Portuguese: "Recusar" },
+  // In-progress button labels (2026-08-22, Seni: "when I approved... nothing
+  // happened" — the approve DID work, it just gave no visible feedback).
+  "comm.approving": { English: "Approving…", Spanish: "Aprobando…", Portuguese: "Aprovando…" },
+  "comm.declining": { English: "Declining…", Spanish: "Rechazando…", Portuguese: "Recusando…" },
   "comm.declineReasonPrompt": { English: "Reason (optional):", Spanish: "Motivo (opcional):", Portuguese: "Motivo (opcional):" },
   "comm.noPending": { English: "Nothing awaiting approval.", Spanish: "Nada en espera de aprobación.", Portuguese: "Nada aguardando aprovação." },
   "comm.noApproved": { English: "Nothing approved and unpaid right now.", Spanish: "Nada aprobado y sin pagar por ahora.", Portuguese: "Nada aprovado e não pago no momento." },
