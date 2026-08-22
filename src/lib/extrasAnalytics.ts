@@ -118,6 +118,19 @@ export function summarizeExtras(
     const booking = bookingsById.get(bookingId);
     if (!booking) continue; // different property group — never counted
     for (const extra of list) {
+      // Declined extras were rejected by the owner (see CommissionsBoard's
+      // decline() — it requires a reason: duplicate entry, guest never
+      // actually paid, wrong stay, etc.) so they never happened as far as
+      // revenue is concerned. Fixed 2026-08-22 (Seni: "why is it showing
+      // ice tub revenue on the dashboard... when there is no approved ice
+      // tub extra on commissions tab?") — this loop previously summed every
+      // extra ever logged with no status filter at all, so a declined row
+      // kept inflating Dashboard/Reports revenue forever. Pending (not yet
+      // approved, not declined) extras still count: the owner's approval
+      // gate is about validating the house/Gabriel SPLIT, not whether the
+      // guest actually paid, so a real sale awaiting review is still real
+      // revenue — only an explicitly-declined one is excluded.
+      if (extra.declined) continue;
       const date = attributionDate(extra, booking);
       if (!date) continue;
       if (from && date < from) continue;
