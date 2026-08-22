@@ -250,9 +250,23 @@ async function buildCommissionsBoard(orgId: string, groupId: string) {
   // Not date-filtered — an extra can legitimately be logged for a stay
   // that already departed (Gabriel remembering a chef he arranged last
   // week), same reasoning stayDates() used to allow in StayExtras.tsx.
-  const stays = bookings
-    .filter((b) => !b.isBlock && b.status !== "Cancelled")
-    .sort((a, b) => new Date(b.arrival || 0).getTime() - new Date(a.arrival || 0).getTime())
+  // Ordering (2026-08-21, Seni's ask: "start the dropdown with the current
+  // stay and then descending to future stays in order"): the guest who's
+  // in-house right now leads the list, then upcoming stays follow in
+  // chronological order — a currently in-house stay's own arrival date is
+  // always earlier than any future stay's, so a plain ascending sort by
+  // arrival naturally puts it first. Already-departed stays stay in the
+  // list (still loggable) but move to the end, most-recent-departure first,
+  // same order they used to be shown in overall.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const eligibleStays = bookings.filter((b) => !b.isBlock && b.status !== "Cancelled");
+  const currentAndFutureStays = eligibleStays
+    .filter((b) => !b.departure || b.departure.slice(0, 10) >= todayIso)
+    .sort((a, b) => new Date(a.arrival || 0).getTime() - new Date(b.arrival || 0).getTime());
+  const pastStays = eligibleStays
+    .filter((b) => b.departure && b.departure.slice(0, 10) < todayIso)
+    .sort((a, b) => new Date(b.arrival || 0).getTime() - new Date(a.arrival || 0).getTime());
+  const stays = [...currentAndFutureStays, ...pastStays]
     .slice(0, 300)
     .map((b) => ({
       bookingId: b.id,
