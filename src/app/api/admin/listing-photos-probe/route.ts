@@ -3,6 +3,7 @@ import { config } from "@/lib/config";
 import { getTargetProperties } from "@/lib/ownerrez";
 import { getOwnerRezCredentials } from "@/lib/credentials";
 import { getDefaultOrganizationId } from "@/lib/organizations";
+import { getSessionFromRequest } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -40,8 +41,13 @@ function preview(text: string, limit = 600): string {
 }
 
 export async function GET(req: NextRequest) {
+  // Read-only diagnostic: accepts EITHER the admin secret (for curl/cron-style
+  // use, same as every other /api/admin route) OR a signed-in owner session,
+  // so it can be run straight from the browser without handling the secret.
   const secret = req.nextUrl.searchParams.get("secret");
-  if (!config.adminSecret || secret !== config.adminSecret) {
+  const secretOk = Boolean(config.adminSecret) && secret === config.adminSecret;
+  const sessionOk = getSessionFromRequest(req)?.role === "CEO";
+  if (!secretOk && !sessionOk) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
