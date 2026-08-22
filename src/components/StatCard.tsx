@@ -32,23 +32,33 @@ export function StatCard({
   return (
     <div className="rounded-xl border border-black/10 dark:border-white/10 p-3 md:p-4 bg-white dark:bg-white/5">
       <div className="text-xs uppercase tracking-wide text-black/50 dark:text-white/50">{label}</div>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-baseline gap-3 mt-1 flex-wrap">
-            <div className="text-2xl font-semibold">{value}</div>
+      {/* The headline figure gets the card's FULL width on its own row.
+          It previously shared a flex row with the chart, which was fine for
+          "$79,291" but broke on "COP 290,513,086" — in COP the numbers are
+          ~3 orders of magnitude longer, so the value overflowed its track
+          and the sparkline drew straight over the digits (reported
+          2026-08-22 with a screenshot). Giving the number its own row means
+          no currency, and no future longer figure, can ever collide with
+          the chart. */}
+      <div className="mt-1 text-2xl font-semibold break-words">{value}</div>
+      {/* Sub-value and chart share the second row — the chart sits against
+          the smaller "Net …" text, matching the mock, and is right-aligned
+          whether or not a sub-value exists. */}
+      {(subValue || chart) && (
+        <div className="mt-0.5 flex items-end justify-between gap-3">
+          <div className="min-w-0 text-sm text-black/50 dark:text-white/50">
             {subValue && (
-              <div className="text-sm text-black/50 dark:text-white/50">
+              <>
                 {subLabel ? `${subLabel} ` : ""}
                 {subValue}
-              </div>
+              </>
             )}
           </div>
+          {/* Hidden on the narrowest screens: at 2-up on a phone the row is
+              too tight for both, and the number is what actually matters. */}
+          {chart && <div className="hidden sm:block shrink-0 text-black/70 dark:text-white/70">{chart}</div>}
         </div>
-        {/* Hidden on the narrowest screens: at 2-up on a phone there isn't
-            room for both the figure and a chart without squeezing the
-            number, which is the thing that actually matters. */}
-        {chart && <div className="hidden sm:block shrink-0 mt-1 text-black/70 dark:text-white/70">{chart}</div>}
-      </div>
+      )}
       {hint && <div className="text-xs text-black/40 dark:text-white/40 mt-1">{hint}</div>}
     </div>
   );
