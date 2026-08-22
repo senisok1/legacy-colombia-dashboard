@@ -112,7 +112,7 @@ export function MobileNav({
                 <Link
                   href={item.href}
                   className={`relative flex flex-col items-center justify-center gap-0.5 min-h-[52px] px-1 py-1.5 text-[10px] transition-colors ${
-                    active ? "text-[var(--accent)]" : "text-black/55 dark:text-white/55"
+                    active ? "text-[var(--accent)]" : "text-[var(--text-muted,rgba(120,120,120,0.9))]"
                   }`}
                 >
                   <span className="relative">
@@ -135,7 +135,7 @@ export function MobileNav({
             <button
               onClick={() => setMoreOpen(true)}
               className={`w-full flex flex-col items-center justify-center gap-0.5 min-h-[52px] px-1 py-1.5 text-[10px] transition-colors ${
-                moreOpen ? "text-[var(--accent)]" : "text-black/55 dark:text-white/55"
+                moreOpen ? "text-[var(--accent)]" : "text-[var(--text-muted,rgba(120,120,120,0.9))]"
               }`}
             >
               <IconMore className="w-[21px] h-[21px]" />

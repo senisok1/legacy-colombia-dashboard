@@ -149,6 +149,15 @@ body {
 :root[data-theme="legacy-luxe"] .text-black\/70 {
   color: rgba(246, 243, 235, 0.78);
 }
+/* /55 matters: the mobile bottom nav uses it for INACTIVE tabs. Missing
+   from this list, those tabs rendered near-black on the charcoal bar for
+   anyone whose phone is in LIGHT mode (the dark: sibling only fires on OS
+   dark preference) — so only the active tab, which is teal, was visible.
+   Reported 2026-08-22: "on my mobile I only see the dashboard tab at the
+   bottom". Exactly the leak this whole override block exists to stop. */
+:root[data-theme="legacy-luxe"] .text-black\/55 {
+  color: rgba(246, 243, 235, 0.62);
+}
 :root[data-theme="legacy-luxe"] .text-black\/60 {
   color: #b8b4aa;
 }
@@ -160,6 +169,23 @@ body {
 }
 :root[data-theme="legacy-luxe"] .text-black\/30 {
   color: rgba(184, 180, 170, 0.45);
+}
+/* Completing the set. Audited 2026-08-22 after the mobile-nav bug above:
+   every text-black/N and border-black/N step ACTUALLY used anywhere in src
+   is aliased here, so no light-mode utility can leak black-on-charcoal for
+   a viewer whose OS is in light mode. (bg-black/40, /60, /80 are modal
+   scrims and are deliberately NOT aliased — those are supposed to be dark.) */
+:root[data-theme="legacy-luxe"] .text-black\/80 {
+  color: rgba(246, 243, 235, 0.88);
+}
+:root[data-theme="legacy-luxe"] .text-black\/35 {
+  color: rgba(184, 180, 170, 0.52);
+}
+:root[data-theme="legacy-luxe"] .text-black\/20 {
+  color: rgba(184, 180, 170, 0.34);
+}
+:root[data-theme="legacy-luxe"] .border-black\/20 {
+  border-color: rgba(246, 243, 235, 0.2);
 }
 /* Same opaque-dropdown fix red-black needed — see its comment below. */
 :root[data-theme="legacy-luxe"] .dark\:bg-neutral-900 {
