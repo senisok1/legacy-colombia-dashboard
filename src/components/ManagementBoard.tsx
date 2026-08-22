@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useCurrency } from "@/components/CurrencyProvider";
 import { useT, useLanguage } from "@/components/LanguageProvider";
+import { SectionCard, EmptyState } from "@/components/shell/Surfaces";
 import { plural } from "@/lib/i18n";
 
 const DOW_BY_LANG: Record<string, string[]> = {
@@ -511,7 +512,11 @@ export function ManagementBoard() {
     return <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-500">{error}</div>;
   }
   if (!data) {
-    return <div className="rounded-xl border border-black/10 dark:border-white/10 p-6 text-sm text-black/50 dark:text-white/50">{t("mgmt.loadingStays")}</div>;
+    return (
+      <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5">
+        <EmptyState>{t("mgmt.loadingStays")}</EmptyState>
+      </div>
+    );
   }
 
   return (
@@ -519,14 +524,14 @@ export function ManagementBoard() {
       {error && <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-500">{error}</div>}
 
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
-      <section className="lg:col-span-2 rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 p-4 space-y-3">
-        <h2 className="text-sm font-semibold">{t("mgmt.upcomingInHouse")} ({data.stays.length})</h2>
-        {data.stays.length === 0 && (
-          <p className="text-sm text-black/50 dark:text-white/50">{t("mgmt.noUpcomingStays")}</p>
-        )}
+      <SectionCard
+        className="lg:col-span-2"
+        title={`${t("mgmt.upcomingInHouse")} (${data.stays.length})`}
+      >
+        {data.stays.length === 0 && <EmptyState>{t("mgmt.noUpcomingStays")}</EmptyState>}
         <div className="space-y-3">
           {data.stays.map((s) => (
-            <div key={s.bookingId} className="rounded-lg border border-black/10 dark:border-white/10 p-3 space-y-2">
+            <div key={s.bookingId} className="rounded-lg border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.03] p-3 space-y-2 transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.05]">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="font-medium">{s.guestName}</span>
                 <span className="text-sm text-black/60 dark:text-white/60">
@@ -696,7 +701,7 @@ export function ManagementBoard() {
             </div>
           ))}
         </div>
-      </section>
+      </SectionCard>
 
       {/* Sticky lives on this wrapper, not on StayCalendar alone (bug fixed
           2026-08-18, Seni: "events list overlaps the calendar"). Position:
