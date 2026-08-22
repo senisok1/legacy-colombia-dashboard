@@ -182,10 +182,18 @@ export default async function DashboardPage() {
                 // convert through useCurrency() same as the headline
                 // value/subValue above, so both figures now follow the
                 // toggle together.
+                // Three separate lines (2026-08-22, Seni's ask). As one
+                // run-on sentence these wrapped mid-figure in COP — where
+                // the numbers are ~4 characters longer — so a reader had to
+                // hunt for where each amount started. One fact per line.
                 <>
-                  Stays <Money amount={stats.ytdRevenue} /> · Extras{" "}
-                  <Money amount={extrasSummary.houseRevenue} currency="COP" /> (house share) ·{" "}
-                  {stats.ytdBookings} bookings
+                  <span className="block">
+                    Stays <Money amount={stats.ytdRevenue} />
+                  </span>
+                  <span className="block">
+                    Extras <Money amount={extrasSummary.houseRevenue} currency="COP" /> (house share)
+                  </span>
+                  <span className="block">{stats.ytdBookings} bookings</span>
                 </>
               ) : (
                 `${stats.ytdBookings} bookings · gross / net after channel fees`
