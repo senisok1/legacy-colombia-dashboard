@@ -764,25 +764,39 @@ export function CommissionsBoard() {
             {pending.map((l) => (
               <li
                 key={l.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.06] px-3 py-2 text-sm"
+                className="rounded-lg bg-black/[0.03] dark:bg-white/[0.06] px-3 py-2 text-sm space-y-1.5"
               >
-                <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">
-                  {l.type === "extra" ? t("comm.extraType") : t("comm.directBooking")}
-                </span>
-                <span>{lineTitle(l, t)}</span>
-                {l.type === "direct_booking" && l.fxRate !== null && (
-                  <span className="text-[10px] text-black/40 dark:text-white/40" title={t("comm.lockedRate")}>
-                    🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
+                {/* Info row and actions row are deliberately two separate
+                    flex containers, not one wrapping row (2026-08-22, Seni:
+                    "this does not look uniform... the buttons should be on
+                    the second row"). A single flex-wrap row only broke onto
+                    a second line once the title got long enough to run out
+                    of space — a short title like "Private chef" left just
+                    enough room for the buttons to sit on the SAME line,
+                    while "Private massage" wrapped, so two otherwise-
+                    identical cards rendered differently. Splitting into two
+                    rows makes every card lay out the same way regardless of
+                    title length. */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">
+                    {l.type === "extra" ? t("comm.extraType") : t("comm.directBooking")}
                   </span>
-                )}
-                {l.type === "direct_booking" && l.guestPayoutCopOverride !== null && (
-                  <span className="text-[10px] text-amber-600 dark:text-amber-400" title={t("comm.guestPayoutOverridden")}>
-                    ✏️ {cop(l.guestPayoutCopOverride)}
+                  <span>{lineTitle(l, t)}</span>
+                  {l.type === "direct_booking" && l.fxRate !== null && (
+                    <span className="text-[10px] text-black/40 dark:text-white/40" title={t("comm.lockedRate")}>
+                      🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
+                    </span>
+                  )}
+                  {l.type === "direct_booking" && l.guestPayoutCopOverride !== null && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400" title={t("comm.guestPayoutOverridden")}>
+                      ✏️ {cop(l.guestPayoutCopOverride)}
+                    </span>
+                  )}
+                  <span className="ml-auto tabular-nums text-xs text-black/50 dark:text-white/50">
+                    {t("comm.house")} {money(l, l.houseAmount, "house")} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {money(l, l.gabrielAmount, "gabriel")}</strong>
                   </span>
-                )}
-                <span className="ml-auto tabular-nums text-xs text-black/50 dark:text-white/50">
-                  {t("comm.house")} {money(l, l.houseAmount, "house")} · <strong className="text-black dark:text-white">{t("comm.gabriel")} {money(l, l.gabrielAmount, "gabriel")}</strong>
-                </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 {data.viewerIsOwner && editMode && l.type === "direct_booking" && (
                   <span className="flex items-center gap-1 text-xs">
                     <label className="text-black/50 dark:text-white/50">{t("comm.commissionPctLabel")}</label>
@@ -879,6 +893,7 @@ export function CommissionsBoard() {
                     {t("common.delete")}
                   </button>
                 )}
+                </div>
               </li>
             ))}
           </ul>
@@ -920,26 +935,32 @@ export function CommissionsBoard() {
             {approved.map((l) => (
               <li
                 key={l.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-blue-500/5 px-3 py-2 text-sm"
+                className="rounded-lg bg-blue-500/5 px-3 py-2 text-sm space-y-1.5"
               >
-                <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">
-                  {l.type === "extra" ? t("comm.extraType") : t("comm.directBooking")}
-                </span>
-                <span>{lineTitle(l, t)}</span>
-                {l.type === "direct_booking" && l.fxRate !== null && (
-                  <span className="text-[10px] text-black/40 dark:text-white/40" title={t("comm.lockedRate")}>
-                    🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
+                {/* Same two-row split as the pending list above (2026-08-22
+                    fix) — keeps every card's action row on its own line
+                    regardless of title length. */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="rounded-full bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs">
+                    {l.type === "extra" ? t("comm.extraType") : t("comm.directBooking")}
                   </span>
-                )}
-                {l.type === "direct_booking" && l.guestPayoutCopOverride !== null && (
-                  <span className="text-[10px] text-amber-600 dark:text-amber-400" title={t("comm.guestPayoutOverridden")}>
-                    ✏️ {cop(l.guestPayoutCopOverride)}
+                  <span>{lineTitle(l, t)}</span>
+                  {l.type === "direct_booking" && l.fxRate !== null && (
+                    <span className="text-[10px] text-black/40 dark:text-white/40" title={t("comm.lockedRate")}>
+                      🔒 {l.fxRate.toLocaleString("en-US", { maximumFractionDigits: 2 })} COP/USD
+                    </span>
+                  )}
+                  {l.type === "direct_booking" && l.guestPayoutCopOverride !== null && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400" title={t("comm.guestPayoutOverridden")}>
+                      ✏️ {cop(l.guestPayoutCopOverride)}
+                    </span>
+                  )}
+                  <span className="ml-auto tabular-nums text-xs">
+                    {t("comm.house")} {money(l, l.houseAmount, "house")} · <strong>{t("comm.gabriel")} {money(l, l.gabrielAmount, "gabriel")}</strong>
                   </span>
-                )}
-                <span className="ml-auto tabular-nums text-xs">
-                  {t("comm.house")} {money(l, l.houseAmount, "house")} · <strong>{t("comm.gabriel")} {money(l, l.gabrielAmount, "gabriel")}</strong>
-                </span>
-                <span className="text-xs text-blue-600 dark:text-blue-400">🔒</span>
+                  <span className="text-xs text-blue-600 dark:text-blue-400">🔒</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 {data.viewerIsOwner && (
                   <button
                     onClick={() => setSettleTarget(l)}
@@ -1029,6 +1050,7 @@ export function CommissionsBoard() {
                     {busyId === l.id ? t("comm.unlocking") : t("comm.unlock")}
                   </button>
                 )}
+                </div>
               </li>
             ))}
           </ul>
