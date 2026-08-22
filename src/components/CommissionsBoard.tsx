@@ -130,9 +130,16 @@ function when(iso: string | null): string {
 
 function lineTitle(l: Line, t: (key: string) => string): string {
   if (l.type === "extra") {
-    return `${l.label} — ${l.guestName || "Guest"}${l.serviceDate ? ` (${when(l.serviceDate)})` : ""}`;
+    // The server's `label` field is a raw, untranslated value (the "other"
+    // customLabel, or otherwise just the English `kind` slug — see
+    // api/management/commissions/route.ts's toExtraLine) — display always
+    // derives the human label here instead, per-viewer language, from `kind`/
+    // `customLabel` directly (2026-08-22, Seni: extra-service type showing in
+    // English for Gabriel).
+    const kindLabel = l.kind === "other" ? l.customLabel?.trim() || t("extraKind.other") : t(`extraKind.${l.kind}`);
+    return `${kindLabel} — ${l.guestName || t("comm.guest")}${l.serviceDate ? ` (${when(l.serviceDate)})` : ""}`;
   }
-  return `${t("comm.directBooking")} — ${l.guestName || "Guest"}${l.arrival ? ` (${when(l.arrival)})` : ""}`;
+  return `${t("comm.directBooking")} — ${l.guestName || t("comm.guest")}${l.arrival ? ` (${when(l.arrival)})` : ""}`;
 }
 
 type ExtraDraft = {
@@ -626,7 +633,7 @@ export function CommissionsBoard() {
                 >
                   {EXTRA_KINDS.map((k) => (
                     <option key={k.value} value={k.value}>
-                      {k.label}
+                      {t(`extraKind.${k.value}`)}
                     </option>
                   ))}
                 </select>

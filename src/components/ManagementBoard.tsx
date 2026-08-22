@@ -435,7 +435,7 @@ export function ManagementBoard() {
       // an error banner over a perfectly good, already-rendered board.
       // Errors now only surface when there's nothing on screen yet.
       if (!hasDataRef.current) {
-        setError(err instanceof Error ? err.message : "Failed to load.");
+        setError(err instanceof Error ? err.message : t("mgmt.failedLoad"));
       } else {
         console.error("[management] background refresh failed (kept showing last good data):", err);
       }

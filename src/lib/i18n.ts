@@ -46,6 +46,15 @@ const STRINGS: Dict = {
   "nav.settings": { English: "Settings", Spanish: "Configuración", Portuguese: "Configurações" },
   "nav.logout": { English: "Log out", Spanish: "Cerrar sesión", Portuguese: "Sair" },
   "nav.switching": { English: "Switching…", Spanish: "Cambiando…", Portuguese: "Trocando…" },
+  "nav.switchProperty": { English: "Switch property", Spanish: "Cambiar de propiedad", Portuguese: "Trocar de propriedade" },
+  // Currency toggle tooltip (2026-08-22 audit — CurrencyToggle rendered raw
+  // English into a title attribute NavBar's own nav.* keys never covered).
+  "nav.loadingExchangeRate": { English: "Loading exchange rate…", Spanish: "Cargando tasa de cambio…", Portuguese: "Carregando taxa de câmbio…" },
+  "nav.fallbackRateNote": {
+    English: "fallback rate — live lookup unavailable",
+    Spanish: "tasa de reserva — no se pudo obtener la tasa en vivo",
+    Portuguese: "taxa de reserva — não foi possível obter a taxa ao vivo",
+  },
 
   // ---------- Common ----------
   "common.loading": { English: "Loading…", Spanish: "Cargando…", Portuguese: "Carregando…" },
@@ -165,6 +174,7 @@ const STRINGS: Dict = {
     Portuguese: "Falha ao salvar a marcação de evento.",
   },
   "mgmt.failedSave": { English: "Failed to save.", Spanish: "No se pudo guardar.", Portuguese: "Falha ao salvar." },
+  "mgmt.failedLoad": { English: "Failed to load.", Spanish: "No se pudo cargar.", Portuguese: "Falha ao carregar." },
   "mgmt.adult": { English: "adult", Spanish: "adulto", Portuguese: "adulto" },
   "mgmt.adults": { English: "adults", Spanish: "adultos", Portuguese: "adultos" },
   "mgmt.kid": { English: "kid", Spanish: "niño", Portuguese: "criança" },
@@ -299,6 +309,13 @@ const STRINGS: Dict = {
   "exp.optional": { English: "(optional)", Spanish: "(opcional)", Portuguese: "(opcional)" },
   "exp.deleteConfirm": { English: "Delete the request", Spanish: "¿Eliminar la solicitud", Portuguese: "Excluir a solicitação" },
   "exp.loadingRequests": { English: "Loading requests…", Spanish: "Cargando solicitudes…", Portuguese: "Carregando solicitações…" },
+  "exp.failedLoad": { English: "Failed to load requests.", Spanish: "No se pudieron cargar las solicitudes.", Portuguese: "Falha ao carregar as solicitações." },
+  "exp.originalLabel": { English: "Original", Spanish: "Original", Portuguese: "Original" },
+  "exp.ownerOnlyApprove": {
+    English: "Only the owner can approve an expense.",
+    Spanish: "Solo el propietario puede aprobar un gasto.",
+    Portuguese: "Somente o proprietário pode aprovar uma despesa.",
+  },
 
   // Category display labels (stored value stays English)
   "cat.Maintenance & repairs": { English: "Maintenance & repairs", Spanish: "Mantenimiento y reparaciones", Portuguese: "Manutenção e reparos" },
@@ -329,6 +346,8 @@ const STRINGS: Dict = {
   "log.nothingLogged": { English: "Nothing logged yet.", Spanish: "Aún no hay nada registrado.", Portuguese: "Ainda não há nada registrado." },
   "log.deleteConfirm": { English: "Delete this log entry?", Spanish: "¿Eliminar esta entrada del registro?", Portuguese: "Excluir este registro?" },
   "log.failedDelete": { English: "Failed to delete.", Spanish: "No se pudo eliminar.", Portuguese: "Falha ao excluir." },
+  "log.failedLoad": { English: "Failed to load the log.", Spanish: "No se pudo cargar el registro.", Portuguese: "Falha ao carregar o registro." },
+  "log.failedSave": { English: "Failed to save.", Spanish: "No se pudo guardar.", Portuguese: "Falha ao salvar." },
   // Collapsed-by-default activity feed (2026-08-20, Seni's ask, applies to
   // both the Team Activity Log tab and Construction Management's activity
   // log — see "construction.activityLog" below for that one's own button).
@@ -471,6 +490,33 @@ const STRINGS: Dict = {
   "req.addNotePlaceholder": { English: "Add a note…", Spanish: "Agrega una nota…", Portuguese: "Adicione uma nota…" },
   "req.reasonPrompt": { English: "Reason (optional):", Spanish: "Motivo (opcional):", Portuguese: "Motivo (opcional):" },
   "req.removeConfirm": { English: "Remove this request?", Spanish: "¿Quitar esta solicitud?", Portuguese: "Remover esta solicitação?" },
+  // Error/notice strings (2026-08-22 audit — TeamRequests.tsx, rendered on
+  // the same /team-log tab as Team Activity Log, had these hardcoded).
+  "req.failedLoad": { English: "Failed to load requests.", Spanish: "No se pudieron cargar las solicitudes.", Portuguese: "Falha ao carregar as solicitações." },
+  "req.sentToPrefix": { English: "Sent to", Spanish: "Enviado a", Portuguese: "Enviado a" },
+  "req.awaitingDecisionSuffix": {
+    English: "— awaiting their decision.",
+    Spanish: "— esperando su decisión.",
+    Portuguese: "— aguardando a decisão.",
+  },
+  "req.savedCouldntReachPrefix": {
+    English: "Saved, but couldn't reach",
+    Spanish: "Guardado, pero no se pudo contactar a",
+    Portuguese: "Salvo, mas não foi possível contatar",
+  },
+  "req.savedCouldntReachSuffix": {
+    English: "by WhatsApp or email — let them know directly.",
+    Spanish: "por WhatsApp o correo — avísale directamente.",
+    Portuguese: "por WhatsApp ou e-mail — avise diretamente.",
+  },
+  "req.failedCreate": { English: "Failed to create the request.", Spanish: "No se pudo crear la solicitud.", Portuguese: "Falha ao criar a solicitação." },
+  "req.acceptedNotice": { English: "Accepted.", Spanish: "Aceptada.", Portuguese: "Aceita." },
+  "req.declinedNotice": { English: "Declined.", Spanish: "Rechazada.", Portuguese: "Recusada." },
+  "req.failedSaveDecision": { English: "Failed to save your decision.", Spanish: "No se pudo guardar tu decisión.", Portuguese: "Falha ao salvar sua decisão." },
+  "req.failedUpdate": { English: "Failed to update.", Spanish: "No se pudo actualizar.", Portuguese: "Falha ao atualizar." },
+  "req.failedPostNote": { English: "Failed to post the note.", Spanish: "No se pudo publicar la nota.", Portuguese: "Falha ao publicar a nota." },
+  "req.failedSaveEdits": { English: "Failed to save your edits.", Spanish: "No se pudieron guardar tus cambios.", Portuguese: "Falha ao salvar suas alterações." },
+  "req.failedRemove": { English: "Failed to remove.", Spanish: "No se pudo quitar.", Portuguese: "Falha ao remover." },
 
   // ---------- Settings (restricted / team) ----------
   "settings.title": { English: "Settings", Spanish: "Configuración", Portuguese: "Configurações" },
@@ -556,6 +602,19 @@ const STRINGS: Dict = {
     Spanish: "¿Eliminar este servicio adicional por completo? No se puede deshacer.",
     Portuguese: "Excluir este serviço adicional por completo? Não pode ser desfeito.",
   },
+  // Extra-service "type" dropdown + line-title display (2026-08-22, Seni:
+  // "the type options are in english... make it spanish"). Keys match
+  // bookingExtrasShared.ts's EXTRA_KINDS values exactly — the stored `kind`
+  // value itself always stays the English constant (used for filtering/
+  // matching, e.g. the ice-tub 100%-house special case), only the DISPLAYED
+  // label is translated.
+  "extraKind.daily_cleaning": { English: "Daily cleaning", Spanish: "Limpieza diaria", Portuguese: "Limpeza diária" },
+  "extraKind.private_chef": { English: "Private chef", Spanish: "Chef privado", Portuguese: "Chef particular" },
+  "extraKind.private_massage": { English: "Private massage", Spanish: "Masaje privado", Portuguese: "Massagem particular" },
+  "extraKind.jetskis": { English: "Jet skis", Spanish: "Motos acuáticas", Portuguese: "Jet skis" },
+  "extraKind.pontoon": { English: "Pontoon", Spanish: "Bote pontón", Portuguese: "Barco pontão" },
+  "extraKind.ice_tub": { English: "Ice tub setup", Spanish: "Instalación de tina de hielo", Portuguese: "Instalação de banheira de gelo" },
+  "extraKind.other": { English: "Other", Spanish: "Otro", Portuguese: "Outro" },
   "comm.unlock": { English: "Unlock", Spanish: "Desbloquear", Portuguese: "Desbloquear" },
   "comm.unlockHelp": {
     English: "Owner only — undoes the settlement so this line can be corrected, then re-settled",

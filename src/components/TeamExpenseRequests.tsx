@@ -110,7 +110,7 @@ export function TeamExpenseRequests() {
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
-      if (!hasDataRef.current) setError(err instanceof Error ? err.message : "Failed to load requests.");
+      if (!hasDataRef.current) setError(err instanceof Error ? err.message : t("exp.failedLoad"));
     }
   }, []);
 
@@ -436,7 +436,7 @@ export function TeamExpenseRequests() {
               {r.description && <p className="mt-1 text-black/70 dark:text-white/70">{r.description}</p>}
               {r.descriptionOriginal && r.descriptionOriginal !== r.description && (
                 <p className="mt-0.5 text-xs italic text-black/40 dark:text-white/40">
-                  Original ({r.authorLanguage}): {r.descriptionOriginal}
+                  {t("exp.originalLabel")} ({r.authorLanguage}): {r.descriptionOriginal}
                 </p>
               )}
 
@@ -480,7 +480,7 @@ export function TeamExpenseRequests() {
                   className={`flex items-center gap-1.5 text-xs ${
                     isOwner ? "" : "text-black/40 dark:text-white/40"
                   }`}
-                  title={isOwner ? "" : "Only the owner can approve an expense."}
+                  title={isOwner ? "" : t("exp.ownerOnlyApprove")}
                 >
                   <input
                     type="checkbox"

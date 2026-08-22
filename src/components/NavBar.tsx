@@ -105,13 +105,14 @@ const APPROVALS_BADGE_POLL_MS = 180_000;
 // title tooltip surfaces the live rate so the conversion isn't a black box.
 function CurrencyToggle() {
   const { secondaryCurrency, displayCurrency, setDisplayCurrency, rate } = useCurrency();
+  const t = useT();
   if (!secondaryCurrency) return null;
 
   const title = rate
     ? `1 USD ≈ ${rate.usdToTarget.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${secondaryCurrency}${
-        rate.source === "fallback" ? " (fallback rate — live lookup unavailable)" : ""
+        rate.source === "fallback" ? ` (${t("nav.fallbackRateNote")})` : ""
       }`
-    : "Loading exchange rate…";
+    : t("nav.loadingExchangeRate");
 
   return (
     <div
@@ -223,7 +224,7 @@ function PropertySwitcher({ activeGroupId, groups }: { activeGroupId: string; gr
         ref={btnRef}
         onClick={toggle}
         className="font-semibold tracking-tight flex items-center gap-2 hover:opacity-80"
-        title="Switch property"
+        title={t("nav.switchProperty")}
       >
         <span className="w-2 h-2 rounded-full bg-[var(--accent)]" aria-hidden />
         {switching ? t("nav.switching") : active.label}
@@ -548,7 +549,7 @@ export function NavBar({
                       : "text-black/70 hover:bg-black/5 dark:text-white/70 dark:hover:bg-white/10"
                   }`}
                 >
-                  {entry.label}
+                  {navLabel(entry.label)}
                   <Badge count={groupCount} active={active} />
                   <span className="text-[9px] opacity-60">▾</span>
                 </button>
@@ -570,7 +571,7 @@ export function NavBar({
                               : "text-black/70 hover:bg-black/5 dark:text-white/70 dark:hover:bg-white/10"
                           }`}
                         >
-                          {tab.label}
+                          {navLabel(tab.label)}
                           <Badge count={tabCount} active={false} />
                         </Link>
                       );

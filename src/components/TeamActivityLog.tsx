@@ -76,7 +76,7 @@ export function TeamActivityLog() {
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
-      if (!hasDataRef.current) setError(err instanceof Error ? err.message : "Failed to load the log.");
+      if (!hasDataRef.current) setError(err instanceof Error ? err.message : t("log.failedLoad"));
     }
   }, []);
 
@@ -99,7 +99,7 @@ export function TeamActivityLog() {
       setDraft("");
       await load(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save.");
+      setError(err instanceof Error ? err.message : t("log.failedSave"));
     } finally {
       setBusy(false);
     }

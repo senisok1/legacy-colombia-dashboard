@@ -114,7 +114,7 @@ export function TeamRequests() {
       hasDataRef.current = true;
       setError(null);
     } catch (err) {
-      if (!hasDataRef.current) setError(err instanceof Error ? err.message : "Failed to load requests.");
+      if (!hasDataRef.current) setError(err instanceof Error ? err.message : t("req.failedLoad"));
     }
   }, []);
 
@@ -142,14 +142,14 @@ export function TeamRequests() {
       const reached = n?.whatsappSent || n?.emailSent;
       setNotice(
         reached
-          ? `Sent to ${taggedLabel} — awaiting their decision.`
-          : `Saved, but couldn't reach ${taggedLabel} by WhatsApp or email — let them know directly.`
+          ? `${t("req.sentToPrefix")} ${taggedLabel} ${t("req.awaitingDecisionSuffix")}`
+          : `${t("req.savedCouldntReachPrefix")} ${taggedLabel} ${t("req.savedCouldntReachSuffix")}`
       );
       setForm({ title: "", description: "", neededBy: "", taggedEmail: "" });
       setShowForm(false);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create the request.");
+      setError(err instanceof Error ? err.message : t("req.failedCreate"));
     } finally {
       setCreating(false);
     }
@@ -171,10 +171,10 @@ export function TeamRequests() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      setNotice(accepted ? "Accepted." : "Declined.");
+      setNotice(accepted ? t("req.acceptedNotice") : t("req.declinedNotice"));
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save your decision.");
+      setError(err instanceof Error ? err.message : t("req.failedSaveDecision"));
     } finally {
       setBusyId(null);
     }
@@ -194,7 +194,7 @@ export function TeamRequests() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update.");
+      setError(err instanceof Error ? err.message : t("req.failedUpdate"));
     } finally {
       setBusyId(null);
     }
@@ -216,7 +216,7 @@ export function TeamRequests() {
       setNoteDrafts((d) => ({ ...d, [requestId]: "" }));
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to post the note.");
+      setError(err instanceof Error ? err.message : t("req.failedPostNote"));
     } finally {
       setPostingNoteId(null);
     }
@@ -252,7 +252,7 @@ export function TeamRequests() {
       setEditingId(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save your edits.");
+      setError(err instanceof Error ? err.message : t("req.failedSaveEdits"));
     } finally {
       setSavingEdit(false);
     }
@@ -272,7 +272,7 @@ export function TeamRequests() {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to remove.");
+      setError(err instanceof Error ? err.message : t("req.failedRemove"));
     } finally {
       setBusyId(null);
     }
