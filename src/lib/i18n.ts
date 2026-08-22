@@ -68,6 +68,22 @@ const STRINGS: Dict = {
   "nav.stays": { English: "Stays", Spanish: "Estancias", Portuguese: "Estadias" },
   "nav.messages": { English: "Messages", Spanish: "Mensajes", Portuguese: "Mensagens" },
   "nav.tasks": { English: "Tasks", Spanish: "Tareas", Portuguese: "Tarefas" },
+  // Global search + notification bell (2026-08-22). Admin-only surfaces, but
+  // translated anyway — an admin can be on Spanish or Portuguese too.
+  "search.placeholder": {
+    English: "Search guests, stays, pages…",
+    Spanish: "Buscar huéspedes, estancias, páginas…",
+    Portuguese: "Buscar hóspedes, estadias, páginas…",
+  },
+  "search.hint": {
+    English: "Type at least 2 characters",
+    Spanish: "Escribe al menos 2 caracteres",
+    Portuguese: "Digite pelo menos 2 caracteres",
+  },
+  "search.searching": { English: "Searching…", Spanish: "Buscando…", Portuguese: "Buscando…" },
+  "search.noResults": { English: "No matches", Spanish: "Sin resultados", Portuguese: "Nenhum resultado" },
+  "notif.title": { English: "Needs your attention", Spanish: "Requiere tu atención", Portuguese: "Precisa da sua atenção" },
+  "notif.allClear": { English: "All clear — nothing waiting", Spanish: "Todo en orden — nada pendiente", Portuguese: "Tudo em ordem — nada pendente" },
   // Currency toggle tooltip (2026-08-22 audit — CurrencyToggle rendered raw
   // English into a title attribute NavBar's own nav.* keys never covered).
   "nav.loadingExchangeRate": { English: "Loading exchange rate…", Spanish: "Cargando tasa de cambio…", Portuguese: "Carregando taxa de câmbio…" },

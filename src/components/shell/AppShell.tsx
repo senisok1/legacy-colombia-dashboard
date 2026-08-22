@@ -155,7 +155,7 @@ function ShellInner({
           </div>
         </div>
 
-        <TopHeader title={title} locale={locale} />
+        <TopHeader title={title} locale={locale} role={role} badges={badges} />
 
         {/* pb-24 on mobile keeps the last card clear of the fixed bottom bar */}
         <main className="flex-1 pb-24 md:pb-0">{children}</main>

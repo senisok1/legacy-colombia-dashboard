@@ -5,6 +5,9 @@ import { useT } from "@/components/LanguageProvider";
 import { useCurrency } from "@/components/CurrencyProvider";
 import { useShellVisuals } from "./ShellData";
 import { IconRefresh } from "./NavIcons";
+import { GlobalSearch } from "./GlobalSearch";
+import { NotificationBell } from "./NotificationBell";
+import type { NavBadges } from "./useNavBadges";
 
 // Simplified desktop top header (2026-08-22 UI refresh). Now that navigation
 // lives in the sidebar, this is just: page title + a compact
@@ -70,12 +73,24 @@ function LocalClock({ timeZone, locale }: { timeZone: string; locale: string }) 
   );
 }
 
-export function TopHeader({ title, locale }: { title: string; locale: string }) {
+export function TopHeader({
+  title,
+  locale,
+  role,
+  badges,
+}: {
+  title: string;
+  locale: string;
+  role?: string;
+  badges: NavBadges;
+}) {
   const t = useT();
   const visuals = useShellVisuals();
   const active = visuals?.active;
   const { secondaryCurrency, displayCurrency, setDisplayCurrency, rate } = useCurrency();
   const [refreshing, setRefreshing] = useState(false);
+  // Same role gate the sidebar uses for admin-only modules.
+  const isTeam = role === "READ_ONLY" || role === "CONSTRUCTION";
 
   const currencyTitle = rate
     ? `1 USD ≈ ${rate.usdToTarget.toLocaleString("en-US", { maximumFractionDigits: 0 })} ${secondaryCurrency}${
@@ -111,13 +126,17 @@ export function TopHeader({ title, locale }: { title: string; locale: string }) 
           )}
         </div>
 
-        {/* Right side deliberately carries only the controls that already
-            existed in the old NavBar (currency toggle, refresh, and — in the
-            sidebar footer — logout). The mock shows search and notification
-            icons, but this app has no global search or notification centre
-            today, and the brief forbids adding functionality, so they're not
-            invented here. */}
+        {/* Search + notifications are ADMIN-ONLY (2026-08-22, built at
+            Seni's request). Both are hidden for READ_ONLY and CONSTRUCTION
+            logins, and their API routes aren't in proxy.ts's team allowlist,
+            so the restriction holds even if someone calls them directly.
+            Reason: search surfaces guest profiles under /guests, which is
+            in TEAM_BLOCKED_PREFIXES — showing team logins results they
+            can't open would be worse than not showing the control. Neither
+            role ever had these features, so nothing is taken away. */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {!isTeam && <GlobalSearch />}
+          {!isTeam && <NotificationBell badges={badges} />}
           {secondaryCurrency && (
             <div
               className="flex items-center rounded-lg bg-black/5 dark:bg-white/10 p-0.5 shrink-0"
