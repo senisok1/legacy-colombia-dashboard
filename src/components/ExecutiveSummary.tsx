@@ -85,22 +85,30 @@ export function ExecutiveSummary({ report }: { report: ExecutiveReport }) {
           subLabel="Net"
           subValue={<Money amount={report.revenueYtdNet + (report.extrasHouseRevenueYtdUsd ?? 0)} />}
           hint={
-            report.extrasYtd?.count
-              ? `Stays $${Math.round(report.revenueYtdGross).toLocaleString()} · Extras ${Math.round(
-                  report.extrasYtd.houseRevenue
-                ).toLocaleString()} COP (house share)`
-              : undefined
+            report.extrasYtd?.count ? (
+              // 2026-08-22 fix (same bug as dashboard/page.tsx, same day:
+              // "it shows stays in USD and Extras in COP and it doesn't
+              // change when toggled") — was a hardcoded string with a
+              // literal "$" and " COP", never reactive to the currency
+              // toggle. <Money> leaves with the correct native currency
+              // convert through useCurrency() like value/subValue above.
+              <>
+                Stays <Money amount={report.revenueYtdGross} /> · Extras{" "}
+                <Money amount={report.extrasYtd.houseRevenue} currency="COP" /> (house share)
+              </>
+            ) : undefined
           }
         />
         <StatCard
           label={report.extrasMtd?.count ? "Total revenue MTD" : "Revenue MTD"}
           value={<Money amount={report.extrasMtd?.count ? report.totalRevenueMtdGross : report.revenueMtdGross} />}
           hint={
-            report.extrasMtd?.count
-              ? `Stays $${Math.round(report.revenueMtdGross).toLocaleString()} · Extras ${Math.round(
-                  report.extrasMtd.houseRevenue
-                ).toLocaleString()} COP`
-              : undefined
+            report.extrasMtd?.count ? (
+              <>
+                Stays <Money amount={report.revenueMtdGross} /> · Extras{" "}
+                <Money amount={report.extrasMtd.houseRevenue} currency="COP" />
+              </>
+            ) : undefined
           }
         />
       </div>

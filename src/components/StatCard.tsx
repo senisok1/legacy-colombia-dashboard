@@ -16,7 +16,12 @@ export function StatCard({
   // buried in the hint text.
   subLabel?: string;
   subValue?: React.ReactNode;
-  hint?: string;
+  // Widened from `string` to `React.ReactNode` (2026-08-22, Seni: a hint
+  // that mixes a USD-native figure and a COP-native figure as a plain
+  // hardcoded string never reacts to the currency toggle — same reasoning
+  // as `value` above. Callers with a currency-toggle-aware hint should pass
+  // <Money> leaves inside it instead of interpolating numbers into text.
+  hint?: React.ReactNode;
 }) {
   return (
     <div className="rounded-xl border border-black/10 dark:border-white/10 p-4 bg-white dark:bg-white/5">

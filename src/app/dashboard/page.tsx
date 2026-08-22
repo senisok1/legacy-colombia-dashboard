@@ -148,11 +148,25 @@ export default async function DashboardPage() {
             subLabel="Net"
             subValue={<Money amount={stats.ytdNetRevenue + extrasHouseRevenueUsd} />}
             hint={
-              showExtras
-                ? `Stays $${Math.round(stats.ytdRevenue).toLocaleString()} · Extras ${Math.round(
-                    extrasSummary.houseRevenue
-                  ).toLocaleString()} COP (house share) · ${stats.ytdBookings} bookings`
-                : `${stats.ytdBookings} bookings · gross / net after channel fees`
+              showExtras ? (
+                // 2026-08-22 fix (Seni: "it shows stays in USD and Extras in
+                // COP and it doesn't change when toggled") — this used to be
+                // a hardcoded string with a literal "$" and " COP" baked in,
+                // so it never reacted to the currency toggle at all. Stays
+                // is USD-native, extras house share is COP-native (see
+                // extrasHouseRevenueUsd above and lib/bookingExtras.ts) —
+                // <Money> leaves with the correct native currency each
+                // convert through useCurrency() same as the headline
+                // value/subValue above, so both figures now follow the
+                // toggle together.
+                <>
+                  Stays <Money amount={stats.ytdRevenue} /> · Extras{" "}
+                  <Money amount={extrasSummary.houseRevenue} currency="COP" /> (house share) ·{" "}
+                  {stats.ytdBookings} bookings
+                </>
+              ) : (
+                `${stats.ytdBookings} bookings · gross / net after channel fees`
+              )
             }
           />
         )}
